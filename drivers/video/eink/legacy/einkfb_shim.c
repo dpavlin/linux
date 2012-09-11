@@ -20,50 +20,16 @@
 #endif
 
 static u8   einkfb_apply_fx_which(u8 data, int i, int which_fx);
-static int  compress_picture(int picture_length, u8 *picture);
-static void set_next_user_screen_saver(void);
-static void wake_screen_saver_thread(void);
-static void exit_screen_saver_thread(void);
-static void set_fake_pnlcd_x_values(int x);
+//static int  compress_picture(int picture_length, u8 *picture);
 static void buffer_copy(int which);
 
-#define from_screen_saver_to_kernelbuffer 		0
-#define from_picture_buffer_to_kernelbuffer 		1
-#define from_picture_buffer_to_screensaver 		2
-#define from_framebuffer_to_kernelbuffer		3
-#define from_kernelbuffer_to_framebuffer		4
+#define from_picture_buffer_to_kernelbuffer 		0
+#define from_framebuffer_to_kernelbuffer		1
+#define from_kernelbuffer_to_framebuffer		2
 
-#define memcpy_from_screen_saver_to_kernelbuffer()	buffer_copy(from_screen_saver_to_kernelbuffer)
 #define memcpy_from_picture_buffer_to_kernelbuffer()	buffer_copy(from_picture_buffer_to_kernelbuffer)
-#define memcpy_from_picture_buffer_to_screensaver()	buffer_copy(from_picture_buffer_to_screensaver)
 #define memcpy_from_framebuffer_to_kernelbuffer()	buffer_copy(from_framebuffer_to_kernelbuffer)
 #define memcpy_from_kernelbuffer_to_framebuffer()	buffer_copy(from_kernelbuffer_to_framebuffer)
-
-#define EINKFB_PROC_EINK_SCREEN_SAVER			"screen_saver"
-#define SCREEN_SAVER_THREAD_NAME			EINKFB_NAME"_sst"
-#define SCREEN_SAVER_PATH_USER				"/mnt/us/system/screen_saver/"
-
-#define SCREEN_SAVER_PATH_TEMPLATE			"screen_saver_%d.gz"
-#define SCREEN_SAVER_PATH_LAST				"screen_saver_last"
-#define SCREEN_SAVER_PATH_SIZE				256
-#define SCREEN_SAVER_DEFAULT				0
-#define SCREEN_SAVER_XRES				600
-#define SCREEN_SAVER_YRES				800
-
-#define FAKE_PNLCD_SEGMENT_RES				8
-#define FAKE_PNLCD_YRES					FAKE_PNLCD_SEGMENT_RES
-#define FAKE_PNLCD_XRES_MAX				(FAKE_PNLCD_SEGMENT_RES * PN_LCD_COLUMN_COUNT)
-
-#define FAKE_PNLCD_X_START(n)				(((n) & 1) ? 0 : fake_pnlcd_xres)
-#define FAKE_PNLCD_Y_START(n)				(((n) / 2) * FAKE_PNLCD_YRES)
-
-#define FAKE_PNLCD_X_END(s)				((s) + fake_pnlcd_xres)
-#define FAKE_PNLCD_Y_END(s)				((s) + FAKE_PNLCD_YRES)
-
-#define MAX_SEG(s)					min((((s) | 1) + 1), MAX_PN_LCD_SEGMENT)
-
-#define USE_FAKE_PNLCD(c)				(use_fake_pnlcd && fake_pnlcd_buffer && (c))
-#define FAKE_PNLCD()					USE_FAKE_PNLCD(1)
 
 #define CHECK_FRAMEWORK_RUNNING()			(FRAMEWORK_STARTED() && !FRAMEWORK_RUNNING())
 
@@ -80,7 +46,6 @@ static void buffer_copy(int which);
 
 splash_screen_type splash_screen_up = splash_screen_boot;
 static bool splash_screen_logo_buffer_only = false;
-static int dont_deanimate = 0;
 
 static int local_update_area = 0;
 static int send_fake_rotate = 0;
@@ -91,21 +56,8 @@ static picture_info_type shim_picture_info = { 0 };
 static u8 *shim_picture = NULL; 
 static int shim_picture_len = 0; 
 
-static int fake_pnlcd_min_seg = FIRST_PNLCD_SEGMENT;
-static int fake_pnlcd_max_seg = LAST_PNLCD_SEGMENT;
-static int fake_pnlcd_xres = FAKE_PNLCD_XRES_MAX/2;
-static int fake_pnlcd_valid = 0;
-static int use_fake_pnlcd = 0;
-static int fake_pnlcd_x = 0;
-
-static u_long fake_pnlcd_buffer_size = 0;
-static u8 *fake_pnlcd_buffer = NULL;
-
 static u_long picture_buffer_size = 0;
 static u8 *picture_buffer = NULL;
-
-static u_long screen_saver_buffer_size = 0;
-static u8 *screen_saver_buffer = NULL;
 
 static bool kernelbuffer_local = false;
 static u_long kernelbuffer_size = 0;
@@ -121,209 +73,10 @@ static int framebuffer_xres = 0;
 static int framebuffer_yres = 0;
 static u32 framebuffer_bpp = 0;
 
-static struct proc_dir_entry *einkfb_proc_screen_saver = NULL;
-static int valid_screen_saver_buf = 0;
-static int get_next_screen_saver = 0;
-
 static u8  progressbar_background = EINKFB_WHITE;
 static int progressbar_y = PROGRESSBAR_Y;
 static int progressbar_x = PROGRESSBAR_X;
 static int progressbar = 0;
-
-static int screen_saver_last = SCREEN_SAVER_DEFAULT;
-static int screen_saver_thread_exit = 0;
-static THREAD_ID(screen_saver_id);
-static DECLARE_COMPLETION(screen_saver_thread_exited);
-static DECLARE_COMPLETION(screen_saver_thread_complete);
-
-static char screen_saver_path_template[SCREEN_SAVER_PATH_SIZE];
-static char screen_saver_path_last[SCREEN_SAVER_PATH_SIZE];
-
-#define stipple_even_row_mask		0
-#define stipple_even_row_mask_type	1
-
-#define stipple_odd_row_mask		2
-#define stipple_odd_row_mask_type	3
-
-#define stipple_table_size		4
-
-#define stipple_table_mask_and		1
-#define stipple_table_mask_or		0
-
-#define STIPPLE_TABLE_MASK(t, m, d)	(t ? (m & d) : (m | d))
-
-#define posterize_even_row_mask		0
-#define posterize_odd_row_mask		1
-#define posterize_bpp			2
-
-#define posterize_table_size		3
-
-#define POSTERIZE_TABLE_MASK(b, m, d)	((EINKFB_4BPP == b)		\
-					? posterize_4bpp_table[(m & d)]	\
-					: posterize_2bpp_table[(m & d)])
-
-#define einkfb_posterize_table		einkfb_stipple_table
-#define einkfb_posterize_rowbytes	einkfb_stipple_rowbytes
-#define einkfb_posterize_bytes		einkfb_stipple_bytes
-#define einkfb_posterize_rows		einkfb_stipple_rows
-
-static u8 stipple_lighten_dark_gray_2bpp_table[stipple_table_size] =
-{
-	0x33, stipple_table_mask_and,	// row 0: WXWX... (white keep  white keep...)
-	0x33, stipple_table_mask_or	// row 1: XBXB... (keep  black keep  black...)
-};
-
-static u8 stipple_lighten_dark_gray_4bpp_table[stipple_table_size] =
-{
-	0x0F, stipple_table_mask_and,	// row 0: WX... (white keep  ...)
-	0x0F, stipple_table_mask_or	// row 1: XB... (keep  black ...)
-};
-
-static u8 stipple_lighten_lite_gray_2bpp_table[stipple_table_size] =
-{
-	0x33, stipple_table_mask_and,	// row 0: WXWX...
-	0xCC, stipple_table_mask_and	// row 1: XWXW...
-};
-
-static u8 stipple_lighten_lite_gray_4bpp_table[stipple_table_size] =
-{
-	0x0F, stipple_table_mask_and,	// row 0: WX...
-	0xF0, stipple_table_mask_and	// row 1: XW...
-};
-
-static u8 posterize_dark_2bpp_table[posterize_table_size] = 
-{
-	0x33,				// row 0: WPWP... (white posterize white posterize...)
-	0xFF,				// row 1: PBPB... (black posterize black posterize...)
-	
-	EINKFB_2BPP
-};
-
-static u8 posterize_dark_4bpp_table[posterize_table_size] =
-{
-	0x0F,				// row 0: WP...
-	0xFF,				// row 1: PB...
-	
-	EINKFB_4BPP
-};
-
-static u8 posterize_lite_2bpp_table[posterize_table_size] =
-{
-	0x33,				// row 0: WPWP...
-	0xCC,				// row 1: PWPW...
-	
-	EINKFB_2BPP
-};
-
-static u8 posterize_lite_4bpp_table[posterize_table_size] =
-{
-	0x0F,				// row 0: WP...
-	0xF0,				// row 1: PW...
-	
-	EINKFB_4BPP
-};
-
-static u8 posterize_2bpp_table[256] =
-{
-	0x00, 0x03, 0x03, 0x03, 0x0C, 0x0F, 0x0F, 0x0F,	// 0x00..
-	0x0C, 0x0F, 0x0F, 0x0F, 0x0C, 0x0F, 0x0F, 0x0F,	// ..0x0F
-	
-	0x30, 0x33, 0x33, 0x33, 0x3C, 0x3F, 0x3F, 0x3F, // 0x10..
-	0x3C, 0x3F, 0x3F, 0x3F, 0x3C, 0x3F, 0x3F, 0x3F,	// ..0x1F
-	
-	0x30, 0x33, 0x33, 0x33, 0x3C, 0x3F, 0x3F, 0x3F, // 0x20..
-	0x3C, 0x3F, 0x3F, 0x3F, 0x3C, 0x3F, 0x3F, 0x3F, // ..0x2F
-	
-	0x30, 0x33, 0x33, 0x33, 0x3C, 0x3F, 0x3F, 0x3F, // 0x30..
-	0x3C, 0x3F, 0x3F, 0x3F, 0x3C, 0x3F, 0x3F, 0x3F,	// ..0x3F
-	
-	0xC0, 0xC3, 0xC3, 0xC3, 0xCC, 0xCF, 0xCF, 0xCF, // 0x40..
-	0xCC, 0xCF, 0xCF, 0xCF, 0xCC, 0xCF, 0xCF, 0xCF,	// ..0x4F
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF, // 0x50..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0x5F
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF,	// 0x60..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0x6F
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF,	// 0x70..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0x7F
-	
-	0xC0, 0xC3, 0xC3, 0xC3, 0xCC, 0xCF, 0xCF, 0xCF, // 0x80..
-	0xCC, 0xCF, 0xCF, 0xCF, 0xCC, 0xCF, 0xCF, 0xCF,	// ..0x8F
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF,	// 0x90..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0x9F
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF, // 0xA0..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0xAF
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF, // 0xB0..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0xBF
-
-	0xC0, 0xC3, 0xC3, 0xC3, 0xCC, 0xCF, 0xCF, 0xCF, // 0xC0..
-	0xCC, 0xCF, 0xCF, 0xCF, 0xCC, 0xCF, 0xCF, 0xCF,	// ..0xCF
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF, // 0xD0..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0xDF
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF, // 0xE0..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF,	// ..0xEF
-	
-	0xF0, 0xF3, 0xF3, 0xF3, 0xFC, 0xFF, 0xFF, 0xFF, // 0xF0..
-	0xFC, 0xFF, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF	// ..0xFF
-};
-
-static u8 posterize_4bpp_table[256] =
-{
-	0x00, 0x05, 0x05, 0x05, 0x05, 0x05, 0x0A, 0x0A,	// 0x00..
-	0x0A, 0x0A, 0x0A, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F,	// ..0x0F
-	
-	0x50, 0x55, 0x55, 0x55, 0x55, 0x55, 0x5A, 0x5A,	// 0x10..
-	0x5A, 0x5A, 0x5A, 0x5F, 0x5F, 0x5F, 0x5F, 0x5F,	// ..0x1F
-	
-	0x50, 0x55, 0x55, 0x55, 0x55, 0x55, 0x5A, 0x5A,	// 0x20..
-	0x5A, 0x5A, 0x5A, 0x5F, 0x5F, 0x5F, 0x5F, 0x5F,	// ..0x2F
-
-	0x50, 0x55, 0x55, 0x55, 0x55, 0x55, 0x5A, 0x5A,	// 0x30..
-	0x5A, 0x5A, 0x5A, 0x5F, 0x5F, 0x5F, 0x5F, 0x5F,	// ..0x3F
-	
-	0x50, 0x55, 0x55, 0x55, 0x55, 0x55, 0x5A, 0x5A,	// 0x40..
-	0x5A, 0x5A, 0x5A, 0x5F, 0x5F, 0x5F, 0x5F, 0x5F,	// ..0x4F
-	
-	0x50, 0x55, 0x55, 0x55, 0x55, 0x55, 0x5A, 0x5A,	// 0x50..
-	0x5A, 0x5A, 0x5A, 0x5F, 0x5F, 0x5F, 0x5F, 0x5F,	// ..0x5F
-	
-	0xA0, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xAA, 0xAA,	// 0x60..
-	0xAA, 0xAA, 0xAA, 0xAF, 0xAF, 0xAF, 0xAF, 0xAF,	// ..0x6F
-	
-	0xA0, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xAA, 0xAA,	// 0x70..
-	0xAA, 0xAA, 0xAA, 0xAF, 0xAF, 0xAF, 0xAF, 0xAF,	// ..0x7F
-	
-	0xA0, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xAA, 0xAA,	// 0x80..
-	0xAA, 0xAA, 0xAA, 0xAF, 0xAF, 0xAF, 0xAF, 0xAF,	// ..0x8F
-	
-	0xA0, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xAA, 0xAA,	// 0x90..
-	0xAA, 0xAA, 0xAA, 0xAF, 0xAF, 0xAF, 0xAF, 0xAF,	// ..0x9F
-	
-	0xA0, 0xA5, 0xA5, 0xA5, 0xA5, 0xA5, 0xAA, 0xAA,	// 0xA0..
-	0xAA, 0xAA, 0xAA, 0xAF, 0xAF, 0xAF, 0xAF, 0xAF,	// ..0xAF
-	
-	0xF0, 0xF5, 0xF5, 0xF5, 0xF5, 0xF5, 0xFA, 0xFA,	// 0xB0..
-	0xFA, 0xFA, 0xAF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,	// ..0xBF
-	
-	0xF0, 0xF5, 0xF5, 0xF5, 0xF5, 0xF5, 0xFA, 0xFA,	// 0xC0..
-	0xFA, 0xFA, 0xAF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,	// ..0xCF
-
-	0xF0, 0xF5, 0xF5, 0xF5, 0xF5, 0xF5, 0xFA, 0xFA,	// 0xD0..
-	0xFA, 0xFA, 0xAF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,	// ..0xDF
-
-	0xF0, 0xF5, 0xF5, 0xF5, 0xF5, 0xF5, 0xFA, 0xFA,	// 0xE0..
-	0xFA, 0xFA, 0xAF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,	// ..0xEF
-
-	0xF0, 0xF5, 0xF5, 0xF5, 0xF5, 0xF5, 0xFA, 0xFA,	// 0xF0..
-	0xFA, 0xFA, 0xAF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF	// ..0xFF
-};
 
 static int einkfb_display_fx		= fx_none;
 static int last_display_fx 		= fx_none;
@@ -333,11 +86,6 @@ static int einkfb_fx_num_exclude_rects	= 0;
 static rect_t einkfb_fx_exclude_rects[MAX_EXCLUDE_RECTS];
 static int einkfb_fx_exclude_x		= 0;
 static int einkfb_fx_exclude_y		= 0;
-
-static u8* einkfb_stipple_table		= NULL;
-static int einkfb_stipple_rowbytes	= 0;
-static int einkfb_stipple_bytes		= 0;
-static int einkfb_stipple_rows		= 0;
 
 static u8* einkfb_mask_framebuffer	= NULL;
 static int einkfb_mask_fb_rowbytes	= 0;
@@ -441,19 +189,9 @@ static void buffer_copy(int which)
 
 	switch ( which )
 	{
-		case from_screen_saver_to_kernelbuffer:
-			src = screen_saver_buffer;
-			dst = kernelbuffer;
-		break;
-		
 		case from_picture_buffer_to_kernelbuffer:
 			src = picture_buffer;
 			dst = kernelbuffer;
-		break;
-		
-		case from_picture_buffer_to_screensaver:
-			src = picture_buffer;
-			dst = screen_saver_buffer;
 		break;
 		
 		case from_framebuffer_to_kernelbuffer:
@@ -477,17 +215,38 @@ static void buffer_copy(int which)
 
 static void clear_frame_buffer(void)
 {
-	einkfb_memset(framebuffer, EINKFB_WHITE, framebuffer_size);
+	einkfb_memset(framebuffer, einkfb_white(framebuffer_bpp), framebuffer_size);
 }
 
 static void clear_kernel_buffer(void)
 {
-	einkfb_memset(kernelbuffer, EINKFB_WHITE, kernelbuffer_size);
+	einkfb_memset(kernelbuffer, einkfb_white(framebuffer_bpp), kernelbuffer_size);
 }
 
+// Note:  Data in the picture buffer, regardless of bit depth, uses the legacy eInk
+//        polarity (i.e., white = 0 and black = 2^bpp-1).  It'll get translated as
+//        necessary as its moved to the actual framebuffer.
+//
 static void clear_picture_buffer(u8 clear)
 {
 	einkfb_memset(picture_buffer, clear, picture_buffer_size);
+}
+
+static void clear_vfb(void)
+{
+	// Clear to black instead of white to ensure that our equal-buffers skipping doesn't
+	// kick in when we really should be clearing the screen, too.
+	//
+	struct einkfb_info info; einkfb_get_info(&info);
+	einkfb_memset(info.vfb, einkfb_black(info.bpp), info.size);
+}
+
+static void clear_buffers(void)
+{
+	clear_frame_buffer();
+	clear_kernel_buffer();
+	clear_picture_buffer(einkfb_white(framebuffer_bpp));
+	clear_vfb();
 }
 
 void clear_screen(fx_type update_mode)
@@ -503,84 +262,6 @@ void clear_screen(fx_type update_mode)
 	#pragma mark Proc/Sysf
 	#pragma mark -
 #endif
-
-// /proc/eink_fb/screen_saver
-//
-static int read_from_screen_saver_buffer(unsigned long addr, unsigned char *data, int count)
-{
-	int result = 0;
-	
-	if ( screen_saver_buffer && data && IN_RANGE((addr + count), 0, screen_saver_buffer_size) )
-	{
-		EINKFB_MEMCPYK(data, &screen_saver_buffer[addr], count);
-		result = 1;
-	}
-	
-	return ( result );
-}
-
-static int write_to_screen_saver_buffer(unsigned long start, unsigned char *data, unsigned long len)
-{
-	int result = 0;
-	
-	if ( 0 == start )
-		valid_screen_saver_buf = screen_saver_invalid;
-	
-	if ( screen_saver_buffer && data && IN_RANGE((start + len), 0, screen_saver_buffer_size) )
-	{
-		EINKFB_MEMCPYK(&screen_saver_buffer[start], data, len);
-		result = 1;
-	}
-	
-	return ( result );
-}
-
-static int read_einkfb_screen_saver(char *page, unsigned long off, int count)
-{
-	return ( einkfb_read_which(page, off, count, read_from_screen_saver_buffer, screen_saver_buffer_size) );
-}
-
-static int write_einkfb_screen_saver(char *buf, unsigned long count, int unused)
-{
-	return ( einkfb_write_which(buf, count, write_to_screen_saver_buffer, screen_saver_buffer_size) );
-}
-
-static int einkfb_screen_saver_read(char *page, char **start, off_t off, int count, int *eof, void *data)
-{
-	return ( EINKFB_PROC_SYSFS_RW_LOCK(page, start, off, count, eof, screen_saver_buffer_size, read_einkfb_screen_saver) );
-}
-
-static int einkfb_screen_saver_write(struct file *file, const char __user *buf, unsigned long count, void *data)
-{
-	return ( EINKFB_PROC_SYSFS_RW_LOCK((char *)buf, NULL, count, 0, NULL, 0, write_einkfb_screen_saver) );
-}
-
-// /sys/devices/platform/eink_fb0/valid_screen_saver_buf
-//
-static ssize_t show_valid_screen_saver_buf(FB_DSHOW_PARAMS)
-{
-	return ( sprintf(buf, "%d %d\n", valid_screen_saver_buf, screen_saver_last) );
-}
-
-static ssize_t store_valid_screen_saver_buf(FB_DSTOR_PARAMS)
-{
-	int result = -EINVAL, valid, last;
-
-	switch ( sscanf(buf, "%d %d", &valid, &last) )
-	{
-		case 2:	screen_saver_last = last;
-		
-		case 1: valid_screen_saver_buf = min((unsigned long)valid, screen_saver_buffer_size);
-
-			if ( screen_saver_valid == valid_screen_saver_buf )
-				set_next_user_screen_saver();
-
-			result = count;
-		break;
-	}
-
-	return ( result );
-}
 
 // /sys/devices/platform/eink_fb0/splash_screen_up
 //
@@ -635,69 +316,6 @@ static ssize_t store_send_fake_rotate(FB_DSTOR_PARAMS)
 				result = -EINVAL;
 			break;
 		}
-	}
-	
-	return ( result );
-}
-
-// /sys/devices/platform/eink_fb0/use_fake_pnlcd
-//
-static ssize_t show_use_fake_pnlcd(FB_DSHOW_PARAMS)
-{
-	pnlcd_flags_t *pnlcd_flags = get_pnlcd_flags();
-	
-	return ( sprintf(buf, "%d %d %d\n", use_fake_pnlcd, (fake_pnlcd_x ? 1 : 0), pnlcd_flags->hide_real) );
-}
-
-static ssize_t store_use_fake_pnlcd(FB_DSTOR_PARAMS)
-{
-	char clear_segments[PN_LCD_SEGMENT_COUNT] = { SEGMENT_OFF };
-	int result = -EINVAL, fake_pnlcd = 0, hide_pnlcd = 0, x = 0;
-	pnlcd_flags_t *pnlcd_flags = get_pnlcd_flags();
-
-	switch ( sscanf(buf, "%d %d %d", &fake_pnlcd, &x, &hide_pnlcd) )
-	{
-		case 3:
-			// Stop any pending animation and clear it if we're going to be
-			// hiding the PNLCD.
-			//
-			if ( FRAMEWORK_OR_DIAGS_RUNNING() && hide_pnlcd )
-			{
-				pnlcd_animation_t pnlcd_animation;
-				
-				pnlcd_animation.cmd = stop_animation;
-				pnlcd_animation.arg = 0;
-
-				PNLCD_SYS_IOCTL(PNLCD_ANIMATE_IOCTL, &pnlcd_animation);
-				PNLCD_SYS_IOCTL(PNLCD_CLEAR_ALL_IOCTL, 0);
-			}
-			
-			pnlcd_flags->hide_real = hide_pnlcd ? 1 : 0;
-
-		case 2:
-			// Clear out the old fake PNLCD state.
-			//
-			EINKFB_IOCTL(FBIO_EINK_FAKE_PNLCD, (unsigned long)clear_segments);
-
-			// Set fake_pnlcd_xres & fake_pnlcd_x based on x.
-			//
-			set_fake_pnlcd_x_values(x);
-		
-		case 1:
-			// Update to new state (both fake and real).
-			//
-			use_fake_pnlcd = fake_pnlcd ? 1 : 0;
-			pnlcd_flags->enable_fake = FAKE_PNLCD() ? 1 : 0;
-		
-			if ( FRAMEWORK_OR_DIAGS_RUNNING() )
-			{
-				PNLCD_SYS_IOCTL(PNLCD_SET_SEG_STATE, NULL);
-				EINKFB_IOCTL(FBIO_EINK_FAKE_PNLCD, 0);
-			}
-
-			// Done.
-			//
-			result = count;
 	}
 	
 	return ( result );
@@ -857,83 +475,11 @@ static void einkfb_set_display_fx(int which_fx)
 	
 	switch ( which_fx )
 	{
-		case fx_stipple_posterize_dark:
-		case fx_stipple_posterize_lite:
-		
-		case fx_stipple_lighten_dark:
-		case fx_stipple_lighten_lite:
-
 		case fx_buf_is_mask:
 		case fx_mask:
-			
-			// Only do FX at 2bpp and 4bpp.
-			//
-			switch ( framebuffer_bpp )
-			{
-				case EINKFB_2BPP:
-				case EINKFB_4BPP:
-					goto fx_common;
-				break;
-			}
-		break;
-		
-		fx_common:
 			einkfb_display_fx = which_fx;
 		break;
 	}
-}
-
-static void einkfb_set_mask_fx(int which_fx)
-{
-	// Default to no FX.
-	//
-	einkfb_mask_fx = fx_none;
-	
-	switch ( which_fx )
-	{
-		case fx_stipple_posterize_dark:
-		case fx_stipple_posterize_lite:
-
-		case fx_stipple_lighten_dark:
-		case fx_stipple_lighten_lite:
-			
-			// Only do FX at 2bpp and 4bpp.
-			//
-			switch ( framebuffer_bpp )
-			{
-				case EINKFB_2BPP:
-				case EINKFB_4BPP:
-					goto fx_common;
-				break;
-			}
-		break;
-		
-		fx_common:
-			einkfb_mask_fx = which_fx;
-		break;
-	}
-}
-
-static u8 einkfb_posterize(u8 data)
-{
-	int index = (einkfb_posterize_rows & 1) ? posterize_odd_row_mask : posterize_even_row_mask;
-	u8  mask  = einkfb_posterize_table[index++], mask_bpp = einkfb_posterize_table[posterize_bpp];
-
-	if ( 0 == (++einkfb_posterize_bytes % einkfb_posterize_rowbytes) )
-		einkfb_posterize_rows++;
-		
-	return ( POSTERIZE_TABLE_MASK(mask_bpp, mask, data ) );
-}
-
-static u8 einkfb_stipple(u8 data)
-{
-	int index = (einkfb_stipple_rows & 1) ? stipple_odd_row_mask : stipple_even_row_mask;
-	u8  mask  = einkfb_stipple_table[index++], mask_type = einkfb_stipple_table[index];
-
-	if ( 0 == (++einkfb_stipple_bytes % einkfb_stipple_rowbytes) )
-		einkfb_stipple_rows++;
-
-	return ( STIPPLE_TABLE_MASK(mask_type, mask, data) );
 }
 
 static u8 einkfb_mask(u8 data, int i)
@@ -961,42 +507,6 @@ static void einkfb_begin_fx(u8 *buffer, int bufsize, int rowbytes, int x_start, 
 	reapply_fx:
 	switch ( which_fx )
 	{
-		case fx_stipple_posterize_dark:
-			einkfb_posterize_table		= (EINKFB_2BPP == framebuffer_bpp)	?
-							posterize_dark_2bpp_table	:
-							posterize_dark_4bpp_table;
-		goto posterize_common;
-		
-		case fx_stipple_posterize_lite:
-			einkfb_posterize_table		= (EINKFB_2BPP == framebuffer_bpp)	?
-							posterize_lite_2bpp_table	:
-							posterize_lite_4bpp_table;
-		/* goto posterize_common; */
-
-		posterize_common:
-			einkfb_posterize_bytes		= 0;
-			einkfb_posterize_rows		= 0;
-			einkfb_posterize_rowbytes	= rowbytes;
-		break;
-		
-		case fx_stipple_lighten_dark:
-			einkfb_stipple_table		= (EINKFB_2BPP == framebuffer_bpp)	?
-							stipple_lighten_dark_gray_2bpp_table	:
-							stipple_lighten_dark_gray_4bpp_table;
-		goto stipple_common;
-		
-		case fx_stipple_lighten_lite:
-			einkfb_stipple_table		= (EINKFB_2BPP == framebuffer_bpp)	?
-							stipple_lighten_lite_gray_2bpp_table	:
-							stipple_lighten_lite_gray_4bpp_table;
-		/* goto stipple_common; */
-
-		stipple_common:
-			einkfb_stipple_bytes		= 0;
-			einkfb_stipple_rows		= 0;
-			einkfb_stipple_rowbytes		= rowbytes;
-		break;
-
 		case fx_buf_is_mask:
 		case fx_mask:
 			einkfb_mask_framebuffer		= framebuffer;
@@ -1022,22 +532,6 @@ static void einkfb_end_fx(void)
 	reapply_fx:
 	switch ( which_fx )
 	{
-		case fx_stipple_posterize_dark:
-		case fx_stipple_posterize_lite:
-			einkfb_posterize_bytes		= 0;
-			einkfb_posterize_rows		= 0;
-			einkfb_posterize_rowbytes	= 0;
-			einkfb_posterize_table		= NULL;
-		break;
-		
-		case fx_stipple_lighten_dark:
-		case fx_stipple_lighten_lite:
-			einkfb_stipple_bytes		= 0;
-			einkfb_stipple_rows		= 0;
-			einkfb_stipple_rowbytes		= 0;
-			einkfb_stipple_table		= NULL;
-		break;
-
 		case fx_buf_is_mask:
 		case fx_mask:
 			einkfb_mask_framebuffer		= NULL;
@@ -1078,16 +572,6 @@ static u8 einkfb_apply_fx_which(u8 data, int i, int which_fx)
 
 	switch ( which_fx )
 	{
-		case fx_stipple_posterize_dark:
-		case fx_stipple_posterize_lite:
-			fx_data = einkfb_posterize(data);
-		break;
-		
-		case fx_stipple_lighten_dark:
-		case fx_stipple_lighten_lite:
-			fx_data = einkfb_stipple(data);
-		break;
-
 		case fx_buf_is_mask:
 		case fx_mask:
 			fx_data = einkfb_mask(data, i);
@@ -1246,587 +730,12 @@ static void einkfb_update_display_fx_area(fx_type which_fx, u8 *buffer, int xsta
 
 #if PRAGMAS
 	#pragma mark -
-	#pragma mark Fake PNLCD
-	#pragma mark -
-#endif
-
-static void set_fake_pnlcd_x_values(int x)
-{
-	// For now, if x is non-zero, put the fake PNLCD on the right and make it full size.
-	// Otherwise, put it on the left and make it half size.
-	//
-	if ( x )
-	{
-		fake_pnlcd_xres	= FAKE_PNLCD_XRES_MAX;
-		fake_pnlcd_x	= framebuffer_xres - fake_pnlcd_xres;
-	}
-	else
-	{
-		fake_pnlcd_xres = FAKE_PNLCD_XRES_MAX/2;
-		fake_pnlcd_x	= 0;
-	}
-}
-
-static bool get_pnlcd_segments(char *segments)
-{
-	bool segments_enabled_status = false;
-	
-	if ( USE_FAKE_PNLCD(segments) )
-	{
-		einkfb_memset(segments, SEGMENT_OFF, PN_LCD_SEGMENT_COUNT);
-
-		if ( !PNLCD_EVENT_PENDING() )
-		{
-			int i;
-			
-			PNLCD_SYS_IOCTL(PNLCD_GET_SEG_STATE, segments);
-			
-			for ( i = 0; (i < PN_LCD_SEGMENT_COUNT) && (false == segments_enabled_status); i++ )
-				if ( SEGMENT_ON == segments[i] )
-					segments_enabled_status = true; 
-		}
-	}
-	
-	return ( segments_enabled_status );
-}
-
-static void update_fake_pnlcd_segment(int seg_num, int seg_state)
-{
-	if ( USE_FAKE_PNLCD(IN_RANGE(seg_num, FIRST_PNLCD_SEGMENT, LAST_PNLCD_SEGMENT))	 )
-	{
-		u32	x, x_start, x_end, rowbytes, xres = fake_pnlcd_xres,
-			y, y_start, y_end, bytes;
-			
-		u8	*fb_base = fake_pnlcd_buffer;
-		
-		// Get (x, y) starting position, based on segment number.
-		//
-		x_start	 = FAKE_PNLCD_X_START(seg_num);
-		y_start	 = FAKE_PNLCD_Y_START(seg_num);
-		
-		x_end	 = FAKE_PNLCD_X_END(x_start);
-		y_end	 = FAKE_PNLCD_Y_END(y_start);
-		
-		// Make bpp-related adjustments.
-		//
-		x_start	 = BPP_SIZE(x_start, framebuffer_bpp);
-		x_end	 = BPP_SIZE(x_end,   framebuffer_bpp);
-		rowbytes = BPP_SIZE(xres,    framebuffer_bpp);
-		
-		// Draw segment into buffer.
-		//
-		for ( bytes = 0, y = y_start; y < y_end; y++ )
-		{
-			for ( x = x_start; x < x_end; x++)
-			{
-				fb_base[(rowbytes * y) + x] = (SEGMENT_ON == seg_state) ? EINKFB_BLACK : EINKFB_WHITE;
-				EINKFB_SCHEDULE_BLIT(++bytes);
-			}
-		}
-	}
-}
-
-static unsigned long fake_pnlcd_start_draw, fake_pnlcd_end_draw;
-
-static void update_fake_pnlcd(char *segments)
-{
-	pnlcd_flags_t *pnlcd_flags = get_pnlcd_flags();
-	
-	if ( USE_FAKE_PNLCD(!pnlcd_flags->updating) )
-	{
-		int	x_start = fake_pnlcd_x,
-			x_end	= x_start + fake_pnlcd_xres,
-			y_start,
-			y_end,
-			
-			buffer_size = fake_pnlcd_buffer_size,
-			
-			min_seg = 0,
-			max_seg = 0,
-			
-			i;
-			
-		u8	*buffer = fake_pnlcd_buffer;
-
-		// Update each of the PNLCD segments in the fake PNLCD segment buffer with its
-		// latest value, remembering the segment-on span, and clear the entire buffer
-		// to white first.
-		//
-		einkfb_memset(buffer, EINKFB_WHITE, buffer_size);
-		
-		for ( i = 0; i < PN_LCD_SEGMENT_COUNT; i++ )
-		{
-			if ( SEGMENT_ON == segments[i] )
-			{
-				if ( 0 == min_seg )
-					min_seg = i;
-					
-				if ( i > max_seg )
-					max_seg = i;
-				
-				update_fake_pnlcd_segment(i, segments[i]);
-			}
-		}
-		
-		// Skip to the next row to ensure that the previous segment is erased. 
-		//
-		max_seg = MAX_SEG(max_seg);
-		
-		// If we were that last ones to draw, then we need to erase where
-		// were last.  Otherwise, we just need to draw where we are now.
-		//
-		if ( fake_pnlcd_valid )
-		{
-			y_start = FAKE_PNLCD_Y_START(min(min_seg, fake_pnlcd_min_seg)), 
-			y_end	= FAKE_PNLCD_Y_START(max(max_seg, fake_pnlcd_max_seg));
-		}
-		else
-		{
-			y_start = FAKE_PNLCD_Y_START(min_seg), 
-			y_end	= FAKE_PNLCD_Y_START(max_seg);
-		}
-
-		y_end = FAKE_PNLCD_Y_END(y_end);
-			
-		buffer = &fake_pnlcd_buffer[BPP_SIZE(fake_pnlcd_xres, framebuffer_bpp) * y_start];
-		buffer_size = BPP_SIZE((fake_pnlcd_xres * (y_end - y_start)), framebuffer_bpp);
-
-		fake_pnlcd_min_seg = min_seg;
-		fake_pnlcd_max_seg = max_seg;
-		
-		// Now, update the screen with the PNLCD segment buffer, using the segment buffer
-		// itself as a mask; and, if there is one, using the last-set display FX.
-		//
-		einkfb_set_mask_fx(last_display_fx);
-		
-		pnlcd_flags->updating = 1;
-		fake_pnlcd_start_draw = jiffies;
-		
-		einkfb_update_display_fx_area(fx_buf_is_mask, buffer, x_start, x_end, y_start, y_end, update_screen);
-		fake_pnlcd_valid = 1;
-
-		fake_pnlcd_end_draw = jiffies;
-		pnlcd_flags->updating = 0;
-
-		einkfb_set_mask_fx(fx_none);
-		
-		// Report drawing time.
-		//
-		einkfb_debug("bytes sent = %d, time = %ums\n", buffer_size, 
-			jiffies_to_msecs(fake_pnlcd_end_draw - fake_pnlcd_start_draw));
-	}
-}
-
-static void fake_pnlcd_test(void)
-{
-	if ( FAKE_PNLCD() )
-	{
-		unsigned long draw_starts[(PN_LCD_SEGMENT_COUNT/4) + 1];
-		char segments[PN_LCD_SEGMENT_COUNT];
-		int i, j;
-		
-		// Clear the current segments.
-		//
-		einkfb_memset(segments, SEGMENT_OFF, PN_LCD_SEGMENT_COUNT);
-		EINKFB_IOCTL(FBIO_EINK_FAKE_PNLCD, (unsigned long)segments);
-		
-		// Draw and erase fifty 4-unit segments, gathering each of their start times as
-		// we go.
-		//
-		for ( i = 0; i < PN_LCD_SEGMENT_COUNT; i+= 4 )
-		{
-			for ( j = i; j < (i + 4); j++ )
-				segments[j] = SEGMENT_ON;
-			
-			EINKFB_IOCTL(FBIO_EINK_FAKE_PNLCD, (unsigned long)segments);
-			draw_starts[i/4] = fake_pnlcd_start_draw;
-			
-			for ( j = i; j < (i + 4); j++ )
-				segments[j] = SEGMENT_OFF;
-		}
-		
-		draw_starts[PN_LCD_SEGMENT_COUNT/4] = fake_pnlcd_start_draw;
-		
-		// Restore the original segments.
-		//
-		get_pnlcd_segments(segments);
-		EINKFB_IOCTL(FBIO_EINK_FAKE_PNLCD, (unsigned long)segments);
-
-		// Print out the screen-to-screen start-time deltas for the 4-unit segments we drew.
-		//
-		EINKFB_PRINT("screen-to-screen drawing times:%s", "\n");
-		
-		for ( i = 0; i < PN_LCD_SEGMENT_COUNT/4; i++ )
-		{
-			EINKFB_PRINT("  segments 0x%02X-0x%02X time = %4ums\n", (i*4), (i*4)+3,
-				jiffies_to_msecs(draw_starts[i+1] - draw_starts[i]));
-		}
-	}
-}
-
-#if PRAGMAS
-	#pragma mark -
-	#pragma mark Screen Saver
-	#pragma mark -
-#endif
-
-static void save_the_last_screen_saver(void)
-{
-	mm_segment_t saved_fs = get_fs();
-	int screen_saver_last_file;
-
-	set_fs(get_ds());
-	
-	screen_saver_last_file = sys_open(screen_saver_path_last, (O_WRONLY | O_TRUNC), 0);
-	
-	if ( 0 <= screen_saver_last_file )
-	{
-		char buf[128];
-		int len = sprintf(buf, "%d", screen_saver_last);
-		
-		if ( 0 < len )
-			sys_write(screen_saver_last_file, buf, len);
-		
-		sys_close(screen_saver_last_file);
-	}
-
-	set_fs(saved_fs);
-}
-
-static int load_the_screen_saver(char *screen_saver_path)
-{
-	int screen_saver_file, result = 0;
-	mm_segment_t saved_fs = get_fs();
-
-	set_fs(get_ds());
-	
-	screen_saver_file = sys_open(screen_saver_path, O_RDONLY, 0);
-	
-	if ( 0 <= screen_saver_file )
-	{
-		int len = sys_read(screen_saver_file, screen_saver_buffer, screen_saver_buffer_size);
-		
-		if ( 0 <= len )
-		{
-			valid_screen_saver_buf = (screen_saver_buffer_size == len) ? screen_saver_valid : len;
-			result = 1;
-		}
-
-		sys_close(screen_saver_file);
-	}
-	
-	set_fs(saved_fs);
-	
-	return ( result );
-}
-
-#define EXISTS_SCREEN_SAVER_PATH_CREATE(p)	exists_screen_saver_path(p, 1)
-#define EXISTS_SCREEN_SAVER_PATH(p)		exists_screen_saver_path(p, 0)
-
-static int exists_screen_saver_path(char *screen_saver_path, int create)
-{
-	int	screen_saver_file, flags = O_RDONLY | (create ? O_CREAT : 0),
-		result = 0;
-	mm_segment_t saved_fs = get_fs();
-
-	set_fs(get_ds());
-	
-	screen_saver_file = sys_open(screen_saver_path, flags, 0);
-	
-	if ( 0 <= screen_saver_file )
-	{
-		sys_close(screen_saver_file);
-		result = 1;
-	}
-	
-	set_fs(saved_fs);
-	
-	return ( result );
-}
-
-static void set_screen_saver_user_path(void)
-{
-	strcpy(screen_saver_path_template, SCREEN_SAVER_PATH_USER);
-	strcat(screen_saver_path_template, SCREEN_SAVER_PATH_TEMPLATE);
-	
-	strcpy(screen_saver_path_last, SCREEN_SAVER_PATH_USER);
-	strcat(screen_saver_path_last, SCREEN_SAVER_PATH_LAST);
-}
-
-static void set_screen_saver_sys_path(void)
-{
-	strcpy(screen_saver_path_template, SCREEN_SAVER_PATH_SYS_RO);
-	strcat(screen_saver_path_template, SCREEN_SAVER_PATH_TEMPLATE);
-	
-	strcpy(screen_saver_path_last, SCREEN_SAVER_PATH_SYS_RW);
-	strcat(screen_saver_path_last, SCREEN_SAVER_PATH_LAST);
-}
-
-static void get_the_next_screen_saver(void)
-{
-	char screen_saver_path[SCREEN_SAVER_PATH_SIZE];
-	
-	// Generate the path for the next screen saver we're supposed to load, trying the user
-	// path first and then falling back to the system path.
-	//
-	set_screen_saver_user_path();
-	
-	if ( !EXISTS_SCREEN_SAVER_PATH(screen_saver_path_last) )
-		set_screen_saver_sys_path();
-	
-	sprintf(screen_saver_path, screen_saver_path_template, ++screen_saver_last);
-	
-	// Load the next screen saver in sequence if we can.  Otherwise, load the
-	// default screen saver.
-	//
-	if ( !load_the_screen_saver(screen_saver_path) )
-	{
-		screen_saver_last = SCREEN_SAVER_DEFAULT;
-		
-		sprintf(screen_saver_path, screen_saver_path_template, screen_saver_last);
-		load_the_screen_saver(screen_saver_path);
-	}
-	
-	// Remember where we are in the sequence.
-	//
-	save_the_last_screen_saver();
-}
-
-static void save_user_screen_saver(char *screen_saver_user_path)
-{
-	mm_segment_t saved_fs = get_fs();
-	int screen_saver_file;
-
-	set_fs(get_ds());
-	
-	screen_saver_file = sys_open(screen_saver_user_path, (O_WRONLY | O_CREAT), 0);
-	
-	if ( 0 <= screen_saver_file )
-	{
-		int len = compress_picture((int)screen_saver_buffer_size, screen_saver_buffer);
-	
-		if ( 0 < len )
-		{
-			sys_write(screen_saver_file, picture_buffer, len);
-			
-			memcpy_from_picture_buffer_to_screensaver();
-			valid_screen_saver_buf = len;
-		}
-		
-		sys_close(screen_saver_file);
-	}
-	
-	set_fs(saved_fs);
-}
-
-static void set_next_user_screen_saver(void)
-{
-	char screen_saver_user_path[SCREEN_SAVER_PATH_SIZE];
-	
-	// Build up the path for the user screen saver last-shown
-	// file to see whether it exits or not.  
-	//
-	strcpy(screen_saver_user_path, SCREEN_SAVER_PATH_USER);
-	strcat(screen_saver_user_path, SCREEN_SAVER_PATH_LAST);
-	
-	if ( EXISTS_SCREEN_SAVER_PATH_CREATE(screen_saver_user_path) )
-	{
-		char screen_saver_user_template[SCREEN_SAVER_PATH_SIZE];
-		int screen_saver_user_next = 0;
-		
-		// Cycle through the user screen saver directory looking
-		// for the next available screen saver file.
-		//
-		strcpy(screen_saver_user_template, SCREEN_SAVER_PATH_USER);
-		strcat(screen_saver_user_template, SCREEN_SAVER_PATH_TEMPLATE);
-		
-		do
-		{
-			sprintf(screen_saver_user_path, screen_saver_user_template, screen_saver_user_next++);
-		}
-		while ( EXISTS_SCREEN_SAVER_PATH(screen_saver_user_path) );
-		
-		// Save out the current screen saver as the next one in the list, and
-		// update screen saver's sequence.
-		//
-		save_user_screen_saver(screen_saver_user_path);
-		
-		screen_saver_last = screen_saver_user_next;
-		save_the_last_screen_saver();
-	}
-}
-
-static void wake_screen_saver_thread(void)
-{
-	if ( screen_saver_buffer )
-		complete(&screen_saver_thread_complete);
-}
-
-static void exit_screen_saver_thread(void)
-{
-	if ( screen_saver_buffer )
-	{
-		screen_saver_thread_exit = 1;
-		wake_screen_saver_thread();
-	}
-}
-
-static void screen_saver_thread_body(void)
-{
-	if ( get_next_screen_saver )
-	{
-		get_the_next_screen_saver();
-		get_next_screen_saver = 0;
-	}
-	
-	wait_for_completion_interruptible(&screen_saver_thread_complete);
-}
-
-static int screen_saver_thread(void *data)
-{
-	int  *exit_thread = (int *)data;
-	bool thread_active = true;
-	
-	THREAD_HEAD(SCREEN_SAVER_THREAD_NAME);
-	
-	while ( thread_active )
-	{
-		TRY_TO_FREEZE();
-		
-		if ( !THREAD_SHOULD_STOP() )
-		{
-			THREAD_BODY(*exit_thread, screen_saver_thread_body);
-		}
-		else
-			thread_active = false;
-	}
-	
-	THREAD_TAIL(screen_saver_thread_exited);
-}
-
-static void start_screen_saver_thread(void)
-{
-	if ( screen_saver_buffer )
-		THREAD_START(screen_saver_id, &screen_saver_thread_exit, screen_saver_thread,
-			SCREEN_SAVER_THREAD_NAME);
-}
-
-static void stop_screen_saver_thread(void)
-{
-	if ( screen_saver_buffer )
-		THREAD_STOP(screen_saver_id, exit_screen_saver_thread, screen_saver_thread_exited);
-}
-
-#if PRAGMAS
-	#pragma mark -
 	#pragma mark Splash Screen
 	#pragma mark -
 #endif
 
 void splash_screen_activity(int which_activity, splash_screen_type which_screen)
 {
-	if ( FRAMEWORK_OR_DIAGS_RUNNING() )
-	{
-		int	dont_ack_power_power_manager = 0,
-			screen_saver_thread_wake = 0,
-			ack_power_manager = 0,
-			dont_delay = 0;
-		
-		pnlcd_blocking_cmds pnlcd_blocking_cmd;
-		pnlcd_animation_t pnlcd_animation;
-
-		switch ( which_screen )
-		{
-			// Block/unblock PNLCD activity; and, on entry, ACK the Power Manager.
-			//
-			case splash_screen_powering_off:
-			case splash_screen_powering_off_wireless:
-			case splash_screen_sleep:
-			case splash_screen_power_off_clear_screen:
-			case splash_screen_screen_saver_picture:
-				if ( splash_screen_activity_begin == which_activity )
-				{
-					pnlcd_blocking_cmd = start_block;
-					ack_power_manager = 1;
-				}
-				else
-					pnlcd_blocking_cmd = stop_block;
-				
-				PNLCD_SYS_IOCTL(PNLCD_CLEAR_ALL_IOCTL, 0);
-			goto entry_exit_common;
-			
-			// Start/stop PNLCD animation, delay other PNLCD activity if specified,
-			// initiate getting the next screen saver if specified, and ACK the Power
-			// Manager on exit if specified.
-			//
-			case splash_screen_logo:
-			case splash_screen_usb:
-			case splash_screen_usb_internal:
-			case splash_screen_usb_external:
-				dont_ack_power_power_manager = 1;
-				dont_delay = 1;
-			goto exit_common;
-
-			case splash_screen_exit:
-				if ( get_next_screen_saver )
-					screen_saver_thread_wake = 1;
-				
-			exit_common:
-			case splash_screen_powering_on:
-			case splash_screen_powering_on_wireless:
-				if ( splash_screen_activity_begin == which_activity )
-				{
-					PNLCD_SYS_IOCTL(PNLCD_BLOCK_IOCTL, stop_block);
-					PNLCD_SYS_IOCTL(PNLCD_CLEAR_ALL_IOCTL, 0);
-					
-					pnlcd_animation.cmd = start_animation;
-					pnlcd_animation.arg = pnlcd_animation_auto;
-					
-					pnlcd_blocking_cmd  = start_delay;
-				}
-				else
-				{
-					pnlcd_animation.cmd = stop_animation;
-					pnlcd_animation.arg = 0;
-					
-					pnlcd_blocking_cmd  = stop_delay_restore;
-					
-					if ( !dont_ack_power_power_manager )
-						ack_power_manager = 1;
-				}
-
-				if ( !dont_deanimate )
-					PNLCD_SYS_IOCTL(PNLCD_ANIMATE_IOCTL, &pnlcd_animation);
-
-			entry_exit_common:
-				if ( !dont_delay )
-					PNLCD_SYS_IOCTL(PNLCD_BLOCK_IOCTL, pnlcd_blocking_cmd);
-			
-				// Note that the next (externally-generated) update needs to
-				// be full.
-				//
-				//if ( splash_screen_activity_begin == which_activity )
-				//	force_full_update_acknowledge = 0;
-			break;
-
-			// Prevent compiler from complaining.
-			//
-			default:
-			break;
-		}
-
-		// If necessary, ACK the Power Manager.
-		//
-		if ( ack_power_manager )
-			einkfb_shim_power_op_complete();
-			
-		// If necessary, wake the thread that gets the next screen
-		// saver.
-		//
-		if ( screen_saver_thread_wake )
-			wake_screen_saver_thread();
-	}
-
 	// Perform general post-update activities.
 	//
 	if ( splash_screen_activity_end == which_activity )
@@ -1853,20 +762,20 @@ static raw_image_t *uncompress_picture(int picture_length, u8 *picture)
 	return ( result );
 }
 
-static int compress_picture(int picture_length, u8 *picture)
-{
-	int result = 0;
-
-	if ( picture && picture_length )
-	{
-		unsigned long length = picture_length;
-		
-		if ( 0 == einkfb_shim_gzip(picture_buffer, picture_buffer_size, picture, &length) )
-			result = length;
-	}
-
-	return ( result );
-}
+// static int compress_picture(int picture_length, u8 *picture)
+// {
+// 	int result = 0;
+// 
+// 	if ( picture && picture_length )
+// 	{
+// 		unsigned long length = picture_length;
+// 		
+// 		if ( 0 == einkfb_shim_gzip(picture_buffer, picture_buffer_size, picture, &length) )
+// 			result = length;
+// 	}
+// 
+// 	return ( result );
+// }
 
 static int picture_is_acceptable(picture_info_type *picture_info, raw_image_t *picture)
 {
@@ -1911,7 +820,7 @@ static int picture_is_acceptable(picture_info_type *picture_info, raw_image_t *p
 
 static u8 get_picture_byte(u8 *picture, int picture_bpp, int byte)
 {
-	u8 picture_byte = EINKFB_WHITE;
+	u8 picture_byte = einkfb_white(picture_bpp);
 	
 	// If the framebuffer and pictures depths match, we're just byte for byte.
 	//
@@ -1922,9 +831,10 @@ static u8 get_picture_byte(u8 *picture, int picture_bpp, int byte)
 		// We only support the following stretches:
 		//
 		//	1bpp -> 2bpp: 0, 1
-		//	1bpp -> 4bpp: 0, 1, 2, 3
+		//	1bpp -> 4bpp: 2, 3, 4, 5
 		//
 		//	2bpp -> 4bpp: 0, 1
+		//	2bpp -> 8bpp: 2, 3, 4, 5
 		//
 		int	stretches = framebuffer_bpp/picture_bpp, p = 0;
 		u8	pixels[6];
@@ -1939,7 +849,7 @@ static u8 get_picture_byte(u8 *picture, int picture_bpp, int byte)
 				
 				// Don't bother stretching white since it's already "stretched."
 				//
-				if ( EINKFB_WHITE != picture_byte ) 
+				if ( einkfb_white(picture_bpp) != picture_byte ) 
 				{
 					// Do the first two stretches.
 					//
@@ -1966,7 +876,7 @@ static u8 get_picture_byte(u8 *picture, int picture_bpp, int byte)
 		}
 	}
 	
-	return ( picture_byte );
+	return ( eink_pixels(framebuffer_bpp, picture_byte) );
 }
 
 static void stretch_bits(u8 *picture, int *picture_bpp, int *picture_size)
@@ -1977,9 +887,10 @@ static void stretch_bits(u8 *picture, int *picture_bpp, int *picture_size)
 	// We only support the following stretches:
 	//
 	//	1bpp -> 2bpp: 0, 1
-	//	1bpp -> 4bpp: 0, 1, 2, 3
+	//	1bpp -> 4bpp: 2, 3, 4, 5
 	//
 	//	2bpp -> 4bpp: 0, 1
+	//	2bpp -> 8bpp: 2, 3, 4, 5
 	//
 	switch ( framebuffer_bpp/p_bpp )
 	{
@@ -1988,7 +899,7 @@ static void stretch_bits(u8 *picture, int *picture_bpp, int *picture_size)
 		break;
 		
 		case 4:
-			l = 2; m = 4;
+			l = 2; m = 6;
 		break;
 		
 		default:
@@ -1998,12 +909,12 @@ static void stretch_bits(u8 *picture, int *picture_bpp, int *picture_size)
 	
 	// Walk through the picture bytes, stretching them into the kernelbuffer as we go.
 	//
-	for ( i = 0, j = 0; i < n; i++, j += m )
+	for ( i = 0, j = 0; i < n; i++, j += (m - l) )
 	{
 		pixels[0] = STRETCH_HI_NYBBLE(picture[i], p_bpp);
 		pixels[1] = STRETCH_LO_NYBBLE(picture[i], p_bpp);
 		
-		if ( 4 == m )
+		if ( 6 == m )
 		{
 			pixels[2] = STRETCH_HI_NYBBLE(pixels[0], (p_bpp << 1));
 			pixels[3] = STRETCH_LO_NYBBLE(pixels[0], (p_bpp << 1));
@@ -2012,7 +923,7 @@ static void stretch_bits(u8 *picture, int *picture_bpp, int *picture_size)
 		}
 		
 		for ( k = l; k < m; k++ )
-			kernelbuffer[j + (k - l)] = pixels[k];
+			kernelbuffer[j + (k - l)] = eink_pixels(framebuffer_bpp, pixels[k]);
 			
 		EINKFB_SCHEDULE_BLIT(i+1);
 	}
@@ -2057,20 +968,6 @@ static void display_splash_screen(splash_screen_type which_screen)
 	
 		switch ( which_screen )
 		{
-			case splash_screen_powering_off:
-			case splash_screen_powering_off_wireless:
-				clear_screen(fx_update_full);
-			/* break; */
-
-			case splash_screen_screen_saver_picture:
-			case splash_screen_exit:
-				set_drivemode_screen_ready(0);
-				splash_screen_up = which_screen;
-				splash_screen = 0;
-			break;
-
-			case splash_screen_powering_on:
-			case splash_screen_powering_on_wireless:
 			case splash_screen_logo:
 				EINKFB_IOCTL(FBIO_EINK_GET_REBOOT_BEHAVIOR, (unsigned long)&reboot_behavior);
 				
@@ -2090,39 +987,6 @@ static void display_splash_screen(splash_screen_type which_screen)
 					else
 						picture_info = &picture_logo_info_update_full;
 				}
-			break;
-			
-			case splash_screen_usb_internal:
-				picture = (raw_image_t *)picture_usb_internal;
-				picture_info = &picture_usb_internal_info;
-				picture_len = picture_usb_internal_len;
-			break;
-			
-			case splash_screen_usb_external:
-				picture = (raw_image_t *)picture_usb_external;
-				picture_info = &picture_usb_external_info;
-				picture_len = picture_usb_external_len;
-			break;
-			
-			case splash_screen_usb:
-				picture = (raw_image_t *)picture_usb;
-				picture_info = &picture_usb_info;
-				picture_len = picture_usb_len;
-				
-				set_drivemode_screen_ready(0);
-				dont_deanimate = 1;
-			break;
-			
-			case splash_screen_sleep:
-				picture = (raw_image_t *)picture_sleep;
-				picture_info = &picture_sleep_info;
-				picture_len = picture_sleep_len;
-			break;
-
-			case splash_screen_update:
-				picture = (raw_image_t *)picture_update;
-				picture_info = &picture_update_info;
-				picture_len = picture_update_len;
 			break;
 			
 			case splash_screen_shim_picture:
@@ -2249,132 +1113,6 @@ static void display_splash_screen(splash_screen_type which_screen)
 			}
 		}
 	}
-}
-
-static void stretch_screen_saver(u8 *buffer)
-{
-	int	buffer_bpp		= SCREEN_SAVER_BPP,
-		buffer_size		= BPP_SIZE((SCREEN_SAVER_XRES * SCREEN_SAVER_YRES), buffer_bpp);
-
-	stretch_bits(buffer, &buffer_bpp, &buffer_size);
-}
-
-static void fit_screen_saver(u8 *buffer)
-{
-	shim_picture_info.x		= 0;
-	shim_picture_info.y		= 0;
-	shim_picture_info.update	= update_none;
-	shim_picture_info.to_screen	= update_buffer;
-	shim_picture_info.headerless	= true;
-	shim_picture_info.xres		= SCREEN_SAVER_XRES;
-	shim_picture_info.yres		= SCREEN_SAVER_YRES;
-	shim_picture_info.bpp		= SCREEN_SAVER_BPP;
-	
-	shim_picture_len		= ALREADY_UNCOMPRESSED;
-	shim_picture			= buffer;
-
-	display_splash_screen(splash_screen_shim_picture);
-}
-
-static void display_screen_saver(void)
-{
-	int use_default = 1;
-	
-	// Check to see whether we can use the contents of the screen saver buffer or not.
-	//
-	if ( screen_saver_buffer && valid_screen_saver_buf )
-	{
-		screen_saver_t screen_saver = (screen_saver_t)valid_screen_saver_buf;
-		
-		switch ( screen_saver )
-		{
-			// Single-shot screen saver case.
-			//
-			case screen_saver_valid:
-				if ( SCREEN_SAVER_XRES != framebuffer_xres )
-					fit_screen_saver(screen_saver_buffer);
-				else
-				{
-					if ( SCREEN_SAVER_BPP == framebuffer_bpp )
-						memcpy_from_screen_saver_to_kernelbuffer();
-					else
-						stretch_screen_saver(screen_saver_buffer);
-				}
-				
-				use_default = 0;
-			break;
-			
-			// Rotational screen saver case.
-			//
-			default:
-				if ( uncompress_picture(valid_screen_saver_buf, screen_saver_buffer) )
-				{
-					if ( SCREEN_SAVER_XRES != framebuffer_xres )
-						fit_screen_saver(picture_buffer);
-					else
-					{
-						if ( SCREEN_SAVER_BPP == framebuffer_bpp )
-							memcpy_from_picture_buffer_to_kernelbuffer();
-						else
-							stretch_screen_saver(picture_buffer);
-					}
-
-					get_next_screen_saver = 1;
-					use_default = 0;
-				}
-			break;
-		}
-	}
-
-	// Default back to the passed-in screen saver if we must.
-	//
-	if ( use_default )
-	{
-		display_splash_screen(splash_screen_sleep);
-	}
-	else
-	{
-		// Get the screen saver onto the display.
-		//
-		update_display(fx_update_full);
-		
-		// Overlay it with the standard sleep screen's message.
-		//
-		display_splash_screen(splash_screen_screen_saver_picture);
-	}
-}
-
-static void display_drivemode_screen(splash_screen_type which_screen)
-{
-	switch ( which_screen )
-	{
-		case splash_screen_drivemode_1:
-			display_splash_screen(splash_screen_usb_internal);
-		break;
-		
-		case splash_screen_drivemode_2:
-			display_splash_screen(splash_screen_usb_external);
-		break;
-		
-		case splash_screen_drivemode_3:
-			display_splash_screen(splash_screen_usb_internal);
-			display_splash_screen(splash_screen_usb_external);
-		break;
-		
-		// Prevent compiler from complaining.
-		//
-		default:
-		break;
-	}
-
-	// Stop PNLCD animation.
-	//
-	dont_deanimate = 0;
-	end_splash_screen_activity();
-	
-	// Start drivemode screen animation.
-	//
-	set_drivemode_screen_ready(1);
 }
 
 static int get_progressbar_y(int y, int progressbar_height)
@@ -2660,7 +1398,7 @@ static void set_progressbar_background(u8 background)
 		break;
 		
 		default:
-			progressbar_background = EINKFB_WHITE;
+			progressbar_background = einkfb_white(framebuffer_bpp);
 		break;
 	}
 }
@@ -2909,7 +1647,7 @@ static void display_update_screen(splash_screen_type which_screen)
 
 		// Buffer the (white background) progressbar and badge.
 		//
-		set_progressbar_background(EINKFB_WHITE);
+		set_progressbar_background(einkfb_white(framebuffer_bpp));
 		set_update_screen_progressbar_xy();
 
 		display_progressbar(progress, update_buffer);
@@ -2959,57 +1697,30 @@ void splash_screen_dispatch(splash_screen_type which_screen)
 	//
 	if ( !einkfb_shim_platform_splash_screen_dispatch(which_screen, framebuffer_yres) )
 	{
-		// Simple (one-shot) splash screen cases.
-		//
-		if ( FBIO_SCREEN_IN_RANGE(which_screen) )
+		switch ( which_screen )
 		{
-			// Everything here is simple but the sleep screen.  We must either
-			// use the sleep screen as is (i.e., default back to it on failure),
-			// or put up the screen saver.
+			// Boot/reboot screens.
 			//
-			if ( splash_screen_sleep != which_screen )
-				display_splash_screen(which_screen);
-			else
-				display_screen_saver();
-		}
-		else
-		{
-			// Composite splash screen cases.
+			case splash_screen_boot:
+			case splash_screen_reboot:
+				display_boot_screen(which_screen);
+			break;
+			
+			// Update screens.
 			//
-			switch ( which_screen )
-			{
-				// Drivemode screens.
-				//
-				case splash_screen_drivemode_0:
-				case splash_screen_drivemode_1:
-				case splash_screen_drivemode_2:
-				case splash_screen_drivemode_3:
-					display_drivemode_screen(which_screen);
-				break;
-					
-				// Boot/reboot screens.
-				//
-				case splash_screen_boot:
-				case splash_screen_reboot:
-					display_boot_screen(which_screen);
-				break;
-				
-				// Update screens.
-				//
-				case splash_screen_update_initial:
-				case splash_screen_update_success:
-				case splash_screen_update_failure:
-				case splash_screen_update_failure_no_wait:
-					display_update_screen(which_screen);
-				break;
+			case splash_screen_update_initial:
+			case splash_screen_update_success:
+			case splash_screen_update_failure:
+			case splash_screen_update_failure_no_wait:
+				display_update_screen(which_screen);
+			break;
 	
-				// Otherwise, just let the splash screen code itself
-				// handle things.
-				//
-				default:
-					display_splash_screen(which_screen);
-				break;
-			}
+			// Otherwise, just let the splash screen code itself
+			// handle things.
+			//
+			default:
+				display_splash_screen(which_screen);
+			break;
 		}
 	}
 	
@@ -3052,7 +1763,12 @@ static void einkfb_shim_reboot_hook(reboot_behavior_t behavior)
 static void einkfb_shim_info_hook(struct einkfb_info *info)
 {
 	if ( info && override_framebuffer )
+	{
 		info->start = override_framebuffer;
+		
+		if ( info->dma )
+			info->phys = einkfb_shim_get_kernelbuffer_phys();
+	}
 }
 
 static void einkfb_shim_check_orientation(void)
@@ -3104,7 +1820,6 @@ static int einkfb_shim_ioctl(unsigned int cmd, unsigned long arg)
 
 static bool einkfb_shim_ioctl_hook(einkfb_ioctl_hook_which which, unsigned long flag, unsigned int *cmd, unsigned long *arg)
 {
-	char segments[PN_LCD_SEGMENT_COUNT] = { SEGMENT_OFF };
 	bool result = EINKFB_IOCTL_DONE;
 	unsigned long local_arg = *arg;
 	unsigned int local_cmd = *cmd;
@@ -3158,15 +1873,6 @@ static bool einkfb_shim_ioctl_hook(einkfb_ioctl_hook_which which, unsigned long 
 				//
 				end_splash_screen_activity();
 				
-				// Handle the fake PNLCD.
-				//
-				if ( FBIO_EINK_UPDATE_DISPLAY == local_cmd )
-					fake_pnlcd_valid = 0;
-				
-				if ( !LOCAL_UPDATE() )
-					if ( get_pnlcd_segments(segments) )
-					        update_fake_pnlcd(segments);
-				
 				// Sync up with the HAL's buffer if we didn't
 				// initiate the screen-update ourselves.
 				//
@@ -3191,7 +1897,7 @@ static bool einkfb_shim_ioctl_hook(einkfb_ioctl_hook_which which, unsigned long 
 			}
 		break;
 		
-		// Handle the splash screen, clear screen, fake PNLCD, and progressbar calls here
+		// Handle the splash screen, clear screen, and progressbar calls here
 		// (we're always "done" with these).
 		//
 		case FBIO_EINK_SPLASH_SCREEN:
@@ -3202,37 +1908,24 @@ static bool einkfb_shim_ioctl_hook(einkfb_ioctl_hook_which which, unsigned long 
 
 		case FBIO_EINK_CLEAR_SCREEN:
 			if ( einkfb_ioctl_hook_pre == which )
-				clear_screen(fx_update_full);
+			{
+				switch ( local_arg )
+				{
+					case EINK_CLEAR_BUFFER:
+						clear_buffers();
+					break;
+					
+					case EINK_CLEAR_SCREEN:
+					default:
+						clear_screen(fx_update_full);
+					break;
+				}
+			}
 		break;
 		
 		case FBIO_EINK_OFF_CLEAR_SCREEN:
 			if ( einkfb_ioctl_hook_pre == which )
 				einkfb_shim_power_off_screen();
-		break;
-		
-		case FBIO_EINK_FAKE_PNLCD:
-			if ( einkfb_ioctl_hook_pre == which )
-			{
-				// If we're passed the segments, use those.  Otherwise, extract
-				// them from the PNLCD driver.
-				//
-				if ( local_arg )
-				{
-					if ( PROC_EINK_FAKE_PNLCD_TEST == local_arg )
-						fake_pnlcd_test();
-					else
-						success = einkfb_memcpy(EINKFB_IOCTL_FROM_USER, flag, segments,
-							(void *)local_arg, PN_LCD_SEGMENT_COUNT);
-				}
-				else
-				{
-					if ( get_pnlcd_segments(segments) )
-						success = EINKFB_SUCCESS;
-				}
-
-				if ( EINKFB_SUCCESS == success )
-					update_fake_pnlcd(segments);
-			}
 		break;
 		
 		case FBIO_EINK_PROGRESSBAR:
@@ -3350,25 +2043,22 @@ static void einkfb_shim_dealloc(void)
 {
 	// Perform memory deallocations and unmappings.
 	//
-	if ( screen_saver_buffer )
-		vfree(screen_saver_buffer);
-		
-	if ( fake_pnlcd_buffer )
-		kfree(fake_pnlcd_buffer);
-	
 	if ( kernelbuffer )
 	{
 		if ( kernelbuffer_local )
 			vfree(kernelbuffer);
 		else
-			einkfb_shim_free_kernelbuffer(kernelbuffer);
+		{
+			struct einkfb_info info;
+			einkfb_get_info(&info);
+			
+			einkfb_shim_free_kernelbuffer(kernelbuffer, &info);
+		}
 	}
 }
 
-static DEVICE_ATTR(valid_screen_saver_buf,	DEVICE_MODE_RW, show_valid_screen_saver_buf,	store_valid_screen_saver_buf);
 static DEVICE_ATTR(splash_screen_up,		DEVICE_MODE_R,  show_splash_screen_up,		NULL);
 static DEVICE_ATTR(send_fake_rotate,		DEVICE_MODE_RW, show_send_fake_rotate,		store_send_fake_rotate);
-static DEVICE_ATTR(use_fake_pnlcd,		DEVICE_MODE_RW, show_use_fake_pnlcd,		store_use_fake_pnlcd);
 static DEVICE_ATTR(running_diags,		DEVICE_MODE_RW,	show_running_diags,		store_running_diags);
 static DEVICE_ATTR(progressbar,			DEVICE_MODE_RW, show_progressbar,		store_progressbar);
 static DEVICE_ATTR(eink_debug,  		DEVICE_MODE_RW, show_eink_debug,		store_eink_debug);
@@ -3382,14 +2072,8 @@ static int __init einkfb_shim_init(void)
 	
 	// Attempt to perform necessary memory allocations and remappings.
 	//
-	screen_saver_buffer_size = BPP_SIZE((SCREEN_SAVER_XRES * SCREEN_SAVER_YRES), info.bpp);
-	screen_saver_buffer = vmalloc(screen_saver_buffer_size);
-
-	fake_pnlcd_buffer_size = BPP_SIZE((FAKE_PNLCD_XRES_MAX * info.yres), info.bpp);
-	fake_pnlcd_buffer = kmalloc(fake_pnlcd_buffer_size, GFP_KERNEL);
-	
 	kernelbuffer_size = info.size;
-	kernelbuffer = (u8 *)einkfb_shim_alloc_kernelbuffer(kernelbuffer_size);
+	kernelbuffer = (u8 *)einkfb_shim_alloc_kernelbuffer(kernelbuffer_size, &info);
 	
 	if ( !kernelbuffer && kernelbuffer_size )
 	{
@@ -3402,23 +2086,37 @@ static int __init einkfb_shim_init(void)
 		}
 	}
 	
-	if ( screen_saver_buffer && fake_pnlcd_buffer && kernelbuffer )
+	if ( kernelbuffer )
 	{
 		// If debugging is enabled, output the returned einkfb_info. 
 		//
 		einkfb_debug("init  = %d\n",     info.init);
 		einkfb_debug("done  = %d\n",   	 info.done);
-		einkfb_debug("size  = %lu\n",  	 info.size);
-		einkfb_debug("blen  = %lu\n",  	 info.blen);
-		einkfb_debug("mem   = %lu\n",  	 info.mem);
-		einkfb_debug("bpp   = %ld\n",  	 info.bpp);
-		einkfb_debug("xres  = %d\n",   	 info.xres);
+		einkfb_debug("size  = %lu\n",    info.size);
+		einkfb_debug("blen  = %lu\n",    info.blen);
+		einkfb_debug("mem   = %lu\n",    info.mem);
+		einkfb_debug("bpp   = %ld\n",    info.bpp);
+		einkfb_debug("xres  = %d\n",     info.xres);
 		einkfb_debug("yres  = %d\n",     info.yres);
 		einkfb_debug("align = %lu\n",    info.align);
-		einkfb_debug("start = 0x%08X\n", (unsigned int)info.start);
-		einkfb_debug("vfb   = 0x%08X\n", (unsigned int)info.vfb);
-		einkfb_debug("buf   = 0x%08X\n", (unsigned int)info.buf);
+		einkfb_debug("dma   = %d\n",     info.dma);
 		einkfb_debug("dev   = 0x%08X\n", (unsigned int)info.dev);
+		
+		if ( info.dma )
+		{
+			einkfb_debug("start = 0x%08X (0x%08X)\n", (unsigned int)info.start,   info.phys->addr);
+			einkfb_debug("vfb   = 0x%08X (0x%08X)\n", (unsigned int)info.vfb,     info.phys->addr + EINKFB_PHYS_VFB_OFFSET(info));
+			einkfb_debug("buf   = 0x%08X (0x%08X)\n", (unsigned int)info.buf,     info.phys->addr + EINKFB_PHYS_BUF_OFFSET(info));
+			einkfb_debug("shim  = 0x%08X (0x%08X)\n", (unsigned int)kernelbuffer, einkfb_shim_get_kernelbuffer_phys()->addr);
+		}
+		else
+		{
+			einkfb_debug("start = 0x%08X\n", (unsigned int)info.start);
+			einkfb_debug("vfb   = 0x%08X\n", (unsigned int)info.vfb);
+			einkfb_debug("buf   = 0x%08X\n", (unsigned int)info.buf);
+			einkfb_debug("dev   = 0x%08X\n", (unsigned int)info.dev);
+			einkfb_debug("shim  = 0x%08X\n", (unsigned int)kernelbuffer);
+		}
 		
 		// Use the eInk HAL's scratch buffer for the picture buffer (both uses
 		// are for a temporary screen-sized transfer buffer).
@@ -3443,13 +2141,8 @@ static int __init einkfb_shim_init(void)
 
 		// Attempt to create the proc/sysfs entries we need. 
 		//
-		einkfb_proc_screen_saver = einkfb_create_proc_entry(EINKFB_PROC_EINK_SCREEN_SAVER,
-			EINKFB_PROC_CHILD_RW, einkfb_screen_saver_read, einkfb_screen_saver_write);
-		
-		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_valid_screen_saver_buf);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_splash_screen_up);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_send_fake_rotate);
-		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_use_fake_pnlcd);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_running_diags);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_progressbar);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_eink_debug);
@@ -3470,10 +2163,6 @@ static int __init einkfb_shim_init(void)
 		// Ask the eInk HAL to call us back at reboot time.
 		//
 		einkfb_set_reboot_hook(einkfb_shim_reboot_hook);
-		
-		// Start up the screen saver thread.
-		//
-		start_screen_saver_thread();
 		
 		// Do platform-specific init.
 		//
@@ -3497,10 +2186,6 @@ static void __exit einkfb_shim_exit(void)
 	//
 	einkfb_shim_platform_done(&info);
 	
-	// Stop the screen saver thread.
-	//
-	stop_screen_saver_thread();
-	
 	// Clear the hooks.
 	//
 	einkfb_set_reboot_hook(NULL);
@@ -3510,11 +2195,8 @@ static void __exit einkfb_shim_exit(void)
 
 	// Remove any of the proc/sysfs entries we created.
 	//
-	einkfb_remove_proc_entry(EINKFB_PROC_EINK_SCREEN_SAVER, einkfb_proc_screen_saver);
-	device_remove_file(&info.dev->dev, &dev_attr_valid_screen_saver_buf);
 	device_remove_file(&info.dev->dev, &dev_attr_splash_screen_up);
 	device_remove_file(&info.dev->dev, &dev_attr_send_fake_rotate);
-	device_remove_file(&info.dev->dev, &dev_attr_use_fake_pnlcd);
 	device_remove_file(&info.dev->dev, &dev_attr_running_diags);
 	device_remove_file(&info.dev->dev, &dev_attr_progressbar);
 	device_remove_file(&info.dev->dev, &dev_attr_eink_debug);
@@ -3529,8 +2211,6 @@ module_exit(einkfb_shim_exit);
 
 module_param_named(splash_screen_up, splash_screen_up, int, S_IRUGO);
 MODULE_PARM_DESC(splash_screen_up, "sets which splash screen is currently up");
-module_param_named(use_fake_pnlcd, use_fake_pnlcd, int, S_IRUGO);
-MODULE_PARM_DESC(use_fake_pnlcd, "enables/disables use of fake_pnlcd");
 
 MODULE_DESCRIPTION("eInk Legacy-to-HAL shim");
 MODULE_AUTHOR("Lab126");

@@ -9,7 +9,7 @@
  *  more details.
  */
 
-#undef USE_BS_IRQ
+#undef  USE_BS_IRQ
 
 #include <asm/arch-mxc/mx31_pins.h>
 #include <asm/arch/board_id.h>
@@ -22,12 +22,15 @@
 #include <asm/mach/irq.h>
 #endif
 
-
 extern void slcd_gpio_config(void); // From mx31ads_gpio.c/mario_gpio.c
 extern void gpio_lcd_active(void);  // Ditto.
 
 #include "../hal/einkfb_hal.h"
 #include "broadsheet.h"
+
+#if PRAGMAS
+    #pragma mark Definitions/Globals
+#endif
 
 #ifdef CONFIG_MACH_MX31ADS
 #include <asm/arch-mxc/board-mx31ads.h>
@@ -50,16 +53,22 @@ uint16_t pin_addr;  // Needed for __raw_writew calls
 #define BROADSHEET_HIRQ_IRQ           IOMUX_TO_IRQ(BROADSHEET_HIRQ_LINE)
 
 // Other Broadsheet constants
-#define BROADSHEET_DISPLAY_NUMBER      DISP0
-#define BROADSHEET_PIXEL_FORMAT        IPU_PIX_FMT_GENERIC
-#define BROADSHEET_SCREEN_HEIGHT       600
-#define BROADSHEET_SCREEN_HEIGHT_NELL  825
-#define BROADSHEET_SCREEN_WIDTH        800
-#define BROADSHEET_SCREEN_WIDTH_NELL   1200
-#define BROADSHEET_SCREEN_SIZE         (BROADSHEET_SCREEN_WIDTH * BROADSHEET_SCREEN_HEIGHT)
-#define BROADSHEET_SCREEN_SIZE_NELL    (BROADSHEET_SCREEN_WIDTH_NELL * BROADSHEET_SCREEN_HEIGHT_NELL)
-#define BROADSHEET_SCREEN_LEFT_OFFSET  0
-#define BROADSHEET_READY_TIMEOUT       BS_RDY_TIMEOUT
+#define BROADSHEET_DISPLAY_NUMBER     DISP0
+#define BROADSHEET_PIXEL_FORMAT       IPU_PIX_FMT_RGB565
+#define BROADSHEET_SCREEN_HEIGHT      600
+#define BROADSHEET_SCREEN_HEIGHT_NELL 825
+#define BROADSHEET_SCREEN_WIDTH       800
+#define BROADSHEET_SCREEN_WIDTH_NELL  1200
+#define BROADSHEET_SCREEN_BPP         4
+#define BROADSHEET_READY_TIMEOUT      BS_RDY_TIMEOUT
+#define BROADSHEET_DMA_TIMEOUT        BS_DMA_TIMEOUT
+#define BROADSHEET_DMA_MIN_SIZE       64
+#define BROADSHEET_DMA_IN_USE         1
+#define BROADSHEET_DMA_DONE           0
+
+#define BROADSHEET_DMA_SIZE(s)        BROADSHEET_DMA_MIN_SIZE,     \
+                                      (s)/BROADSHEET_DMA_MIN_SIZE, \
+                                      BROADSHEET_DMA_MIN_SIZE
 
 // Select which R/W timing parameters to use (slow or fast); these
 // settings affect the Freescale IPU Asynchronous Parallel System 80
@@ -93,13 +102,17 @@ uint16_t pin_addr;  // Needed for __raw_writew calls
 #    define BROADSHEET_WRITE_DOWN_TIME       72  // nsec 
 #endif
 
-#if PRAGMAS
-    #pragma mark Definitions/Globals
-#endif
+static void       bs_eof_irq_completion(void);
 
 static uint16_t   broadsheet_screen_height = BROADSHEET_SCREEN_HEIGHT;
 static uint16_t   broadsheet_screen_width  = BROADSHEET_SCREEN_WIDTH;
-static uint32_t   broadsheet_screen_size   = BROADSHEET_SCREEN_SIZE;
+
+static uint32_t   broadsheet_screen_stride = BPP_SIZE(BROADSHEET_SCREEN_WIDTH, BROADSHEET_SCREEN_BPP);
+
+static bool       dma_available = false;
+static bool       dma_xfer_done = true;
+static uint32_t   dma_started;
+static uint32_t   dma_stopped;
 
 #if PRAGMAS
     #pragma mark -
@@ -212,6 +225,54 @@ static int bs_io_buf(u32 data_size, u16 *data, bool which)
     return ( result );
 }
 
+static bool bs_dma_ready(void *unused)
+{
+    return ( dma_xfer_done );
+}
+
+static int bs_io_buf_dma(u32 data_size, dma_addr_t phys_addr)
+{
+    int result = EINKFB_FAILURE;
+
+    if ( BS_READY() )
+    {
+        // Keep PIO mode fast until we need DMA.
+        //
+        ipu_adc_set_dma_in_use(BROADSHEET_DMA_IN_USE);
+    
+        // Set up for the DMA transfer.
+        //
+        if ( EINKFB_SUCCESS == ipu_init_channel_buffer(ADC_SYS1, IPU_INPUT_BUFFER, BROADSHEET_PIXEL_FORMAT,
+             BROADSHEET_DMA_SIZE(data_size), IPU_ROTATE_NONE, phys_addr, 0, 0, 0) )
+        {
+            ipu_enable_irq(IPU_IRQ_ADC_SYS1_EOF);
+            ipu_enable_channel(ADC_SYS1);
+            dma_xfer_done = false;
+            dma_started = jiffies;
+            
+            // Start it.
+            //
+            ipu_select_buffer(ADC_SYS1, IPU_INPUT_BUFFER, 0);
+            einkfb_debug("DMA transfer started\n");
+            
+            // Wait for it to complete.
+            //
+            result = EINKFB_SCHEDULE_TIMEOUT_INTERRUPTIBLE(BROADSHEET_DMA_TIMEOUT, bs_dma_ready);
+            
+            // If it fails to complete, complete it anyway.
+            //
+            if ( EINKFB_FAILURE == result )
+                bs_eof_irq_completion();
+        }
+        
+        // Done with DMA for now, so make PIO fast again.
+        //
+        ipu_adc_set_dma_in_use(BROADSHEET_DMA_DONE);
+    }
+    
+    return ( result );
+}
+
 bool bs_wr_one_ready(void)
 {
     bool ready = false;
@@ -229,10 +290,60 @@ void bs_wr_one(u16 data)
 
 int bs_wr_dat(bool which, u32 data_size, u16 *data)
 {
-    int result;
+    int result = EINKFB_FAILURE;
     
     if ( USE_WR_BUF(data_size) )
-        result = bs_io_buf(data_size, data, BS_WR);
+    {
+        u16 *pio_data = data;
+        
+        if ( dma_available && broadsheet_needs_dma() )
+        {
+            dma_addr_t phys_addr = bs_get_phys_addr();
+
+            if ( phys_addr )
+            {
+                u32 alignment = 0, align_size = 0, remainder = 0;
+                
+                // Ensure that we're doing enough DMA to warrant it.
+                //
+                if ( BROADSHEET_DMA_MIN_SIZE <= data_size )
+                {
+                    alignment  = data_size / BROADSHEET_DMA_MIN_SIZE;
+                    
+                    // Ensure that the DMA we're doing is properly aligned.
+                    //
+                    align_size = alignment * BROADSHEET_DMA_MIN_SIZE;
+                    remainder  = data_size % BROADSHEET_DMA_MIN_SIZE;
+                }
+                
+                einkfb_debug("DMA alignment = %d: align_size = %d, remainder = %d\n",
+                    alignment, align_size, remainder);
+
+                // Send the properly sized and aligned data along to be DMA'd.
+                //
+                if ( align_size )
+                    result = bs_io_buf_dma(align_size, phys_addr);
+                
+                // If the DMA went well, only PIO the remainder if there is any.
+                //
+                if ( EINKFB_SUCCESS == result )
+                {
+                    data_size = remainder;
+                    
+                    if ( remainder )
+                    {
+                        pio_data = &data[alignment];
+                        result = EINKFB_FAILURE;
+                    }
+                }
+
+                bs_clear_phys_addr();
+            }
+        }
+
+        if ( EINKFB_FAILURE == result )
+            result = bs_io_buf(data_size, pio_data, BS_WR);
+    }
     else
     {
         int i; result = EINKFB_SUCCESS;
@@ -289,6 +400,27 @@ int bs_rd_dat(u32 data_size, u16 *data)
     return ( result );
 }
 
+/*!
+ ** Interrupt function for completion of ADC buffer transfer.
+ ** All we need to do is disable the channel and set the "done" flag.
+ **/
+static void bs_eof_irq_completion(void)
+{
+        ipu_disable_irq(IPU_IRQ_ADC_SYS1_EOF);
+        ipu_disable_channel(ADC_SYS1, false);
+        dma_xfer_done = true;
+}
+
+static irqreturn_t bs_eof_irq_handler(int irq, void *dev_id)
+{
+        bs_eof_irq_completion();    
+        dma_stopped = jiffies;
+
+        einkfb_debug("DMA transfer completed, time = %dms\n",
+            jiffies_to_msecs(dma_stopped - dma_started));
+        
+        return ( IRQ_HANDLED );
+}
 
 #ifdef USE_BS_IRQ
 /*
@@ -316,7 +448,6 @@ static irqreturn_t bs_irq_handler (int irq, void *data, struct pt_regs *r)
 }
 #endif
 
-
 /*
 ** Initialize the Broadsheet hardware interface and reset the
 ** Broadsheet controller.
@@ -324,11 +455,14 @@ static irqreturn_t bs_irq_handler (int irq, void *data, struct pt_regs *r)
 
 bool bs_hw_init(void)
 {
-    bool result = true;
+    ipu_channel_params_t params;
+
 #ifdef USE_BS_IRQ
     int  rqstatus;
 #endif
-    
+
+    bool result = true;
+
     ipu_adc_sig_cfg_t sig = { 0, 0, 0, 0, 0, 0, 0, 0,
             IPU_ADC_BURST_WCS,
             IPU_ADC_IFC_MODE_SYS80_TYPE2,
@@ -336,18 +470,43 @@ bool bs_hw_init(void)
     };
 
     // Init DI interface
-    if ( IS_NELL() || IS_MARIO() || IS_ADS() )
+    if ( IS_NELLWW() || IS_NELL() || IS_MARIO() || IS_ADS() )
     {
         broadsheet_screen_height = BROADSHEET_SCREEN_HEIGHT_NELL;
         broadsheet_screen_width  = BROADSHEET_SCREEN_WIDTH_NELL;
         
-        broadsheet_screen_size   = BROADSHEET_SCREEN_SIZE_NELL;
+        broadsheet_screen_stride = BPP_SIZE(broadsheet_screen_width, BROADSHEET_SCREEN_BPP);
+    }
+
+    // Set up ADC IRQ
+    
+    dma_available = false;
+    
+    if ( !IS_ADS() )
+    {
+        if ( ipu_request_irq(IPU_IRQ_ADC_SYS1_EOF, bs_eof_irq_handler, 0, EINKFB_NAME, NULL) )
+        {
+            einkfb_print_crit("Could not register SYS1 irq handler\n");
+        }
+        else
+        {
+            bs_eof_irq_completion();
+    
+            memset(&params, 0, sizeof(params));
+            params.adc_sys1.disp = BROADSHEET_DISPLAY_NUMBER;
+            params.adc_sys1.ch_mode = WriteDataWoRS;
+            ipu_init_channel(ADC_SYS1, &params);
+            
+            dma_available = true;
+        }
     }
 
     ipu_adc_init_panel(BROADSHEET_DISPLAY_NUMBER,
                        broadsheet_screen_width,
                        broadsheet_screen_height,
-                       BROADSHEET_PIXEL_FORMAT, broadsheet_screen_size, sig, XY, 0, VsyncInternal);
+                       BROADSHEET_PIXEL_FORMAT,
+                       broadsheet_screen_stride,
+                       sig, XY, 0, VsyncInternal);
 
     // Set IPU timing for read cycles
     ipu_adc_init_ifc_timing(BROADSHEET_DISPLAY_NUMBER, true,
@@ -449,6 +608,11 @@ bool bs_hw_init(void)
     return ( result );
 }
 
+void bs_hw_init_dma(void)
+{
+    ipu_adc_set_dma_in_use(BROADSHEET_DMA_DONE);
+}
+
 static bool bs_cmd_ck_reg(u16 ra, u16 rd)
 {
     u16 rd_reg = bs_cmd_rd_reg(ra);
@@ -484,6 +648,14 @@ bool bs_hw_test(void)
 
 void bs_hw_done(void)
 {
+    if ( dma_available )
+    {
+        bs_eof_irq_completion();
+        
+        ipu_uninit_channel(ADC_SYS1);
+        ipu_free_irq(IPU_IRQ_ADC_SYS1_EOF, NULL);
+    }
+
 #ifdef USE_BS_IRQ
     disable_irq(BROADSHEET_HIRQ_IRQ);
     free_irq(BROADSHEET_HIRQ_IRQ, NULL);

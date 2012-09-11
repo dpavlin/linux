@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_proc.c -- eInk frame buffer device HAL procfs/sysfs
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -74,6 +74,9 @@ static int update_display_write(struct file *file, const char __user *buf, unsig
 		switch (n[0]) {
 			case PROC_EINK_UPDATE_DISPLAY_CLS:
 				cmd = FBIO_EINK_CLEAR_SCREEN;
+				if (m > 1) {
+					arg = n[1];
+				}
 				break;
 			
 			case PROC_EINK_UPDATE_DISPLAY_PART:
@@ -162,10 +165,6 @@ static int update_display_write(struct file *file, const char __user *buf, unsig
 				}
 				break;
 		
-		    case PROC_EINK_UPDATE_DISPLAY_PNLCD:
-		        cmd = FBIO_EINK_FAKE_PNLCD;
-		        break;
-		        
 		    case PROC_EINK_SET_REBOOT_BEHAVIOR:
 				if (m > 1) {
 					cmd = FBIO_EINK_SET_REBOOT_BEHAVIOR;
@@ -211,11 +210,13 @@ static int update_display_write(struct file *file, const char __user *buf, unsig
 			    }
 			    break;
 		    
-		    case PROC_EINK_FAKE_PNLCD_TEST:
-		        cmd = FBIO_EINK_FAKE_PNLCD;
-		        arg = PROC_EINK_FAKE_PNLCD_TEST;
-		    	break;
-		    	
+		    case PROC_EINK_SET_SLEEP_BEHAVIOR:
+				if (m > 1) {
+					cmd = FBIO_EINK_SET_SLEEP_BEHAVIOR;
+					arg = n[1];
+				}
+		    break;
+		    
 		    case PROC_EINK_GRAYSCALE_TEST:
 		        einkfb_display_grayscale_ramp();
 		        break;

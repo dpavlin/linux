@@ -94,6 +94,7 @@ static struct proc_dir_entry *einkfb_proc_eink_rom          = NULL;
 static struct proc_dir_entry *einkfb_proc_eink_ram          = NULL;
 static struct proc_dir_entry *einkfb_proc_eink_reg          = NULL;
 
+static einkfb_dma_addr_t scratchfb_phys = INIT_EINKFB_DMA_ADDR_T();
 static unsigned char *scratchfb         = NULL;
 
 static char *recent_commands_page       = NULL;
@@ -103,11 +104,13 @@ static int  recent_commands_max         = MAX_RECENT_COMMANDS;
 static bool ignore_hw_ready             = false;
 static bool force_hw_not_ready          = false;
 static int  override_upd_mode           = BS_UPD_MODE_INIT;
+static bool promote_flashing_updates    = false;
 
 static bs_flash_select eink_rom_select  = bs_flash_waveform;
 static bool eink_rom_select_locked      = false;
 static int  eink_ram_select             = 0;
 static bool eink_ram_select_locked      = false;
+static int broadsheet_num_ram_banks     = BROADSHEET_NUM_RAM_BANKS;
 
 static unsigned long broadsheet_size    = BROADSHEET_SIZE;
 static unsigned long scratchfb_size     = SCRATCHFB_SIZE;
@@ -126,7 +129,7 @@ static DECLARE_COMPLETION(broadsheet_watchdog_thread_complete);
 
 #ifdef MODULE
 module_param_named(bs_bpp, bs_bpp, long, S_IRUGO);
-MODULE_PARM_DESC(bs_bpp, "2 or 4");
+MODULE_PARM_DESC(bs_bpp, "2, 4, or 8");
 
 module_param_named(bs_orientation, bs_orientation, int, S_IRUGO);
 MODULE_PARM_DESC(bs_orientation, "0 (portrait) or 1 (landscape)");
@@ -578,6 +581,26 @@ static ssize_t store_override_upd_mode(FB_DSTOR_PARAMS)
 	return ( result );
 }
 
+// /sys/devices/platform/eink_fb.0/promote_flashing_updates (read/write)
+//
+static ssize_t show_promote_flashing_updates(FB_DSHOW_PARAMS)
+{
+	return ( sprintf(buf, "%d\n", promote_flashing_updates) );
+}
+
+static ssize_t store_promote_flashing_updates(FB_DSTOR_PARAMS)
+{
+	int result = -EINVAL, promote = false;
+	
+	if ( sscanf(buf, "%d", &promote) )
+	{
+		promote_flashing_updates = promote ? true : false;
+		result = count;
+	}
+	
+	return ( result );
+}
+
 // /sys/devices/platform/eink_fb.0/preflight_failure (read-only)
 //
 static ssize_t show_preflight_failure(FB_DSHOW_PARAMS)
@@ -603,6 +626,7 @@ static DEVICE_ATTR(eink_ram_select,          DEVICE_MODE_RW, show_eink_ram_selec
 static DEVICE_ATTR(ignore_hw_ready,          DEVICE_MODE_RW, show_ignore_hw_ready,          store_ignore_hw_ready);
 static DEVICE_ATTR(force_hw_not_ready,       DEVICE_MODE_RW, show_force_hw_not_ready,       store_force_hw_not_ready);
 static DEVICE_ATTR(override_upd_mode,        DEVICE_MODE_RW, show_override_upd_mode,        store_override_upd_mode);
+static DEVICE_ATTR(promote_flashing_updates, DEVICE_MODE_RW, show_promote_flashing_updates, store_promote_flashing_updates);
 static DEVICE_ATTR(preflight_failure,        DEVICE_MODE_R,  show_preflight_failure,        NULL);
 static DEVICE_ATTR(image_timings,            DEVICE_MODE_R,  show_image_timings,            NULL);
 
@@ -773,9 +797,14 @@ unsigned char *broadsheet_get_scratchfb(void)
     return ( scratchfb );
 }
 
-unsigned long  broadsheet_get_scratchfb_size(void)
+unsigned long broadsheet_get_scratchfb_size(void)
 {
     return ( scratchfb_size );
+}
+
+dma_addr_t broadsheet_get_scratchfb_phys(void)
+{
+    return ( scratchfb_phys.addr );
 }
 
 bs_flash_select broadsheet_get_flash_select(void)
@@ -815,7 +844,7 @@ int broadsheet_get_ram_select(void)
 
 void broadsheet_set_ram_select(int ram_select)
 {
-    if ( !eink_ram_select_locked && IN_RANGE(ram_select, 0, (BROADSHEET_NUM_RAM_BANKS-1)) )
+    if ( !eink_ram_select_locked && IN_RANGE(ram_select, 0, (broadsheet_num_ram_banks-1)) )
         eink_ram_select = ram_select;
 }
 
@@ -832,6 +861,11 @@ bool broadsheet_get_upside_down(void)
 int broadsheet_get_override_upd_mode(void)
 {
     return ( override_upd_mode );
+}
+
+bool broadsheet_get_promote_flashing_updates(void)
+{
+    return ( promote_flashing_updates );
 }
 
 bool broadsheet_ignore_hw_ready(void)
@@ -917,21 +951,21 @@ static bool broadsheet_sw_init(struct fb_var_screeninfo *var, struct fb_fix_scre
         break;
     }
 
-    // Initalize enough of the hardware to ascertain the resolution we need to set up for.
+    // Initialize enough of the hardware to ascertain the resolution we need to set up for.
     //
     bs_sw_init_controller(FULL_BRINGUP_CONTROLLER, bs_orientation, &res);
     scratchfb_size = BPP_SIZE((res.x_hw*res.y_hw), EINKFB_8BPP);
     
-    // TODO:  Call einkfb_malloc() when it automatically handles
-    //        vmalloc vs. kmalloc.
-    //
-    scratchfb = vmalloc(scratchfb_size);
+    broadsheet_num_ram_banks = broadsheet_get_ram_size()/BROADSHEET_RAM_BANK_SIZE;
     
+    scratchfb = broadsheet_needs_dma() ? EINKFB_MALLOC_MOD(scratchfb_size, &scratchfb_phys)
+                                       : vmalloc(scratchfb_size);
+
     if ( scratchfb )
     {
         switch ( bs_bpp )
         {
-            // If we're overridden with a value other than 2bpp or 4bpp, switch us
+            // If we're overridden with a value other than 2, 4, or 8 bpp, switch us
             // back to the default.
             //
             default:
@@ -939,6 +973,7 @@ static bool broadsheet_sw_init(struct fb_var_screeninfo *var, struct fb_fix_scre
 
             case EINKFB_2BPP:
             case EINKFB_4BPP:
+            case EINKFB_8BPP:
                 broadsheet_size                 = BPP_SIZE((res.x_sw*res.y_sw), bs_bpp);
 
                 broadsheet_var.bits_per_pixel   = bs_bpp;
@@ -965,10 +1000,13 @@ static bool broadsheet_sw_init(struct fb_var_screeninfo *var, struct fb_fix_scre
 
 static void broadsheet_sw_done(void)
 {
-    // TODO:  Call einkfb_free() once moved to einkfb_malloc().
-    //
     if ( scratchfb )
-        vfree(scratchfb);
+    {
+        if ( broadsheet_needs_dma() )
+            EINKFB_FREE_MOD(scratchfb, &scratchfb_phys);
+        else
+            vfree(scratchfb);
+    }
 }
 
 static bool broadsheet_hw_init(struct fb_info *info, bool full)
@@ -1007,9 +1045,6 @@ static void broadsheet_create_proc_entries(void)
 
     einkfb_proc_hardwarefb = einkfb_create_proc_entry(EINKFB_PROC_HARDWAREFB, EINKFB_PROC_CHILD_R,
         hardwarefb_read, NULL);
-
-    einkfb_proc_eink_rom = einkfb_create_proc_entry(EINKFB_PROC_EINK_ROM, EINKFB_PROC_CHILD_RW,
-        eink_rom_read, eink_rom_write);
         
     einkfb_proc_eink_ram = einkfb_create_proc_entry(EINKFB_PROC_EINK_RAM, EINKFB_PROC_CHILD_RW,
         eink_ram_read, eink_ram_write);
@@ -1017,6 +1052,10 @@ static void broadsheet_create_proc_entries(void)
     einkfb_proc_eink_reg = einkfb_create_proc_entry(EINKFB_PROC_EINK_REG, EINKFB_PROC_CHILD_W,
         NULL, eink_reg_write);
 
+    if ( broadsheet_supports_flash() )
+        einkfb_proc_eink_rom = einkfb_create_proc_entry(EINKFB_PROC_EINK_ROM, EINKFB_PROC_CHILD_RW,
+            eink_rom_read, eink_rom_write);
+    
     // Create Broadsheet-specific sysfs entries.
     //
     FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_eink_rom_select);
@@ -1024,6 +1063,7 @@ static void broadsheet_create_proc_entries(void)
     FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_ignore_hw_ready);
     FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_force_hw_not_ready);
     FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_override_upd_mode);
+    FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_promote_flashing_updates);
     FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_preflight_failure);
     FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_image_timings);
 }
@@ -1039,9 +1079,11 @@ static void broadsheet_remove_proc_entries(void)
     einkfb_remove_proc_entry(EINKFB_PROC_RECENT_COMMANDS, einkfb_proc_recent_commands);
     einkfb_remove_proc_entry(EINKFB_PROC_TEMPERATURE, einkfb_proc_temperature);
     einkfb_remove_proc_entry(EINKFB_PROC_HARDWAREFB, einkfb_proc_hardwarefb);
-    einkfb_remove_proc_entry(EINKFB_PROC_EINK_ROM, einkfb_proc_eink_rom);
     einkfb_remove_proc_entry(EINKFB_PROC_EINK_RAM, einkfb_proc_eink_ram);
     einkfb_remove_proc_entry(EINKFB_PROC_EINK_REG, einkfb_proc_eink_reg);
+
+    if ( broadsheet_supports_flash() )
+        einkfb_remove_proc_entry(EINKFB_PROC_EINK_ROM, einkfb_proc_eink_rom);
     
     // Remove Broadsheet-specific sysfs entries.
     //
@@ -1050,6 +1092,7 @@ static void broadsheet_remove_proc_entries(void)
 	device_remove_file(&info.dev->dev, &dev_attr_ignore_hw_ready);
 	device_remove_file(&info.dev->dev, &dev_attr_force_hw_not_ready);
 	device_remove_file(&info.dev->dev, &dev_attr_override_upd_mode);
+	device_remove_file(&info.dev->dev, &dev_attr_promote_flashing_updates);	
 	device_remove_file(&info.dev->dev, &dev_attr_preflight_failure);
 	device_remove_file(&info.dev->dev, &dev_attr_image_timings);
 }
@@ -1271,7 +1314,9 @@ static einkfb_hal_ops_t broadsheet_hal_ops =
     .hal_byte_alignment          = broadsheet_byte_alignment,
     
     .hal_set_display_orientation = broadsheet_set_display_orientation,
-    .hal_get_display_orientation = broadsheet_get_display_orientation
+    .hal_get_display_orientation = broadsheet_get_display_orientation,
+    
+    .hal_needs_dma_buffer        = broadsheet_needs_dma
 };
 
 static __INIT_CODE int broadsheet_init(void)

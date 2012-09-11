@@ -87,7 +87,9 @@ typedef enum {
 /*! @{ */
 #define IPU_PIX_FMT_GENERIC ipu_fourcc('I','P','U','0')	/*!< IPU Generic Data */
 #define IPU_PIX_FMT_GENERIC_32 ipu_fourcc('I','P','U','1')	/*!< IPU Generic Data */
+#ifdef CONFIG_MACH_LAB126
 #define IPU_PIX_FMT_GENERIC_16 ipu_fourcc('I','P','U','2')	/*!< IPU Generic Data */
+#endif
 /*! @} */
 /*! @name RGB Formats */
 /*! @{ */
@@ -738,6 +740,7 @@ int32_t ipu_adc_write_cmd(display_port_t disp, cmddata_t type,
 
 #ifdef CONFIG_MACH_LAB126
 int32_t ipu_adc_read_data(display_port_t disp);
+void ipu_adc_set_dma_in_use(int in_use);
 #endif
 
 int32_t ipu_adc_init_panel(display_port_t disp,

@@ -16,6 +16,13 @@
  * Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+/*
+ * Add support for low power idle mode. If the driver detects no activity on the 
+ * USB bus for a specified threshold, then it puts the bus into a low power idle
+ * mode. Reduces current consumption by 80%.
+ *	- Manish Lachwani (lachwani@lab126.com)
+ */
+
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/dmapool.h>
@@ -34,6 +41,7 @@
 #include <linux/moduleparam.h>
 #include <linux/dma-mapping.h>
 #include <linux/cpufreq.h>
+#include <linux/clk.h>
 
 #include "../core/hcd.h"
 
@@ -46,6 +54,8 @@
 #include <asm/firmware.h>
 #endif
 
+#include <asm/arch/clock.h>
+#include <asm/arch/arc_otg.h>
 
 /*-------------------------------------------------------------------------*/
 
@@ -181,6 +191,35 @@ static int handshake (struct ehci_hcd *ehci, void __iomem *ptr,
 	return -ETIMEDOUT;
 }
 
+#define MXC_CCM_BASE		IO_ADDRESS(CCM_BASE_ADDR)
+#define MXC_CCM_CCMR		(MXC_CCM_BASE + 0x00)
+#define MXC_CCM_CCMR_UPE	(1 << 9)
+
+/* Flag that keeps track of USB HC1 in low power idle mode */
+extern int usb_hc1_gated;
+
+/*
+ * UPE is the USB PLL clock
+ */
+void usb_pll_enable(void)
+{
+        u32 reg = __raw_readl(MXC_CCM_CCMR);
+        reg |= MXC_CCM_CCMR_UPE;
+        __raw_writel(reg, MXC_CCM_CCMR);
+
+        /* No lock bit on MX31, so using max time from spec */
+        udelay(80);
+}
+EXPORT_SYMBOL(usb_pll_enable);
+
+void usb_pll_disable(void)
+{
+        u32 reg = __raw_readl(MXC_CCM_CCMR);
+        reg &= ~MXC_CCM_CCMR_UPE;
+        __raw_writel(reg, MXC_CCM_CCMR);
+}
+EXPORT_SYMBOL(usb_pll_disable);
+
 /* force HC to halt state from unknown (EHCI spec section 2.3) */
 static int ehci_halt (struct ehci_hcd *ehci)
 {
@@ -266,45 +305,245 @@ static void ehci_quiesce (struct ehci_hcd *ehci)
 	}
 }
 
-#ifdef CONFIG_CPU_FREQ
-static void ehci_work_less(struct ehci_hcd *ehci);
+#define EHCI_HCD_IRQ			35	/* Host Controller IRQ */
+extern int wakeup_value;			/* Enter IDLE or not */
+#define EHCI_IDLE_BUS_THRESHOLD		3000	/* Bus IDLE threshold */
+#define EHCI_ACTIVITY_MONITOR_THRESHOLD	500	/* Monitor interrupt every 1 second */
+#define EHCI_LOW_POWER_THRESHOLD	1500	/* Ready to enter low power */
 
-static void ehci_cpufreq_work(struct ehci_hcd *ehci)
+atomic_t ehci_irq_last_count = ATOMIC_INIT(0);
+atomic_t ehci_irq_current_count = ATOMIC_INIT(0);
+static int kick_off_delayed_work = 0;
+atomic_t recalc_work = ATOMIC_INIT(1);
+struct ehci_hcd *ehci_low_power;
+int suspend_count = 0;
+EXPORT_SYMBOL(suspend_count);
+
+static void ehci_idle_count(struct work_struct *unused);
+atomic_t suspended = ATOMIC_INIT(0);
+struct clk *usb_clk;
+static void ehci_work(struct ehci_hcd *ehci);
+
+#include "ehci-hub.c"
+
+/*
+ * Suspend the USB bus that is now idle 
+ */
+static int ehci_idle_bus_suspend (struct usb_hcd *hcd)
 {
-	unsigned long flags;
+	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+	int			port;
+	int			mask;
 
-	if (atomic_read(&ehci_hcd_in_workqueue) == 1) {
-		spin_lock_irqsave(&ehci->lock, flags);
-		ehci_work_less(ehci);
-		spin_unlock_irqrestore(&ehci->lock, flags);
+	if (time_before (jiffies, ehci->next_statechange))
+		mdelay(5);
+
+	port = HCS_N_PORTS (ehci->hcs_params);
+
+	/* stop schedules, clean any completed work */
+	if (HC_IS_RUNNING(hcd->state)) {
+		ehci_quiesce (ehci);
+		hcd->state = HC_STATE_QUIESCING;
 	}
+
+	ehci->command = ehci_readl(ehci, &ehci->regs->command);
+	if (ehci->reclaim)
+		ehci->reclaim_ready = 1;
+	ehci_work(ehci);
+
+
+	ehci->bus_suspended = 0;
+	while (port--) {
+		u32 __iomem	*reg = &ehci->regs->port_status [port];
+		u32		t1 = ehci_readl(ehci, reg) & ~PORT_RWC_BITS;
+		u32		t2 = t1;
+
+		/* keep track of which ports we suspend */
+		if ((t1 & PORT_PE) && !(t1 & PORT_OWNER) &&
+				!(t1 & PORT_SUSPEND)) {
+			t2 |= PORT_SUSPEND;
+			set_bit(port, &ehci->bus_suspended);
+		}
+
+		/* enable remote wakeup on all ports */
+		if (device_may_wakeup(&hcd->self.root_hub->dev))
+			t2 |= PORT_WKOC_E|PORT_WKDISC_E|PORT_WKCONN_E;
+		else
+			t2 &= ~(PORT_WKOC_E|PORT_WKDISC_E|PORT_WKCONN_E);
+
+		if (t1 != t2) {
+			ehci_writel(ehci, t2, reg);
+		}
+	}
+
+	/* turn off now-idle HC */
+	del_timer_sync (&ehci->watchdog);
+	ehci_halt (ehci);
+	hcd->state = HC_STATE_SUSPENDED;
+
+	/* allow remote wakeup */
+	mask = INTR_MASK;
+	if (!device_may_wakeup(&hcd->self.root_hub->dev))
+		mask &= ~STS_PCD;
+
+	ehci_writel(ehci, mask, &ehci->regs->intr_enable);
+	ehci_readl(ehci, &ehci->regs->intr_enable);
+
+	ehci->next_statechange = jiffies + msecs_to_jiffies(10);
+	return 0;
 }
 
-int ehci_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
-				 void *data)
+/* caller has locked the root hub, and should reset/reinit on error */
+static int ehci_idle_bus_resume (struct usb_hcd *hcd)
 {
-	struct ehci_hcd *ehci = container_of(nb, struct ehci_hcd,
-						cpufreq_transition);
-	switch (val) {
-	case CPUFREQ_PRECHANGE:
-		ehci_cpufreq_work(ehci);
-		atomic_set(&ehci_hcd_in_scaling, 1);
-		break;
-	case CPUFREQ_POSTCHANGE:
-		atomic_set(&ehci_hcd_in_scaling, 0);
-		break;
+	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+	u32			temp;
+	int			i;
+
+	if (time_before (jiffies, ehci->next_statechange))
+		mdelay(5);
+
+	temp = ehci_readl(ehci, &ehci->regs->intr_enable);
+	ehci_dbg(ehci, "resume root hub%s\n", temp ? "" : " after power loss");
+
+	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
+
+	/* re-init operational registers */
+	ehci_writel(ehci, 0, &ehci->regs->segment);
+	ehci_writel(ehci, ehci->periodic_dma, &ehci->regs->frame_list);
+	ehci_writel(ehci, (u32) ehci->async->qh_dma, &ehci->regs->async_next);
+
+	/* restore CMD_RUN, framelist size, and irq threshold */
+	ehci_writel(ehci, ehci->command, &ehci->regs->command);
+
+	mdelay(8);
+	
+	/* manually resume the ports we suspended during bus_suspend() */
+	i = HCS_N_PORTS (ehci->hcs_params);
+	while (i--) {
+		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
+		temp &= ~(PORT_RWC_BITS
+			| PORT_WKOC_E | PORT_WKDISC_E | PORT_WKCONN_E);
+		if (test_bit(i, &ehci->bus_suspended) &&
+				(temp & PORT_SUSPEND)) {
+			ehci->reset_done [i] = jiffies + msecs_to_jiffies (20);
+			temp |= PORT_RESUME;
+		}
+		ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
 	}
+	i = HCS_N_PORTS (ehci->hcs_params);
+	mdelay (20);
+	while (i--) {
+		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
+		if (test_bit(i, &ehci->bus_suspended) &&
+				(temp & PORT_SUSPEND)) {
+			temp &= ~(PORT_RWC_BITS | PORT_RESUME);
+			ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
+			ehci_vdbg (ehci, "resumed port %d\n", i + 1);
+		}
+	}
+
+	(void) ehci_readl(ehci, &ehci->regs->command);
+	
+	temp = 0;
+	if (ehci->async->qh_next.qh)
+		temp |= CMD_ASE;
+	if (ehci->periodic_sched)
+		temp |= CMD_PSE;
+	if (temp) {
+		ehci->command |= temp;
+		ehci_writel(ehci, ehci->command, &ehci->regs->command);
+	}
+
+	ehci->next_statechange = jiffies + msecs_to_jiffies(5);
+	hcd->state = HC_STATE_RUNNING;
+
+	ehci_writel(ehci, INTR_MASK, &ehci->regs->intr_enable);
 
 	return 0;
 }
 
-#endif /* CONFIG_CPU_FREQ */
+static void ehci_low_power_enter(struct ehci_hcd *ehci)
+{
+	if (atomic_read(&suspended) == 1)
+		return;
+
+	if (wakeup_value == 1) {
+		spin_lock_irq (&ehci->lock);
+
+		atomic_set(&suspended, 1);
+		USBCTRL |= UCTRL_H1WIE;
+		ehci_idle_bus_suspend(ehci_to_hcd(ehci));
+		ehci_low_power = ehci;
+		usb_hc1_gated = 1;
+		suspend_count++;
+
+		spin_unlock_irq (&ehci->lock);
+	}
+}
+
+static void ehci_low_power_exit(void)
+{
+	if (wakeup_value == 0)
+		return;
+
+	if (atomic_read(&suspended) == 0)
+		return;
+
+	spin_lock_irq (&ehci_low_power->lock);
+	usb_hc1_gated = 0;
+	atomic_set(&suspended, 0);
+	ehci_idle_bus_resume(ehci_to_hcd(ehci_low_power));
+	USBCTRL &= ~UCTRL_H1WIE;
+	spin_unlock_irq (&ehci_low_power->lock);
+}
+
+static void ehci_idle_count(struct work_struct *work)
+{
+	struct ehci_hcd *ehci = container_of(work, struct ehci_hcd, dwork.work);
+	unsigned long temp;
+
+	if (atomic_read(&ehci_irq_last_count) !=
+		atomic_read(&ehci_irq_current_count)) {
+			temp = atomic_read(&ehci_irq_current_count);
+			atomic_set(&ehci_irq_last_count, temp);
+			schedule_delayed_work(&ehci->dwork,
+				msecs_to_jiffies(EHCI_ACTIVITY_MONITOR_THRESHOLD));
+	}
+	else {
+		if (atomic_read(&recalc_work) == 0) {
+			ehci_low_power_enter(ehci);
+			kick_off_delayed_work = 0;
+		}
+		else {
+			atomic_set(&recalc_work, 0);
+			schedule_delayed_work(&ehci->dwork,
+				msecs_to_jiffies(EHCI_LOW_POWER_THRESHOLD));
+		}
+	}
+}
+
+void ehci_hcd_recalc_work(void)
+{
+	if (atomic_read(&recalc_work) == 1)
+		return;
+
+	atomic_set(&recalc_work, 1);
+	ehci_low_power_exit();
+}
+EXPORT_SYMBOL(ehci_hcd_recalc_work);
+
+void ehci_hcd_restart_idle(void)
+{
+	if ((atomic_read(&recalc_work) == 1) && suspend_count) {
+		schedule_delayed_work(&ehci_low_power->dwork,
+			msecs_to_jiffies(EHCI_LOW_POWER_THRESHOLD));
+	}
+}
+EXPORT_SYMBOL(ehci_hcd_restart_idle);
 
 /*-------------------------------------------------------------------------*/
 
-static void ehci_work(struct ehci_hcd *ehci);
-
-#include "ehci-hub.c"
 #ifdef CONFIG_USB_STATIC_IRAM
 #include "ehci-mem-iram.c"
 #include "ehci-q-iram.c"
@@ -321,29 +560,20 @@ static void ehci_watchdog (unsigned long param)
 	struct ehci_hcd		*ehci = (struct ehci_hcd *) param;
 	unsigned long		flags;
 
-	spin_lock_irqsave (&ehci->lock, flags);
+	/*
+	 * If suspended, no need to run the timer and wakeup the bus
+	 */
+	if (atomic_read(&suspended) == 1)
+		return;
 
-	/* lost IAA irqs wedge things badly; seen with a vt8235 */
-	if (ehci->reclaim) {
-		u32		status = ehci_readl(ehci, &ehci->regs->status);
-		if (status & STS_IAA) {
-			ehci_vdbg (ehci, "lost IAA\n");
-			COUNT (ehci->stats.lost_iaa);
-			ehci_writel(ehci, STS_IAA, &ehci->regs->status);
-			ehci->reclaim_ready = 1;
-		}
-	}
+	spin_lock_irqsave (&ehci->lock, flags);
 
  	/* stop async processing after it's idled a bit */
 	if (test_bit (TIMER_ASYNC_OFF, &ehci->actions))
 		start_unlink_async (ehci, ehci->async);
 
 	/* ehci could run by timer, without IRQs ... */
-	if ( (atomic_read(&ehci_hcd_in_workqueue) == 0) &&
-		(atomic_read(&ehci_hcd_in_scaling) == 0) ) {
-		atomic_set(&ehci_hcd_in_workqueue, 1);
-		schedule_work(&ehci->tq);
-	}
+	ehci_work(ehci);
 
 	spin_unlock_irqrestore (&ehci->lock, flags);
 }
@@ -441,48 +671,6 @@ static void ehci_work (struct ehci_hcd *ehci)
 		timer_action (ehci, TIMER_IO_WATCHDOG);
 }
 
-static void ehci_work_less(struct ehci_hcd *ehci)
-{
-	atomic_set(&ehci_hcd_in_workqueue, 0);
-
-	timer_action_done (ehci, TIMER_IO_WATCHDOG);
-	if (ehci->reclaim_ready)
-		end_unlink_async (ehci);
-
-	/* another CPU may drop ehci->lock during a schedule scan while
-	 * it reports urb completions.  this flag guards against bogus
-	 * attempts at re-entrant schedule scanning.
-	 */
-
-	if (ehci->scanning)
-		return;
-	ehci->scanning = 1;
-	scan_async (ehci);
-
-	if (ehci->next_uframe != -1)
-		scan_periodic (ehci);
-	ehci->scanning = 0;
-
-	/* the IO watchdog guards against hardware or driver bugs that
-	 * misplace IRQs, and should let us run completely without IRQs.
-	 * such lossage has been observed on both VT6202 and VT8235.
-	 */
-	if (HC_IS_RUNNING (ehci_to_hcd(ehci)->state) &&
-			(ehci->async->qh_next.ptr != NULL ||
-			 ehci->periodic_sched != 0))
-		timer_action (ehci, TIMER_IO_WATCHDOG);
-}
-void ehci_work_tq(struct work_struct *work)
-{
-	struct ehci_hcd	*ehci = container_of(work, struct ehci_hcd, tq);
-	unsigned long flags;
-
-	spin_lock_irqsave(&ehci->lock, flags);
-	ehci_work_less(ehci);
-	spin_unlock_irqrestore(&ehci->lock, flags);
-}
-EXPORT_SYMBOL(ehci_work_tq);
-
 /*
  * Called when the ehci_hcd module is removed.
  */
@@ -494,6 +682,7 @@ static void ehci_stop (struct usb_hcd *hcd)
 
 	/* no more interrupts ... */
 	del_timer_sync (&ehci->watchdog);
+	cancel_rearming_delayed_work(&ehci->dwork);
 
 	spin_lock_irq(&ehci->lock);
 	if (HC_IS_RUNNING (hcd->state))
@@ -503,11 +692,6 @@ static void ehci_stop (struct usb_hcd *hcd)
 	ehci_reset (ehci);
 	spin_unlock_irq(&ehci->lock);
 
-#ifdef CONFIG_CPU_FREQ
-	cpufreq_unregister_notifier(&ehci->cpufreq_transition,
-				CPUFREQ_TRANSITION_NOTIFIER);
-#endif
-
 	remove_companion_file(ehci);
 	remove_debug_files (ehci);
 
@@ -516,7 +700,6 @@ static void ehci_stop (struct usb_hcd *hcd)
 	if (ehci->async)
 		ehci_work (ehci);
 	spin_unlock_irq (&ehci->lock);
-	cancel_work_sync(&ehci->tq);
 	ehci_mem_cleanup (ehci);
 
 #ifdef	EHCI_STATS
@@ -544,6 +727,8 @@ static int ehci_init(struct usb_hcd *hcd)
 	init_timer(&ehci->watchdog);
 	ehci->watchdog.function = ehci_watchdog;
 	ehci->watchdog.data = (unsigned long) ehci;
+
+	usb_clk = clk_get(NULL, "usb_ahb_clk");
 
 	/*
 	 * hw default: 1K periodic list heads, one per frame.
@@ -579,6 +764,8 @@ static int ehci_init(struct usb_hcd *hcd)
 	ehci->async->qh_state = QH_STATE_LINKED;
 	ehci->async->hw_alt_next = QTD_NEXT(ehci->async->dummy->qtd_dma);
 
+	INIT_DELAYED_WORK(&ehci->dwork, ehci_idle_count);
+
 	/* clear interrupt enables, set irq latency */
 	if (log2_irq_thresh < 0 || log2_irq_thresh > 6)
 		log2_irq_thresh = 0;
@@ -610,12 +797,7 @@ static int ehci_init(struct usb_hcd *hcd)
 		}
 	}
 	ehci->command = temp;
-
-#ifdef CONFIG_CPU_FREQ
-	ehci->cpufreq_transition.notifier_call = ehci_cpufreq_notifier;
-	cpufreq_register_notifier(&ehci->cpufreq_transition,
-				CPUFREQ_TRANSITION_NOTIFIER);
-#endif
+	wakeup_value = 1;
 
 	return 0;
 }
@@ -720,6 +902,21 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd)
 
 	spin_lock (&ehci->lock);
 
+	atomic_inc(&ehci_irq_current_count);
+
+	if (kick_off_delayed_work == 0) {
+		kick_off_delayed_work = 1;
+		
+		/* Resume the USB if needed */
+		spin_unlock (&ehci->lock);
+		ehci_hcd_recalc_work();
+		spin_lock (&ehci->lock);
+	
+		/* Kick off the delayed workqueue */
+		schedule_delayed_work(&ehci->dwork,
+			msecs_to_jiffies(EHCI_IDLE_BUS_THRESHOLD));
+	}
+
 	status = ehci_readl(ehci, &ehci->regs->status);
 
 	/* e.g. cardbus physical eject */
@@ -731,7 +928,7 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd)
 	status &= INTR_MASK;
 	if (!status) {			/* irq sharing? */
 		spin_unlock(&ehci->lock);
-		return IRQ_NONE;
+		goto out;
 	}
 
 	/* clear (just) interrupts */
@@ -810,18 +1007,14 @@ dead:
 		}
 	}
 
-	if (bh) {
-		if ( (atomic_read(&ehci_hcd_in_workqueue) == 0) &&
-			(atomic_read(&ehci_hcd_in_scaling) == 0) ) {
-			atomic_set(&ehci_hcd_in_workqueue, 1);
-			schedule_work(&ehci->tq);
-		}
-	}
+	if (bh)
+		ehci_work(ehci);
 		
 	spin_unlock (&ehci->lock);
 
 	if (pcd_status & STS_PCD)
 		usb_hcd_poll_rh_status(hcd);
+out:
 	return IRQ_HANDLED;
 }
 

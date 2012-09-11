@@ -54,6 +54,8 @@ EXPORT_SYMBOL(charger_misdetect_retry);
 int charger_probed = 0;				/* Has the charger module been probed */
 EXPORT_SYMBOL(charger_probed);
 
+static int charger_started = 1;			/* Charger starts workqueue on insmod */
+
 static int charger_turn_off_curri = 0;		/* Keep track of CURRI */
 static int curri_test = 0;			/* Did we unsubscribe CHGCURRI? */
 static int charger_suspend(struct platform_device *pdev, pm_message_t state);
@@ -281,7 +283,7 @@ static void charger_disable(void)
 	printk(KERN_INFO "charger_disable\n");
 
 	/* If charger has already been disabled, do not redo it */
-	if (charger->charger_present == 0) {
+	if (charger->current_ichrg == 0) {
 		printk(KERN_INFO "Charger already disabled\n");
 		return;
 	}
@@ -295,6 +297,7 @@ static void charger_disable(void)
 	del_timer_sync(&charger->timer);
 
 	/* Cancel the work element */
+	cancel_rearming_delayed_work(&charger_usb4v4_work);
 	cancel_work_sync(&charger->charger_work);
 
 	/* Turn off LED */
@@ -305,9 +308,9 @@ static void charger_disable(void)
 	pmic_event_unsubscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
 
 	/* Charger state variables */
-	charger->charger_present = 0;
 	charger->current_led = LED_OFF;
 	charger->current_ichrg = 0;
+	charger_started = 0;
 }
 
 static void charger_enable(void)
@@ -316,34 +319,39 @@ static void charger_enable(void)
 	pmic_get_sensors(&sensors);
 
 	/* First check if the charger has already been enabled */
-	if (charger->charger_present == 1) {
+	if (charger->current_ichrg > 0) {
 		printk(KERN_INFO " Charger already enabled\n");
 		return;
 	}
 
-	printk(KERN_INFO "charger_enable\n");
-
-	/* Only enable if a charger is indeed connected */
-	if (sensors.sense_usb4v4s ||
-		(sensors.sense_chgcurrs && sensors.sense_chgdets)) {	
-
-		charger->charger_present = 1;
-
-		/* Set the timer for 10 second default */	
-		mod_timer(&charger->timer, jiffies + (charger->timer_delay * HZ));
-		pmic_event_subscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
-		set_bit(OP_CHECK_CHARGER, &charger->operations);
-
-		/* Queue the work element */
-		queue_work(charger->charger_wq, &charger->charger_work);
-
-		/* Re-register for CPUFreq */
-#ifdef CONFIG_CPU_FREQ
-		charger->cpufreq_transition.notifier_call = charger_cpufreq_notifier;
-		cpufreq_register_notifier(&charger->cpufreq_transition,
-				CPUFREQ_TRANSITION_NOTIFIER);
-#endif
+	if (charger_started == 1) {
+		printk(KERN_INFO " Charger already started\n");
+		return;
 	}
+
+	printk(KERN_INFO "charger_enable\n");
+	charger_started = 1;
+
+	/* Set the timer for 10 second default */	
+	mod_timer(&charger->timer, jiffies + (charger->timer_delay * HZ));
+	pmic_event_subscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
+	set_bit(OP_CHECK_CHARGER, &charger->operations);
+
+	/* Queue the work element */
+	queue_work(charger->charger_wq, &charger->charger_work);
+
+	/* Re-register for CPUFreq */
+#ifdef CONFIG_CPU_FREQ
+	charger->cpufreq_transition.notifier_call = charger_cpufreq_notifier;
+	cpufreq_register_notifier(&charger->cpufreq_transition,
+			CPUFREQ_TRANSITION_NOTIFIER);
+#endif
+	if (sensors.sense_usb4v4s || 
+			(sensors.sense_chgcurrs && sensors.sense_chgdets)) {
+		charger_queue_plug_event(1);
+	}
+	else
+		charger_queue_plug_event(0);
 }
 
 static void charger_set_state(int enable)
@@ -1132,8 +1140,8 @@ exit:
 			post_low_battery_event();
 			charger->suspended = false;  // stop suspend process
 		} else {
-			enable_lobathi_lobatli_interrupts(true, true);
 			charger->suspended = true;   // allow suspend
+			enable_lobathi_lobatli_interrupts(true, true);
 		}
 
 
@@ -1150,6 +1158,8 @@ static void enable_lobathi_lobatli_interrupts(int enable_lobathi, int enable_lob
 {
 	unsigned long	flags;
 	PMIC_STATUS	retval;
+	t_sensor_bits   sensors;
+	pmic_get_sensors(&sensors);
 
 	log_chrg_entry_args("(enable_lobathi = %d, enable_lobatli = %d)",
 			enable_lobathi, enable_lobatli);
@@ -1157,6 +1167,14 @@ static void enable_lobathi_lobatli_interrupts(int enable_lobathi, int enable_lob
 	if (enable_lobathi) {
 		retval = pmic_event_subscribe(EVENT_LOBATHI,
 				charger->lobathi_callback);
+
+		if (!sensors.sense_lobaths) {
+			printk(KERN_ERR "charger: LOBATHS detected\n");
+			charger->suspended = false;
+			post_low_battery_event();
+			return;
+		}
+
 		if (retval) {
 			log_chrg_err(CHRG_MSG_ERROR_SUBSCRIBE_LOBATHI, retval);
 		} else {
@@ -1540,7 +1558,7 @@ static DEVICE_ATTR (max_power, S_IRUGO|S_IWUSR, show_max_power, store_max_power)
 static ssize_t
 show_charger_state(struct device *_dev, struct device_attribute *attr, char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "%d\n", charger->charger_present);
+	return scnprintf(buf, PAGE_SIZE, "%d\n", charger->current_ichrg > 0);
 }
 
 static ssize_t

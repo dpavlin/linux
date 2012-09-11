@@ -140,6 +140,7 @@ volatile static struct usb_dr_device *usb_slave_regs;
 /* it is initialized in probe()  */
 static struct arcotg_udc *udc_controller;
 atomic_t arcotg_busy = ATOMIC_INIT(0);
+static int udc_full_sr = 0;
 
 static void do_charger_detect_work(struct work_struct *work);
 static void reset_irq(struct arcotg_udc *udc);
@@ -3306,11 +3307,17 @@ static void udc_charger_timer_func(unsigned long arg)
 		charger_misdetect_retry = 0;
 		LOG_DPDM(INFO, "uc", "USB connected to a non-configuring host 3rd party charger?\n", (portsc & PORTSCX_LINE_STATUS_KSTATE) != 0, (portsc & PORTSCX_LINE_STATUS_JSTATE) != 0);
 		atomic_set(&udc->timer_scheduled, 0);
-		udc->conn_sts = USB_CONN_DISCONNECTED;
+		udc->conn_sts = USB_CONN_CHARGER;
 		atomic_set(&arcotg_busy, 0);
 
-		/* All attempts to enumerate failed */
-		udc_full_suspend_resume(udc);
+		/* Do 100mA charging */
+		charger_set_current_limit(100);
+
+		if (!udc_full_sr) {
+			udc_full_sr = 1;
+			/* All attempts to enumerate failed */
+			udc_full_suspend_resume(udc);
+		}
 	}
 }
 
@@ -3410,6 +3417,7 @@ static void chgdisc_event(struct arcotg_udc *udc)
 	charger_set_current_limit(0);
 	(void)kobject_uevent(&udc->gadget.dev.parent->kobj, KOBJ_REMOVE);
 	delete_charger_timer(udc);
+	udc_full_sr = 0;
 
 	if (udc->driver)
 		if (udc->driver->disconnect)
@@ -3474,6 +3482,9 @@ static void init_detect_work(struct work_struct *work)
 static void udc_phy_locked_work(struct work_struct *work)
 {
 	UDC_LOG(CRIT, "lck", "USB Phy locked, rebooting\n");
+	/* Clear out MEMA bit #1*/
+	pmic_write_reg(REG_MEMORY_A, (0 << 1), (1 << 1));
+	pmic_write_reg(REG_MEMORY_A, (1 << 1), (1 << 1));
 	kernel_restart(NULL);
 }
 #endif

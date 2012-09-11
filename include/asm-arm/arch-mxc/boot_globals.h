@@ -8,8 +8,6 @@
 #ifndef _BOOT_GLOBALS_H
 #define _BOOT_GLOBALS_H
 
-#ifndef FOR_UBOOT_BUILD     //------------- Linux Build
-
 #include <linux/module.h>
 #include <linux/string.h>
 
@@ -19,28 +17,11 @@
 #define FRAMEBUFFER_SIZE            (PAGE_SIZE * 30)
 #define ENV_SCRIPT_STR_SZ           256
 
-#ifdef CONFIG_ARCH_FIONA    //------------- Fiona (Linux 2.6.10) Build
-
-#define PLFRM_MEM_BASE              0xA0000000
-#define PLFRM_MEM_SIZE              0x04000000
-#define PLFRM_MEM_MAX               (PLFRM_MEM_BASE + PLFRM_MEM_SIZE)
-
-#else                       // ------------ Mario (Linux 2.6.22) Build
-
+// For Mario-based Systems (Mario, ADS, Turing/TuringWW, and Nell).
+//
 #define PLFRM_MEM_BASE              0x80000000
 #define PLFRM_MEM_SIZE              0x08000000
 #define PLFRM_MEM_MAX               (PLFRM_MEM_BASE + PLFRM_MEM_SIZE)
-
-#endif
-
-#else   // -------------------------------- U-Boot Build
-
-#include <common.h>
-
-#define EXPORT_SYMBOL(s)
-#define PAGE_SIZE                   (RESERVE_RAM_SIZE)
-
-#endif  // ----------------------------
 
 #define BOOT_GLOBALS_SIZE           PAGE_SIZE
 #define BOOT_GLOBALS_BASE           (PLFRM_MEM_MAX - BOOT_GLOBALS_SIZE)
@@ -174,25 +155,28 @@ typedef struct pnlcd_flags_t pnlcd_flags_t;
 
 struct mw_flags_t                                   // 4 bytes
 {
-    unsigned int    debug               :  1;
-    unsigned int    needs_remap         :  1;
-    unsigned int    async_deprecated    :  1;
-    unsigned int    missing_buttons     :  1;
-    unsigned int    legacy_deprecated   :  1;
-    unsigned int    blitsrc_debug       :  1;
-    unsigned int    blitsrc_original    :  1;
-    unsigned int    alphablend_debug    :  1;
-    unsigned int    alphablend_original :  1;
-    unsigned int    setpixels_debug     :  1;
-    unsigned int    setpixels_original  :  1;
-    unsigned int    display_upside_down :  1;
-    unsigned int    do_dynamic_rotation :  1;
-    unsigned int    de_ghost            :  1;
-    unsigned int    reserved            : 18;
+    unsigned int    debug               :  1;       // 0
+    unsigned int    needs_remap         :  1;       // 1
+    unsigned int    async_deprecated    :  1;       // 2
+    unsigned int    missing_buttons     :  1;       // 3
+    unsigned int    legacy_deprecated   :  1;       // 4
+    unsigned int    blitsrc_debug       :  1;       // 5
+    unsigned int    blitsrc_original    :  1;       // 6
+    unsigned int    alphablend_debug    :  1;       // 7
+    unsigned int    alphablend_original :  1;       // 8
+    unsigned int    setpixels_debug     :  1;       // 9
+    unsigned int    setpixels_original  :  1;       // A
+    unsigned int    display_upside_down :  1;       // B
+    unsigned int    do_dynamic_rotation :  1;       // C
+    unsigned int    de_ghost            :  1;       // D
+    unsigned int    use_xorg_if_avail   :  1;       // E
+    unsigned int    use_alt_screen_size :  1;       // F
+    unsigned int    reserved            : 16;
 };
 typedef struct mw_flags_t mw_flags_t;
 
-#define INIT_MW_FLAGS_T() { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
+#define INIT_MW_FLAGS_T() { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, \
+                            0 }
 
 struct rcs_flags_t                                  // 4 bytes
 {

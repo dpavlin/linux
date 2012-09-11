@@ -124,6 +124,7 @@ struct fsl_usb2_platform_data {
 	struct fsl_xcvr_ops *xcvr_ops;
 	int (*gpio_usb_active) (void);
 	void (*gpio_usb_inactive) (void);
+	unsigned 		es : 1; /* need USBMODE:ES */
 };
 
 /* Flags in fsl_usb2_mph_platform_data */

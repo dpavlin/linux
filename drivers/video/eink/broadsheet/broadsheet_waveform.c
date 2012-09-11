@@ -80,7 +80,7 @@ static char *tuning_bias_names[num_tuning_biases] =
 #define IN_RANGE(n, m, M) (((n) >= (m)) && ((n) <= (M)))
 
 #define has_valid_serial_number(r, s) \
-    (((b == r) || (p == r)) && (0 != s))
+    (((b == (r)) || (p == (r)) || (a == (r))) && (0 != s))
 
 #define has_valid_mfg_code(c) \
     true

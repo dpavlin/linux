@@ -1098,6 +1098,15 @@ int32_t ipu_enable_channel(ipu_channel_t channel)
 		_ipu_sdc_fg_init(NULL);
 	}
 
+#ifdef CONFIG_MACH_LAB126
+	reg = __raw_readl(IPU_CONF);
+
+	if ((reg & IPU_CONF_DI_EN) == 0) {
+		reg |= IPU_CONF_DI_EN;
+		__raw_writel(reg, IPU_CONF);
+	}
+#endif
+
 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
 	return 0;
 }
@@ -1209,6 +1218,12 @@ int32_t ipu_disable_channel(ipu_channel_t channel, bool wait_for_stop)
 	__raw_writel(chan_mask, IPU_INT_STAT_2);
 	__raw_writel(chan_mask, IPU_INT_STAT_4);
 
+#ifdef CONFIG_MACH_LAB126
+	reg = __raw_readl(IPU_CONF);
+	reg &= ~IPU_CONF_DI_EN;
+	__raw_writel(reg, IPU_CONF);
+#endif
+	
 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
 
 	return 0;
@@ -1605,6 +1620,9 @@ uint32_t bytes_per_pixel(uint32_t fmt)
 	case IPU_PIX_FMT_RGB565:
 	case IPU_PIX_FMT_YUYV:
 	case IPU_PIX_FMT_UYVY:
+#ifdef CONFIG_MACH_LAB126
+    case IPU_PIX_FMT_GENERIC_16:
+#endif
 		return 2;
 		break;
 	case IPU_PIX_FMT_BGR24:

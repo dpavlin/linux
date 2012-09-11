@@ -55,10 +55,6 @@ struct ehci_hcd {			/* one per controller */
 	__u32			hcs_params;	/* cached register copy */
 	spinlock_t		lock;
 
-#ifdef CONFIG_CPU_FREQ
-	struct notifier_block	cpufreq_transition;
-#endif
-
 	/* async schedule support */
 	struct ehci_qh		*async;
 	struct ehci_qh		*reclaim;
@@ -116,10 +112,8 @@ struct ehci_hcd {			/* one per controller */
 	int			usb_address[2];
 #endif
 
-	struct work_struct tq;
+	struct delayed_work dwork;
 	
-	struct tasklet_struct ehci_tasklet;
-
 	/* irq statistics */
 #ifdef EHCI_STATS
 	struct ehci_stats	stats;
@@ -271,6 +265,7 @@ struct ehci_regs {
 	/* PORTSC: offset 0x44 */
 	u32		port_status [0];	/* up to N_PORTS */
 /* 31:23 reserved */
+#define PORT_PHCD	(1<<23)		/* Low power suspend */
 #define PORT_WKOC_E	(1<<22)		/* wake on overcurrent (enable) */
 #define PORT_WKDISC_E	(1<<21)		/* wake on disconnect (enable) */
 #define PORT_WKCONN_E	(1<<20)		/* wake on connect (enable) */

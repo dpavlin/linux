@@ -680,6 +680,12 @@ static int __init battery_init(void)
 		log_info("cmpl", "", "Battery compliance required\n");
 	}
 
+	if (IS_MARIO() || IS_ADS()) {
+		battery_monitoring_disable = 1;
+		battery_fake_good_readings();
+		log_info("nobt", "", "No battery expected - no monitoring\n");
+	}
+
 	INIT_DELAYED_WORK(&battery_work, battery_work_fn);
 	schedule_delayed_work(&battery_work, 1);
 	return 0;

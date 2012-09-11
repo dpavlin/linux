@@ -34,6 +34,7 @@
 static void *z_inflate_workspace = NULL;
 static void *z_deflate_workspace = NULL;
 
+static einkfb_dma_addr_t kernelbuffer_phys = INIT_EINKFB_DMA_ADDR_T();
 static int show_logo = 0;
 
 module_param_named(show_logo, show_logo, int, S_IRUGO);
@@ -123,11 +124,6 @@ static unsigned long update_crc(unsigned long crc,
 static unsigned long crc32(unsigned char *buf, int len)
 {
   return update_crc(0L, buf, len);
-}
-
-int einkfb_pnlcd_ioctl_stub(unsigned int cmd, unsigned long arg)
-{
-	return ( 0 );
 }
 
 #if PRAGMAS
@@ -248,13 +244,30 @@ int einkfb_shim_gzip(unsigned char *dst, int dstlen, unsigned char *src, unsigne
 	return (0);
 }
 
-unsigned char *einkfb_shim_alloc_kernelbuffer(unsigned long size)
+unsigned char *einkfb_shim_alloc_kernelbuffer(unsigned long size, struct einkfb_info *info)
 {
-	return ( NULL );
+	unsigned char *result = NULL;
+	
+	if ( info->dma )
+	{
+		result = EINKFB_MALLOC_MOD(size, &kernelbuffer_phys);
+		
+		if ( result )
+		einkfb_memset(result, EINKFB_WHITE, size);
+	}
+	
+	return ( result );
 }
 
-void einkfb_shim_free_kernelbuffer(unsigned char *buffer)
+void einkfb_shim_free_kernelbuffer(unsigned char *buffer, struct einkfb_info *info)
 {
+	if ( info->dma )
+		EINKFB_FREE_MOD(buffer, &kernelbuffer_phys);
+}
+
+einkfb_dma_addr_t *einkfb_shim_get_kernelbuffer_phys(void)
+{
+	return ( &kernelbuffer_phys );
 }
 
 #if PRAGMAS
@@ -300,20 +313,21 @@ static ssize_t store_test_suspend_resume(FB_DSTOR_PARAMS)
 
 void einkfb_shim_sleep_screen(unsigned int cmd, splash_screen_type which_screen)
 {
+    // We may already be sleeping, so, to put up this screen during sleep,
+    // we need override the current power level.
+    //
 	if ( FBIO_EINK_SPLASH_SCREEN_SLEEP == cmd )
 		POWER_OVERRIDE_BEGIN();
 	
 	splash_screen_dispatch(which_screen);
 	
+	// Ensure that we're back to sleep when requested.
+	//
 	if ( FBIO_EINK_SPLASH_SCREEN_SLEEP == cmd )
-	{
+	{	
+		einkfb_shim_suspend_resume_hook(EINKFB_SUSPEND);
 		POWER_OVERRIDE_END();
-		
-		if ( splash_screen_exit == which_screen )
-			einkfb_shim_suspend_resume_hook(EINKFB_RESUME);
-		else
-			einkfb_shim_suspend_resume_hook(EINKFB_SUSPEND);
-	}
+    }
 }
 
 void einkfb_shim_power_op_complete(void)
@@ -325,8 +339,8 @@ void einkfb_shim_power_off_screen(void)
 	POWER_OVERRIDE_BEGIN();
 	clear_screen(fx_update_full);
 	
-	POWER_OVERRIDE_END();
 	einkfb_shim_suspend_resume_hook(EINKFB_SUSPEND);
+	POWER_OVERRIDE_END();
 }
 
 bool einkfb_shim_override_power_lockout(unsigned int cmd, unsigned long flag)
@@ -357,18 +371,6 @@ bool einkfb_shim_platform_splash_screen_dispatch(splash_screen_type which_screen
 	
 	switch ( which_screen )
 	{
-		case splash_screen_usb_external:
-		case splash_screen_drivemode_0:
-		case splash_screen_drivemode_1:
-		case splash_screen_drivemode_2:
-		case splash_screen_drivemode_3:
-			
-			// These cases are not used on Mario-based systems, but we need to skip
-			// them to prevent the legacy (Fiona) code from attempting to do
-			// anything.
-			
-		break;
-		
 		case splash_screen_usb_recovery_util:
 			system_screen.picture_header_len = PICTURE_USB_RECOVERY_UTIL_HEADER_LEN(yres);
 			system_screen.picture_header = PICTURE_USB_RECOVERY_UTIL_HEADER(yres);
@@ -391,30 +393,7 @@ bool einkfb_shim_platform_splash_screen_dispatch(splash_screen_type which_screen
 			
 			display_system_screen(&system_screen);
 		break;
-		
-		case splash_screen_usb_framework:
-			system_screen.picture_header_len = PICTURE_USB_FRAMEWORK_HEADER_LEN(yres);
-			system_screen.picture_header = PICTURE_USB_FRAMEWORK_HEADER(yres);
-			system_screen.header_offset = USB_FRAMEWORK_OFFSET_HEADER(yres);
-			system_screen.header_width = USB_FRAMEWORK_WIDTH_HEADER(yres);
-									
-			system_screen.picture_footer_len = PICTURE_USB_FRAMEWORK_FOOTER_LEN(yres);
-			system_screen.picture_footer = PICTURE_USB_FRAMEWORK_FOOTER(yres);
-			system_screen.footer_offset = USB_FRAMEWORK_OFFSET_FOOTER(yres);
-			system_screen.footer_width = USB_FRAMEWORK_WIDTH_FOOTER(yres);
-
-			system_screen.picture_body_len = PICTURE_USB_FRAMEWORK_BODY_LEN(yres);
-			system_screen.picture_body = PICTURE_USB_FRAMEWORK_BODY(yres);
-			system_screen.body_offset = USB_FRAMEWORK_OFFSET_BODY(yres);
-			system_screen.body_width = USB_FRAMEWORK_WIDTH_BODY(yres);
-			
-			system_screen.which_screen = which_screen;
-			system_screen.to_screen = update_screen;
-			system_screen.which_fx = fx_update_full;
-			
-			display_system_screen(&system_screen);
-		break;
-		
+				
 		case splash_screen_lowbatt:
 			system_screen.picture_header_len = PICTURE_LOWBATT_HEADER_LEN(yres);
 			system_screen.picture_header = PICTURE_LOWBATT_HEADER(yres);
@@ -459,10 +438,6 @@ bool einkfb_shim_platform_splash_screen_dispatch(splash_screen_type which_screen
 			system_screen.which_fx = fx_update_full;
 			
 			display_system_screen(&system_screen);
-		break;
-		
-		case splash_screen_update:
-			splash_screen_dispatch(splash_screen_update_initial);
 		break;
 		
 		default:

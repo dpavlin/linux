@@ -4250,7 +4250,7 @@ static int __init fsg_alloc(void)
 #ifdef CONFIG_MACH_MARIO_MX
 static u16 __init fsg_get_did(void)
 {
-	if (IS_NELL())
+	if (IS_NELL() || IS_NELLWW())
 		return (u16)0x0003;
 
 	return (u16)0x0002;

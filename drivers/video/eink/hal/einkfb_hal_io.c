@@ -186,6 +186,14 @@ char *einkfb_get_cmd_string(unsigned int cmd)
             cmd_string = "get_display_orientation";
         break;
 
+        case FBIO_EINK_SET_SLEEP_BEHAVIOR:
+            cmd_string = "set_sleep_behavior";
+        break;
+        
+        case FBIO_EINK_GET_SLEEP_BEHAVIOR:
+            cmd_string = "get_sleep_behavior";
+        break;
+
         // Supported by Shim.
         //
         case FBIO_EINK_UPDATE_DISPLAY_FX:
@@ -210,10 +218,6 @@ char *einkfb_get_cmd_string(unsigned int cmd)
         
         case FBIO_EINK_POWER_OVERRIDE:
             cmd_string = "power_override";
-        break;
-        
-        case FBIO_EINK_FAKE_PNLCD:
-            cmd_string = "fake_pnlcd";
         break;
         
         case FBIO_EINK_PROGRESSBAR:
@@ -298,11 +302,20 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
                     // Update the display with the area data, preserving and
                     // normalizing which_fx as we go.
                     //
-                    if ( fx_flash == update_area->which_fx )
+                    switch ( update_area->which_fx )
                     {
-                        einkfb_invert_area_data(update_area);
-                        saved_fx = fx_update_full;
-                        flash_area = true;
+                        case fx_flash:
+                            saved_fx = fx_update_full;
+                            flash_area = true;
+                        
+                        case fx_invert:
+                            einkfb_invert_area_data(update_area);
+                        break;
+
+                        // Prevent compiler from complaining.
+                        //
+                        default:
+                        break;
                     }
                     
                     update_area->which_fx = UPDATE_AREA_MODE(saved_fx);
@@ -377,6 +390,22 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
                     einkfb_memcpy(EINKFB_IOCTL_TO_USER, flag, (orientation_t *)local_arg,
                         &old_orientation, sizeof(orientation_t));
                 }
+            break;
+            
+            case FBIO_EINK_SET_SLEEP_BEHAVIOR:
+                einkfb_set_sleep_behavior((sleep_behavior_t)local_arg);
+            break;
+            
+            case FBIO_EINK_GET_SLEEP_BEHAVIOR:
+                if ( local_arg )
+                {
+                    sleep_behavior_t sleep_behavior = einkfb_get_sleep_behavior();
+
+                    einkfb_memcpy(EINKFB_IOCTL_TO_USER, flag, (sleep_behavior_t *)local_arg,
+                        &sleep_behavior, sizeof(sleep_behavior_t));
+                }
+                else
+                    goto failure;
             break;
             
             failure:

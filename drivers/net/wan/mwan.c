@@ -32,7 +32,7 @@
 #define log_info(format, arg...) printk("mwan: I %s:" format, __func__, ## arg)
 #define log_err(format, arg...) printk("mwan: E %s:" format, __func__, ## arg)
 
-#define VERSION			"1.1.5"
+#define VERSION			"1.1.6"
 
 #define PROC_WAN		"wan"
 #define PROC_WAN_POWER		"power"
@@ -76,6 +76,9 @@ static time_t tph_last_seconds = 0;
 //         required to stop tasks, etc.)
 //   3s -- recommended safety margin
 #define NETWORK_DEREG_TIME	((12 + 3) * 1000)
+
+// for the DTP module, we use an optimized path for performing deregistration
+#define NETWORK_DEREG_TIME_OPT	(3 * 1000)
 
 // minimum allowed delay between TPH notifications
 #define WAKE_EVENT_INTERVAL	10
@@ -236,7 +239,7 @@ set_wan_power(
 
 			if (new_status != WAN_OFF_KILL) {
 				// wait the necessary deregistration interval
-				msleep(NETWORK_DEREG_TIME);
+				msleep(modem_type == MODEM_TYPE_AD_DTP ? NETWORK_DEREG_TIME_OPT : NETWORK_DEREG_TIME);
 			}
 
 #ifdef USE_DTP_SLEEP_MODE

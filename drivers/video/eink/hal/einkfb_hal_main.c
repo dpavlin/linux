@@ -44,15 +44,19 @@ static struct platform_device *einkfb_device	= NULL;
 static struct fb_info *einkfb_fbinfo		= NULL;
 static unsigned long einkfb_jif_on		= 0;
 static unsigned long einkfb_align		= 0;
+static bool einkfb_dma				= false;
 static bool einkfb_restore			= false;
 
 static int einkfb_hw_shutdown_mode		= DONT_SHUTDOWN;
 static int einkfb_hw_bringup_mode		= DONT_BRINGUP;
 static int einkfb_hw_bringup_mode_actual	= DONT_BRINGUP;
 
-static reboot_behavior_t einkfb_reboot_behavior = reboot_screen_clear;
+static einkfb_dma_addr_t einkfb_phys		= INIT_EINKFB_DMA_ADDR_T();
 
-einkfb_hal_ops_t hal_ops			= { 0 };
+static reboot_behavior_t einkfb_reboot_behavior = reboot_screen_clear;
+static sleep_behavior_t  einkfb_sleep_behavior  = sleep_behavior_allow_sleep;
+
+einkfb_hal_ops_t hal_ops			= INIT_EINKFB_OPS_T();
 
 #ifndef MODULE
 static int  einkfb_enable __INIT_DATA 		= 0;
@@ -98,6 +102,127 @@ static struct miscdevice einkfb_events_dev	=
 	MISC_DYNAMIC_MINOR,
 	EINKFB_EVENTS,
 	&einkfb_events_ops
+};
+
+static u16 einkfb_1bpp_gray[BPP_MAX(EINKFB_1BPP)] =
+{
+	0xFFFF, 0x0000
+};
+
+static u16 einkfb_2bpp_gray[BPP_MAX(EINKFB_2BPP)] =
+{
+	0xFFFF, 0xAAAA, 0x5555, 0x0000
+};
+
+static u16 einkfb_4bpp_gray[BPP_MAX(EINKFB_4BPP)] =
+{
+	0xFFFF, 0xEEEE, 0xDDDD, 0xCCCC, 0xBBBB, 0xAAAA, 0x9999, 0x8888,
+	0x7777, 0x6666, 0x5555, 0x4444, 0x3333, 0x2222, 0x1111, 0x0000
+};
+
+// Note:	In general, eInk displays can't do more than 16 levels of gray.  So,
+// 		we're really doing 1 byte per pixel instead of 8 bits per pixel with
+//		only the most-significant nybble counting.  But some eInk controllers
+//		need to both nybbles to have the same data in them.  To the end,
+//		we force a first-fit matching on indices 0x00, 0x11, 0x22, etc....
+//		As such, 15 of the gradations have 17 entries and 1 gradation just
+//		has 1.
+//
+static u16 einkfb_8bpp_gray[BPP_MAX(EINKFB_8BPP)] =
+{
+	0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, // 0x00..
+	0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, //
+	0xFFFF,								// ..0x10
+	
+	0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, // 0x11..
+	0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, 0xEEEE, //
+	0xEEEE,								// ..0x21
+	
+	0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, // 0x22..
+	0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, 0xDDDD, //
+	0xDDDD,								// ..0x32
+	
+	0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, // 0x33..
+	0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, 0xCCCC, //
+	0xCCCC,								// ..0x43
+	
+	0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB,	// 0x44..
+	0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB, 0xBBBB,	//
+	0xBBBB,								// ..0x54
+	
+	0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA,	// 0x55..
+	0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA, 0xAAAA,	//
+	0xAAAA,								// ..0x65
+	
+	0x9999, 0x9999, 0x9999, 0x9999, 0x9999, 0x9999, 0x9999, 0x9999, // 0x66..
+	0x9999, 0x9999, 0x9999, 0x9999, 0x9999, 0x9999, 0x9999, 0x9999, //
+	0x9999,								// ..0x76
+	
+	0x8888, 0x8888, 0x8888, 0x8888, 0x8888, 0x8888, 0x8888, 0x8888,	// 0x77..
+	0x8888, 0x8888, 0x8888, 0x8888, 0x8888, 0x8888, 0x8888, 0x8888,	//
+	0x8888,								// ..0x87
+	
+	0x7777, 0x7777, 0x7777, 0x7777, 0x7777, 0x7777, 0x7777, 0x7777,	// 0x88..
+	0x7777, 0x7777, 0x7777, 0x7777, 0x7777, 0x7777, 0x7777, 0x7777,	//
+	0x7777,								// ..0x98
+	
+	0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666,	// 0x99..
+	0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666,	//
+	0x6666,								// ..0xA9
+	
+	0x5555, 0x5555, 0x5555, 0x5555, 0x5555, 0x5555, 0x5555, 0x5555,	// 0xAA..
+	0x5555, 0x5555, 0x5555, 0x5555, 0x5555, 0x5555, 0x5555, 0x5555,	//
+	0x5555,								// ..0xBA
+	
+	0x4444, 0x4444, 0x4444, 0x4444, 0x4444, 0x4444, 0x4444, 0x4444,	// 0xBB..
+	0x4444, 0x4444, 0x4444, 0x4444, 0x4444, 0x4444, 0x4444, 0x4444,	//
+	0x4444,								// ..0xCB
+	
+	0x3333, 0x3333, 0x3333, 0x3333, 0x3333, 0x3333, 0x3333, 0x3333,	// 0xCC..
+	0x3333, 0x3333, 0x3333, 0x3333, 0x3333, 0x3333, 0x3333, 0x3333,	//
+	0x3333,								// ..0xDC
+	
+	0x2222, 0x2222, 0x2222, 0x2222, 0x2222, 0x2222, 0x2222, 0x2222,	// 0xDD..
+	0x2222, 0x2222, 0x2222, 0x2222, 0x2222, 0x2222, 0x2222, 0x2222,	//
+	0x2222,								// ..0xED
+	
+	0x1111, 0x1111, 0x1111, 0x1111, 0x1111, 0x1111, 0x1111, 0x1111, // 0xEE..
+	0x1111, 0x1111, 0x1111, 0x1111, 0x1111, 0x1111, 0x1111, 0x1111,	//
+	0x1111,								// ..0xEF
+	
+	0x0000								// 0xFF
+};
+
+static struct fb_cmap einkfb_1bpp_cmap		=
+{
+	.len	= BPP_MAX(EINKFB_1BPP),
+	.red	= einkfb_1bpp_gray,
+	.green	= einkfb_1bpp_gray,
+	.blue	= einkfb_1bpp_gray
+};
+
+static struct fb_cmap einkfb_2bpp_cmap		=
+{
+	.len	= BPP_MAX(EINKFB_2BPP),
+	.red	= einkfb_2bpp_gray,
+	.green	= einkfb_2bpp_gray,
+	.blue	= einkfb_2bpp_gray
+};
+
+static struct fb_cmap einkfb_4bpp_cmap		=
+{
+	.len	= BPP_MAX(EINKFB_4BPP),
+	.red	= einkfb_4bpp_gray,
+	.green	= einkfb_4bpp_gray,
+	.blue	= einkfb_4bpp_gray
+};
+
+static struct fb_cmap einkfb_8bpp_cmap		=
+{
+	.len	= BPP_MAX(EINKFB_8BPP),
+	.red	= einkfb_8bpp_gray,
+	.green	= einkfb_8bpp_gray,
+	.blue	= einkfb_8bpp_gray
 };
 
 #ifndef MODULE
@@ -156,6 +281,9 @@ void einkfb_get_info(struct einkfb_info *info)
 		
 		info->jif_on = einkfb_jif_on;
 		info->align  = einkfb_align;
+		
+		info->dma    = einkfb_dma;
+		info->phys   = &einkfb_phys;
 		
 		// If there's a hook, give it a call now.
 		//
@@ -230,6 +358,26 @@ reboot_behavior_t einkfb_get_reboot_behavior(void)
 	return ( einkfb_reboot_behavior );
 }
 
+void einkfb_set_sleep_behavior(sleep_behavior_t behavior)
+{
+	switch ( behavior )
+	{
+		case sleep_behavior_allow_sleep:
+		case sleep_behavior_prevent_sleep:
+			einkfb_sleep_behavior = behavior;
+		break;
+		
+		default:
+			einkfb_sleep_behavior = sleep_behavior_allow_sleep;
+		break;
+	}
+}
+
+sleep_behavior_t einkfb_get_sleep_behavior(void)
+{
+	return ( einkfb_sleep_behavior );
+}
+
 static unsigned long einkfb_set_byte_alignment(unsigned long byte_alignment)
 {
 	if ( hal_ops.hal_byte_alignment )
@@ -247,6 +395,7 @@ static unsigned long einkfb_set_byte_alignment(unsigned long byte_alignment)
 static bool HAL_HW_INIT(struct fb_info *info, bool bringup_mode)
 {
 	einkfb_set_reboot_behavior(reboot_screen_clear);
+	einkfb_set_sleep_behavior(sleep_behavior_allow_sleep);
 	
 	if ( hal_ops.hal_hw_init )
 	{
@@ -273,8 +422,8 @@ static void HAL_HW_DONE(bool full)
 
 static void BLANK_INIT(void)
 {
-	// If getting/setting the power-level is supported, get us unblanked now if we should,
-	// and start the power timer.
+	// If getting/setting the power-level is supported, get us unblanked now
+	// if we should, and start the power timer.
 	//
 	// Otherwise, just say we're always on (by default, the blank_unblank
 	// power-level is einkfb_power_level_standby, so we need to whack
@@ -301,18 +450,64 @@ static void BLANK_DONE(void)
 		einkfb_stop_power_timer();
 }
 
+enum einkfb_init_err_t
+{
+	einkfb_init_err_none			= 0,
+	
+	einkfb_init_err_framebuffer_alloc	= 1,
+	einkfb_init_err_hw_sw_init		= 2,
+	einkfb_init_err_einkfb_malloc_hal	= 3,
+	einkfb_init_err_fb_alloc_cmap		= 4,
+	einkfb_init_err_register_framebuffer	= 5,
+};
+typedef enum einkfb_init_err_t einkfb_init_err_t;
+
+static void einkfb_remove(struct fb_info *info, einkfb_init_err_t err)
+{
+	switch ( err )
+	{
+		case einkfb_init_err_none:
+			BLANK_DONE();
+			unregister_framebuffer(info);
+			
+		case einkfb_init_err_register_framebuffer:
+			HAL_HW_DONE(einkfb_hw_shutdown_mode);
+			fb_dealloc_cmap(&info->cmap);
+		
+		case einkfb_init_err_fb_alloc_cmap:
+			EINKFB_FREE_HAL(einkfb, einkfb_dma ? &einkfb_phys : NULL);
+		
+		case einkfb_init_err_einkfb_malloc_hal:
+			HAL_SW_DONE();
+
+		case einkfb_init_err_hw_sw_init:
+			framebuffer_release(info);
+
+		default:
+		case einkfb_init_err_framebuffer_alloc:
+			if ( err )
+				einkfb_print_crit("failed to initialize, err = %d\n", err);
+		break;
+	}
+}
+
 struct fb_info* einkfb_probe(struct platform_device *dev)
 {
+	einkfb_init_err_t err = einkfb_init_err_none;
 	struct fb_var_screeninfo var;
 	struct fb_fix_screeninfo fix;
 	struct fb_info *info = NULL;
-	int err = 0;
+
+	if ( !(info = framebuffer_alloc(sizeof(struct fb_info), &dev->dev)) )
+		goto err1; // einkfb_init_err_framebuffer_alloc
+
+	einkfb_fbinfo = info;
 
 	/*
 	 * Get the module's variable & fixed screeninfo.
 	 */
 	if ( EINKFB_FAILURE == HAL_SW_INIT(&var, &fix) )
-		return NULL;
+		goto err2; // einkfb_init_err_hw_sw_init
 	
 	/*
 	 * Allocate an address space for our real, virtual, and scratch buffers.
@@ -320,28 +515,19 @@ struct fb_info* einkfb_probe(struct platform_device *dev)
 	einkfb_blen = BPP_SIZE((var.xres * (var.yres + 1)), var.bits_per_pixel);
 	einkfb_size = BPP_SIZE((var.xres * var.yres), var.bits_per_pixel);
 	einkfb_mem  = FB_ROUNDUP(einkfb_blen, PAGE_SIZE) * 3;
-
-	if (!(einkfb = vmalloc(einkfb_mem)))
-		goto err0;
-
-	/*
-	 * Back our address space with physical ("wired") memory.
-	 */
-	if (EINKFB_FAILURE == einkfb_alloc_page_array())
-		goto err1;
+	einkfb_dma  = HAL_NEEDS_DMA();
+	
+	if ( !(einkfb = EINKFB_MALLOC_HAL(einkfb_mem, einkfb_dma ? &einkfb_phys : NULL)) )
+		goto err3; // einkfb_init_err_einkfb_malloc_hal
 
 	/*
 	 * Clear memory to prevent kernel info from "leaking"
 	 * into userspace.
 	 */
-	einkfb_memset(einkfb, 0, einkfb_mem);
+	einkfb_memset(einkfb, einkfb_white(var.bits_per_pixel), einkfb_mem);
 
-	info = framebuffer_alloc(sizeof(struct fb_info), &dev->dev);
-	if (!info)
-		goto err2;
-
-	fix.smem_start = (unsigned long)einkfb;
-	fix.smem_len = (einkfb_mem/3) * 2;	/* real & virtual */
+	fix.smem_start = einkfb_dma ? (unsigned long)einkfb_phys.addr : (unsigned long)einkfb;
+	fix.smem_len = (einkfb_mem/3) << 1;	/* real & virtual */
 	
 	info->screen_base = (char __iomem *)einkfb;
 	info->screen_size = einkfb_mem/3;	/* just real */
@@ -353,8 +539,27 @@ struct fb_info* einkfb_probe(struct platform_device *dev)
 	info->par = NULL;
 	info->flags = FBINFO_FLAG_DEFAULT;
 	
-	if (fb_alloc_cmap(&info->cmap, 256, 0) < 0)
-		goto err3;
+	if ( fb_alloc_cmap(&info->cmap, BPP_MAX(var.bits_per_pixel), 0) < 0 )
+		goto err4; // einkfb_init_err_fb_alloc_cmap
+		
+	switch ( var.bits_per_pixel )
+	{
+		case EINKFB_1BPP:
+			fb_copy_cmap(&einkfb_1bpp_cmap, &info->cmap);
+		break;
+		
+		case EINKFB_2BPP:
+			fb_copy_cmap(&einkfb_2bpp_cmap, &info->cmap);
+		break;
+		
+		case EINKFB_4BPP:
+			fb_copy_cmap(&einkfb_4bpp_cmap, &info->cmap);
+		break;
+		
+		case EINKFB_8BPP:
+			fb_copy_cmap(&einkfb_8bpp_cmap, &info->cmap);
+		break;
+	}
 
 	einkfb_bpp   = info->var.bits_per_pixel;
 	einkfb_xres  = info->var.xres;
@@ -365,46 +570,20 @@ struct fb_info* einkfb_probe(struct platform_device *dev)
 	einkfb_hw_bringup_mode_actual = HAL_HW_INIT(info, einkfb_hw_bringup_mode);
 	einkfb_align = einkfb_set_byte_alignment(einkfb_bpp);
 
-	if (register_framebuffer(info) < 0)
-		goto err4;
+	if ( register_framebuffer(info) < 0 )
+		goto err5; // einkfb_init_err_register_framebuffer
 
 	BLANK_INIT();
-	
-	einkfb_fbinfo = info;
 	return info;
 
-err4:
-	HAL_HW_DONE(einkfb_hw_shutdown_mode);
-	fb_dealloc_cmap(&info->cmap);
-	err++; // err = 5
-err3:
-	framebuffer_release(info);
-	err++; // err = 4
-err2:
-	einkfb_free_page_array();
-	err++; // err = 3
-err1:
-	vfree(einkfb);
-	err++; // err = 2
-err0:
-	HAL_SW_DONE();
-	err++; // err = 1
+err5:	err++; // err = einkfb_init_err_register_framebuffer
+err4:	err++; // err = einkfb_init_err_fb_alloc_cmap 
+err3:	err++; // err = einkfb_init_err_einkfb_malloc_hal 
+err2:	err++; // err = einkfb_init_err_hw_sw_init 
+err1:	err++; // err = einkfb_init_err_fb_info_alloc
 
-	einkfb_print_crit("failed to initialize, err = %d\n", err);
-	
+	einkfb_remove(info, err);
 	return NULL;
-}
-
-static void einkfb_remove(struct fb_info *info)
-{
-	BLANK_DONE();
-	unregister_framebuffer(info);
-	HAL_HW_DONE(einkfb_hw_shutdown_mode);
-	fb_dealloc_cmap(&info->cmap);
-	framebuffer_release(info);
-	einkfb_free_page_array();
-	vfree(einkfb);
-	HAL_SW_DONE();
 }
 
 static int einkfb_driver_register(void);
@@ -504,6 +683,10 @@ static int einkfb_reboot(struct notifier_block *self, unsigned long u, void *v)
 	//
 	EINKFB_IOCTL(FBIO_EINK_SET_DISPLAY_ORIENTATION, orientation_portrait);
 	
+	// Ensure that sleep/off is allowed if applicable.
+	//
+	einkfb_set_sleep_behavior(sleep_behavior_allow_sleep);
+	
 	// Override the requested reboot behavior if we must.
 	//
 	switch ( u )
@@ -569,8 +752,6 @@ static int einkfb_reboot(struct notifier_block *self, unsigned long u, void *v)
 	einkfb_set_info_hook(NULL);
 
 	set_fb_init_flag(0);
-
-	set_pnlcd_ioctl(NULL);
 	set_fb_ioctl(NULL);
 	
 	return ( NOTIFY_DONE );
@@ -652,7 +833,7 @@ static int EINKFB_REMOVE(FB_REMOVE_PARAM)
 	struct fb_info *info = FB_GETDRVDATA();
 
 	if ( info )
-		einkfb_remove(info);
+		einkfb_remove(info, einkfb_init_err_none);
 	
 	return ( EINKFB_SUCCESS );
 }
@@ -679,6 +860,9 @@ static int einkfb_driver_register(void)
 			
 			if ( !ret )
 			{
+				if ( !einkfb_dma )
+					einkfb_device->dev.coherent_dma_mask = 0;
+				
 				ret = einkfb_create_proc_entries();
 				
 				if ( !ret )

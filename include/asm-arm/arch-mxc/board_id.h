@@ -8,6 +8,7 @@ extern char mx31_board_id[];
 #define IS_TURING()	(GET_BOARD_PRODUCT() == 'T')
 #define IS_NELL()	(GET_BOARD_PRODUCT() == 'N')
 #define IS_TURINGWW()	(GET_BOARD_PRODUCT() == 'W')
+#define IS_NELLWW()	(GET_BOARD_PRODUCT() == 'E')
 
 #define IS_PROTO()	(GET_BOARD_HW_BUILD() == 'X')
 #define IS_EVT()	(GET_BOARD_HW_BUILD() == 'E')

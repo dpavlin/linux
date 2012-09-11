@@ -1,7 +1,7 @@
 /*
  * eInk display framebuffer driver
  * 
- * Copyright (C)2005-2008 Lab126, Inc.  All rights reserved.
+ * Copyright (C)2005-2009 Lab126, Inc.  All rights reserved.
  */
 
 #ifndef _PLATFORM_WAVEFORM_H
@@ -29,6 +29,7 @@ typedef enum bool bool;
 typedef int bs_flash_select;
 #define bs_flash_waveform                       0
 #define bs_flash_commands                       0
+#define broadsheet_supports_flash()             true
 #define broadsheet_get_flash_select()           0
 #define broadsheet_set_flash_select(f)          \
 {                                               \

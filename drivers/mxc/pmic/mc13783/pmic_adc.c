@@ -565,7 +565,6 @@ PMIC_STATUS mc13783_adc_convert(t_adc_param * adc_param)
 		/* we need to set ADCEN 1 for TSI interrupt on mc13783 1.x */
 		/* configure adc to wait tsi interrupt */
 		INIT_COMPLETION(adc_tsi);
-		printk("mc13783 ADC - pmic_write_reg ....\n");
 		adc_0_reg = 0x001c00 | (ADC_BIS * use_bis);
 		pmic_event_unmask(EVENT_TSI);
 		CHECK_ERROR(pmic_write_reg

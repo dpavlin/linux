@@ -31,6 +31,10 @@
 #include "ipu_regs.h"
 #include "ipu_param_mem.h"
 
+#ifdef CONFIG_MACH_LAB126
+static int dma_in_use = 1;
+#endif
+
 /*#define ADC_CHAN1_SA_MASK 0xFF800000 */
 
 static void _ipu_set_cmd_data_mappings(display_port_t disp,
@@ -184,11 +188,15 @@ int32_t
 ipu_adc_write_cmd(display_port_t disp, cmddata_t type,
 		  uint32_t cmd, const uint32_t * params, uint16_t numParams)
 {
-#ifndef CONFIG_MACH_LAB126
 	uint16_t i;
 	int disable_di = 0;
 	u32 reg;
 	unsigned long lock_flags;
+
+#ifdef CONFIG_MACH_LAB126
+    if (!dma_in_use)
+        goto skip_save;
+#endif
 
 	spin_lock_irqsave(&ipu_lock, lock_flags);
 	reg = __raw_readl(IPU_CONF);
@@ -198,13 +206,20 @@ ipu_adc_write_cmd(display_port_t disp, cmddata_t type,
 		__raw_writel(reg, IPU_CONF);
 	}
 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+
+#ifdef CONFIG_MACH_LAB126
+skip_save:
 #endif
 
 	__raw_writel((uint32_t) ((type ? 0x0 : 0x1) | disp << 1 | 0x10),
 		     DI_DISP_LLA_CONF);
 	__raw_writel(cmd, DI_DISP_LLA_DATA);
 
-#ifndef CONFIG_MACH_LAB126
+#ifdef CONFIG_MACH_LAB126
+    if (!dma_in_use)
+        goto skip_restore;
+#endif
+
 	udelay(3);
 
 	__raw_writel((uint32_t) (0x10 | disp << 1 | 0x11), DI_DISP_LLA_CONF);
@@ -220,6 +235,9 @@ ipu_adc_write_cmd(display_port_t disp, cmddata_t type,
 		__raw_writel(reg, IPU_CONF);
 		spin_unlock_irqrestore(&ipu_lock, lock_flags);
 	}
+
+#ifdef CONFIG_MACH_LAB126
+skip_restore:
 #endif
 
 	return 0;
@@ -228,12 +246,73 @@ ipu_adc_write_cmd(display_port_t disp, cmddata_t type,
 #ifdef CONFIG_MACH_LAB126
 int32_t ipu_adc_read_data(display_port_t disp)
 {
+	int disable_di = 0;
+	u32 reg;
+	unsigned long lock_flags;
 	int32_t data_read;
 
+	if (!dma_in_use)
+		goto skip_save;
+
+	spin_lock_irqsave(&ipu_lock, lock_flags);
+	reg = __raw_readl(IPU_CONF);
+	if ((reg & IPU_CONF_DI_EN) == 0) {
+		disable_di = 1;
+		reg |= IPU_CONF_DI_EN;
+		__raw_writel(reg, IPU_CONF);
+	}
+	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+
+skip_save:
 	__raw_writel((uint32_t) (disp << 1 | 0x11), DI_DISP_LLA_CONF);
 	data_read = (uint32_t) __raw_readl(DI_DISP_LLA_DATA);
 
+	if (!dma_in_use)
+		goto skip_restore;
+
+	udelay(3);
+	
+	if (disable_di) {
+		spin_lock_irqsave(&ipu_lock, lock_flags);
+		reg = __raw_readl(IPU_CONF);
+		reg &= ~IPU_CONF_DI_EN;
+		__raw_writel(reg, IPU_CONF);
+		spin_unlock_irqrestore(&ipu_lock, lock_flags);
+	}
+
+skip_restore:
 	return data_read;
+}
+
+void ipu_adc_set_dma_in_use(int in_use)
+{
+	unsigned long lock_flags;
+	int ipu_conf = 0;
+	u32 reg;
+
+	dma_in_use = in_use;
+	
+	spin_lock_irqsave(&ipu_lock, lock_flags);
+	reg = __raw_readl(IPU_CONF);
+	
+	if (!dma_in_use) {
+		if ((reg & IPU_CONF_DI_EN) == 0) {
+			reg |= IPU_CONF_DI_EN;
+			ipu_conf = 1;
+		}
+	
+	} else {
+		if ((reg & IPU_CONF_DI_EN) != 0) {
+		    reg &= ~IPU_CONF_DI_EN;
+		    ipu_conf = 1;
+		}
+	}
+	
+	if (ipu_conf) {
+		__raw_writel(reg, IPU_CONF);
+	}
+	
+	spin_unlock_irqrestore(&ipu_lock, lock_flags);
 }
 #endif
 
@@ -335,9 +414,6 @@ int32_t ipu_adc_init_panel(display_port_t disp,
 	uint32_t adc_disp_conf;
 	uint32_t adc_disp_vsync;
 	uint32_t old_pol;
-#ifdef CONFIG_MACH_LAB126
-	unsigned long reg;
-#endif
 
 	if ((disp != DISP1) && (disp != DISP2) &&
 	    (sig.ifc_mode >= IPU_ADC_IFC_MODE_3WIRE_SERIAL)) {
@@ -462,12 +538,6 @@ int32_t ipu_adc_init_panel(display_port_t disp,
 	}
 
 	__raw_writel(adc_disp_vsync, ADC_DISP_VSYNC);
-
-#ifdef CONFIG_MACH_LAB126
-	reg = __raw_readl(IPU_CONF);
-	reg |= IPU_CONF_DI_EN;
-	__raw_writel(reg, IPU_CONF);
-#endif
 
 	spin_unlock_irqrestore(&ipu_lock, lock_flags);
 
@@ -701,6 +771,7 @@ EXPORT_SYMBOL(ipu_adc_write_template);
 EXPORT_SYMBOL(ipu_adc_write_cmd);
 #ifdef CONFIG_MACH_LAB126
 EXPORT_SYMBOL(ipu_adc_read_data);
+EXPORT_SYMBOL(ipu_adc_set_dma_in_use);
 #endif
 EXPORT_SYMBOL(ipu_adc_set_update_mode);
 EXPORT_SYMBOL(ipu_adc_init_panel);

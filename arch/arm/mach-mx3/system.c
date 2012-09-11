@@ -38,6 +38,30 @@
 #endif
 #include "crm_regs.h"
 
+/*
+ * Refer to the MX31 Reference Manual for a description of the Clock Gating Registers
+ * (CGRs). Section 3.4.3.9 of the MX31 Reference Manual. 
+ *
+ * The clock gating registers define the clock gating for power reduction of each clock
+ * There are 3 CGR registers on the MX31. The number of registers required is 
+ * according to the number of peripherals in the system.
+ */
+
+/* For CGR0, keep MMC0, MMC1, GPT, SDMA, UART1 and I2C1 enabled */
+#define MXC_CGR0_GATE_MASK	0x0c30c03f
+
+/* For CGR1, keep USBOTG enabled */
+#define MXC_CGR1_GATE_MASK	0x000C0C00
+
+/* For CGR1 with pwm_clk enabled */
+#define MXC_CGR1_GATE_PWM_MASK	0x000C3C00
+
+/* For CGR1, gate the IPU if eINK is done */
+#define MXC_CGR1_GATE_IPU_MASK	0xC00000
+
+/* For CGR2, keep CSPI1 and EMI enabled */
+#define MXC_CGR2_GATE_MASK	0xffffc30c
+
 /*!
  * @defgroup MSL_MX31 i.MX31 Machine Specific Layer (MSL)
  */
@@ -66,9 +90,11 @@ volatile unsigned int reg, reg1, reg2, reg3;
 /*
  * Track the number of times CPU gets into DOZE and WAIT
  */
-int count_wait = 0, count_doze = 0, sdma_zero_count = 0, wan_count = 0, emi_zero_count = 0;
+int sdma_zero_count = 0, wan_count = 0, emi_zero_count = 0;
 
 atomic_t doze_disable_cnt = ATOMIC_INIT(0);
+atomic_t eink_doze_disable_cnt = ATOMIC_INIT(0);
+atomic_t accel_enabled = ATOMIC_INIT(0);
 
 void doze_enable(void)
 {
@@ -85,6 +111,32 @@ void doze_disable(void)
 EXPORT_SYMBOL(doze_disable);
 EXPORT_SYMBOL(doze_enable);
 
+static int audio_doze_flag(void)
+{
+	return atomic_read(&doze_disable_cnt);
+}
+
+void eink_doze_enable(int enable)
+{
+	atomic_set(&eink_doze_disable_cnt, enable);
+}
+EXPORT_SYMBOL(eink_doze_enable);
+
+static int eink_doze_counter(void)
+{
+	return atomic_read(&eink_doze_disable_cnt);
+}
+
+void accel_enable(int enable)
+{
+	atomic_set(&accel_enabled, enable);
+}
+EXPORT_SYMBOL(accel_enable);
+
+static int accel_enable_status(void)
+{
+	return atomic_read(&accel_enabled);
+}
 
 /*
  * sysfs interface to CPU idle counts
@@ -94,14 +146,10 @@ sysfs_show_idle_count(struct sys_device *dev, char *buf)
 {
 	char *curr = buf;
 
-	curr += sprintf(curr, "WAIT MODE - %d\n", count_wait);
-	curr += sprintf(curr, "DOZE MODE - %d\n", count_doze);
 	curr += sprintf(curr, "SDMA ZERO COUNT - %d\n", sdma_zero_count);
 	curr += sprintf(curr, "SDMA USECOUNT - %d\n", clk_get_usecount(sdma_clk));
 	curr += sprintf(curr, "USB USECOUNT - %d\n", clk_get_usecount(usb_clk));
 	curr += sprintf(curr, "EMI ZERO COUNT - %d\n", emi_zero_count);
-	curr += sprintf(curr, "USB GADGET USECOUNT - %d\n", 
-				atomic_read(&usb_dma_doze_ref_count));
 
 	curr += sprintf(curr, "\n");
 	return curr - buf;
@@ -136,6 +184,10 @@ static int __init init_cpu_idle_sysfs(void)
 
 device_initcall(init_cpu_idle_sysfs);
 
+/* Flag to check if USB HC1 is gated or not */
+int usb_hc1_gated = 0;
+EXPORT_SYMBOL(usb_hc1_gated);
+
 /*!
  * This function puts the CPU into idle mode. It is called by default_idle()
  * in process.c file.
@@ -143,9 +195,9 @@ device_initcall(init_cpu_idle_sysfs);
 extern void cpu_v6_doze_idle(void); // From /linux/arch/arm/mm/proc-v6.S.
 void arch_idle(void)
 {
-	int emi_gated_off = 0;
+	int emi_gated_off = 0, usb_hc1_gated_off = 0;
 	unsigned long ccmr;
-	int usb_in_use = 0;
+	int wanon = 0;
 
 	/*
 	 * This should do all the clock switching
@@ -181,9 +233,7 @@ void arch_idle(void)
 		if (clk_get_usecount(sdma_clk) == 0) 
 			sdma_zero_count++;
 
-		if  (atomic_read(&doze_disable_cnt) == 0) {
-			count_doze++;
-
+		if  (!audio_doze_flag()) {
 			ccmr = reg = __raw_readl(MXC_CCM_CCMR);
 #ifdef CONFIG_MACH_MARIO_MX
 			if ( (wan_get_power_status() == WAN_OFF) || 
@@ -191,7 +241,7 @@ void arch_idle(void)
 					reg &= 0xfffffcfe; /* UPLL, SPLL and FPME */
 			}
 			else {
-				usb_in_use = 1;
+				wanon = 1;
 				reg &= 0xfffffefe; /* SPLL and FPME */
 			}
 #endif
@@ -201,15 +251,22 @@ void arch_idle(void)
 			 * Clock Gating Registers 0-2
 			 */
 			reg1 = reg = __raw_readl(MXC_CCM_CGR0);
-			reg &= 0xfff3ffff;
+			reg &= MXC_CGR0_GATE_MASK;
 			__raw_writel(reg, MXC_CCM_CGR0);
 
 			reg2 = reg = __raw_readl(MXC_CCM_CGR1);
-			reg &= 0x00cc3300;
+			if (accel_enable_status())
+				reg &= MXC_CGR1_GATE_PWM_MASK;
+			else
+				reg &= MXC_CGR1_GATE_MASK;
+
+			if (eink_doze_counter())
+				reg &= ~MXC_CGR1_GATE_IPU_MASK;
+
 			__raw_writel(reg, MXC_CCM_CGR1);
 
 			reg3 = reg = __raw_readl(MXC_CCM_CGR2);
-			reg &= 0xffffc33c;
+			reg &= MXC_CGR2_GATE_MASK;
 			__raw_writel(reg, MXC_CCM_CGR2);
 
 			clk_disable(rng_clk); /* Security */
@@ -218,10 +275,18 @@ void arch_idle(void)
 			clk_disable(iim_clk);
 			clk_disable(ipu_clk);
 
+			/* Wan is ON and HC1 is gated */
+			if (wanon && usb_hc1_gated)
+				usb_hc1_gated_off = 1;
+
+			/* Wan is off and HC1 is gated as well */
+			if (!wanon)
+				usb_hc1_gated_off = 1;
+
 			if ((clk_get_usecount(sdma_clk) == 0)
 				&& (clk_get_usecount(ipu_clk) <= 1)
-				&& (usb_in_use == 0)
-				&& (atomic_read(&usb_dma_doze_ref_count) == 0)
+				&& (!atomic_read(&usb_dma_doze_ref_count))
+				&& (usb_hc1_gated_off)
 				&& (clk_get_usecount(rtic_clk) == 0)
 				&& (clk_get_usecount(mpeg_clk) == 0)
 				&& (clk_get_usecount(mbx_clk) == 0)
@@ -253,7 +318,6 @@ void arch_idle(void)
 			clk_enable(rng_clk);
 			clk_enable(rtc_clk);
 		} else {
-			count_wait++;
 			cpu_do_idle();
 		}
 	}
@@ -266,6 +330,8 @@ static void mx31_deep_reset(void)
 {
 	t_pc_config pc_config;
 	unsigned int reg;
+
+	printk(KERN_ERR "reboot: I def:pcut::mx31_deep_reset\n");
 
 	pc_config.auto_en_vbkup2= 0;
 	pc_config.en_vbkup2= 0;
@@ -280,6 +346,9 @@ static void mx31_deep_reset(void)
 	pc_config.pc_count = 0;
 	pc_config.pc_max_count = 7;
 	pc_config.user_off_pc = 1;
+
+	printk(KERN_ERR "reboot: I def:pcut::pmic_power_set_pc_config\n");
+
 	pmic_power_set_pc_config(&pc_config);
 	udelay(1000);
 
@@ -309,6 +378,8 @@ void arch_reset(char mode)
 {
 #ifdef CONFIG_MACH_MARIO_MX
 	struct timeval pmic_time;
+
+	printk(KERN_ERR "reboot: I def:pcut::arch_reset\n");
 
 	pmic_rtc_get_time(&pmic_time);
 	pmic_time.tv_sec += 5;

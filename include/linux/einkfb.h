@@ -10,10 +10,20 @@
 #define EINK_WHITE              0x00    // For whacking all the pixels in a...
 #define EINK_BLACK              0xFF    // ...byte (8, 4, 2, or 1) at once.
 
+// Replace EINK_WHITE & EINK_BLACK with the following macros.
+//
+#define eink_white(b)           EINK_WHITE
+#define eink_black(b)           EINK_BLACK
+
+// For pixels (at bytes at a time) other than white/black, the following holds.
+//
+#define eink_pixels(b, p)       (p)
+
 #define EINK_ORIENT_LANDSCAPE   1
 #define EINK_ORIENT_PORTRAIT    0
 
 #define BPP_SIZE(r, b)          (((r)*(b))/8)
+#define BPP_MAX(b)              (1 << (b))
 
 #define IN_RANGE(n, m, M)       (((n) >= (m)) && ((n) <= (M)))
 
@@ -46,46 +56,46 @@ enum splash_screen_type
 {
     // Simple (non-composite) splash screens.
     //
-    splash_screen_powering_off = 0,
-    splash_screen_powering_on,
+    //splash_screen_powering_off = 0,        // Deprecated.
+    //splash_screen_powering_on,             // Deprecated.
+
+    //splash_screen_powering_off_wireless,   // Deprecated.
+    //splash_screen_powering_on_wireless,    // Deprecated.
     
-    splash_screen_powering_off_wireless,
-    splash_screen_powering_on_wireless,
+    //splash_screen_exit,                    // Deprecated.
+    splash_screen_logo = 5,
     
-    splash_screen_exit,
-    splash_screen_logo,
+    //splash_screen_usb_internal,            // Deprecated.
+    //splash_screen_usb_external,            // Deprecated.
+    //splash_screen_usb,                     // Deprecated.
     
-    splash_screen_usb_internal,             // Fiona uses all three USB-related screens;
-    splash_screen_usb_external,             // Mario only has splash_screen_usb.  Order
-    splash_screen_usb,                      // maintained for compatibility.
+    //splash_screen_sleep,                   // Deprecated.
+    //splash_screen_update,                  // Deprecated.
     
-    splash_screen_sleep,
-    splash_screen_update,
-    
-    num_splash_screens,                     // Unfortunate legacy ordering; don't change.
+    //num_splash_screens,                    // Deprecated.
 
     // Composite splash screens & messages.
     //
-    splash_screen_drivemode_0,              // Draw no labels (all mapped to splash_screen_usb on Mario).
-    splash_screen_drivemode_1,              // Draw only internal label.
-    splash_screen_drivemode_2,              // Draw only external label.
-    splash_screen_drivemode_3,              // Draw both internal and external labels.
+    //splash_screen_drivemode_0,              // Deprecated.
+    //splash_screen_drivemode_1,              // Deprecated.
+    //splash_screen_drivemode_2,              // Deprecated.
+    //splash_screen_drivemode_3,              // Deprecated.
     
-    splash_screen_power_off_clear_screen,   // Message: clear screen and power down controller.
-    splash_screen_screen_saver_picture,     // Message: screen saver picture displayed.
+    splash_screen_power_off_clear_screen = 16,// Message: clear screen and power down controller.
+    //splash_screen_screen_saver_picture,     // Deprecated.
     
-    splash_screen_shim_picture,             // Message: shim wants a picture displayed.
+    splash_screen_shim_picture = 18,          // Message: shim wants a picture displayed.
 
-	splash_screen_lowbatt,                  // Picture: Not composite, post-legacy ordering (Mario only).
-	splash_screen_reboot,                   // Picture: Composite (not used on Fiona).
+	splash_screen_lowbatt,                    // Picture: Not composite, post-legacy ordering (Mario only).
+	splash_screen_reboot,                     // Picture: Composite (not used on Fiona).
 	
-	splash_screen_update_initial,           // Composite software-update screens. 
-	splash_screen_update_success,           //
-	splash_screen_update_failure,           //
-	splash_screen_update_failure_no_wait,   //
+	splash_screen_update_initial,             // Composite software-update screens. 
+	splash_screen_update_success,             //
+	splash_screen_update_failure,             //
+	splash_screen_update_failure_no_wait,     //
 	
-	splash_screen_repair_needed,            // More composite screens.
-	splash_screen_boot,                     // 
+	splash_screen_repair_needed,              // More composite screens.
+	splash_screen_boot,                       // 
 
     splash_screen_invalid = -1
 };
@@ -93,8 +103,8 @@ typedef enum splash_screen_type splash_screen_type;
 
 // Alias some of the legacy enumerations for Mario.
 //
-#define splash_screen_usb_recovery_util splash_screen_usb
-#define splash_screen_usb_framework     splash_screen_usb_internal
+#define splash_screen_usb_recovery_util ((splash_screen_type)8) // splash_screen_usb
+#define splash_screen_usb_framework     ((splash_screen_type)6) // splash_screen_usb_internal
 
 struct power_override_t
 {
@@ -105,18 +115,19 @@ typedef struct power_override_t power_override_t;
 
 enum fx_type
 {
-    // Deprecated from HAL, but still supported by Shim.
+    // Deprecated from the HAL, but still supported by the Shim.
     //
-    fx_stipple_posterize_dark = 5,          // Row 0: WPWP...; row 1: PBPB... (W=white, B=black, P=posterize).
-    fx_stipple_posterize_lite = 6,          // Row 0: WPWP...; row 1: PWPW... (W=white, P=posterize).
+    //fx_stipple_posterize_dark = 5,        // Deprecated.
+    //fx_stipple_posterize_lite = 6,        // Deprecated.
     
-    fx_stipple_lighten_dark = 7,            // Row 0: WXWX...; row 1: XBXB... (W=white, B=black, X=keep).
-    fx_stipple_lighten_lite = 8,            // Row 0: WXWX...; row 1: XWXW... (W=white, X=keep).
+    //fx_stipple_lighten_dark = 7,          // Deprecated.
+    //fx_stipple_lighten_lite = 8,          // Deprecated.
     
     fx_mask = 11,                           // Only for use with update_area_t's non-NULL buffer which_fx.
     fx_buf_is_mask = 14,                    // Same as fx_mask, but doesn't require a doubling (i.e., the buffer & mask are the same).
     
     fx_flash = 20,                          // Only for use with update_area_t (for faking a flashing update).
+    fx_invert = 21,                         // Only for use with update_area_t (only inverts output data).
     
     fx_none = -1,                           // No legacy-FX to apply.
     
@@ -289,27 +300,31 @@ enum progressbar_badge_t
 };
 typedef enum progressbar_badge_t progressbar_badge_t;
 
-#define SIZEOF_EINK_EVENT                   sizeof(einkfb_event_t)
+enum sleep_behavior_t
+{
+    sleep_behavior_allow_sleep,
+    sleep_behavior_prevent_sleep
+};
+typedef enum sleep_behavior_t sleep_behavior_t;
 
-#define EINK_SCREEN_SAVER_BUFFER_VALID      "/sys/devices/platform/eink_fb0/valid_screen_saver_buf"
-#define EINK_SCREEN_SAVER_VALID_MSG         "1"
-#define EINK_SCREEN_SAVER_INVALID           "0"
-
-#define EINK_SCREEN_SAVER_VALID_MSG_LEN     1
-
-#define EINK_SCREEN_SAVER_BUFFER            "/proc/eink_fb/screen_saver"
-#define EINK_VIRTUAL_BUFFER                 "/proc/eink_fb/virtual_fb"
 #define EINK_FRAME_BUFFER                   "/dev/fb/0"
+
+#define SIZEOF_EINK_EVENT                   sizeof(einkfb_event_t)
 #define EINK_EVENTS                         "/dev/misc/eink_events"
 
 #define EINK_ROTATE_FILE                    "/sys/devices/platform/eink_fb.0/send_fake_rotate"
+#define EINK_ROTATE_FILE_LEN                1
 #define ORIENT_PORTRAIT                     orientation_portrait
 #define ORIENT_PORTRAIT_UPSIDE_DOWN         orientation_portrait_upside_down
 #define ORIENT_LANDSCAPE                    orientation_landscape
 #define ORIENT_LANDSCAPE_UPSIDE_DOWN        orientation_landscape_upside_down
 #define ORIENT_ASIS                         (-1)
 
-#define EINK_ROTATE_FILE_LEN                1
+#define EINK_CLEAR_SCREEN                   0
+#define EINK_CLEAR_BUFFER                   1
+
+#define FBIO_EINK_SCREEN_CLEAR              FBIO_EINK_CLEAR_SCREEN, EINK_CLEAR_SCREEN
+#define FBIO_EINK_BUFFER_CLEAR              FBIO_EINK_CLEAR_SCREEN, EINK_CLEAR_BUFFER
 
 #define FBIO_MIN_SCREEN                     splash_screen_powering_off
 #define FBIO_MAX_SCREEN                     num_splash_screens
@@ -331,24 +346,27 @@ typedef enum progressbar_badge_t progressbar_badge_t;
 #define FBIO_EINK_SET_DISPLAY_ORIENTATION   _IO(FBIO_MAGIC_NUMBER, 0xf0) // 0x46f0 (orientation_t)
 #define FBIO_EINK_GET_DISPLAY_ORIENTATION   _IO(FBIO_MAGIC_NUMBER, 0xf1) // 0x46f1 (orientation_t *)
 
+#define FBIO_EINK_SET_SLEEP_BEHAVIOR        _IO(FBIO_MAGIC_NUMBER, 0xf2) // 0x46f2 (sleep_behavior_t)
+#define FBIO_EINK_GET_SLEEP_BEHAVIOR        _IO(FBIO_MAGIC_NUMBER, 0xf3) // 0x46f3 (sleep_behavior_t *)
+
 // Implemented in the eInk Shim.
 //
 #define FBIO_EINK_UPDATE_DISPLAY_FX         _IO(FBIO_MAGIC_NUMBER, 0xe4) // 0x46e4 (fx_t *)
 #define FBIO_EINK_SPLASH_SCREEN             _IO(FBIO_MAGIC_NUMBER, 0xdc) // 0x46dc (splash_screen_type)
 #define FBIO_EINK_SPLASH_SCREEN_SLEEP       _IO(FBIO_MAGIC_NUMBER, 0xe0) // 0x46e0 (splash_screen_type)
-#define FBIO_EINK_OFF_CLEAR_SCREEN          _IO(FBIO_MAGIC_NUMBER, 0xdf) // 0x46df (no args)
+#define FBIO_EINK_OFF_CLEAR_SCREEN          _IO(FBIO_MAGIC_NUMBER, 0xdf) // 0x46df (EINK_CLEAR_SCREEN || EINK_CLEAR_BUFFER)
 #define FBIO_EINK_CLEAR_SCREEN              _IO(FBIO_MAGIC_NUMBER, 0xe1) // 0x46e1 (no args)
 #define FBIO_EINK_POWER_OVERRIDE            _IO(FBIO_MAGIC_NUMBER, 0xe3) // 0x46e3 (power_override_t *)
-#define FBIO_EINK_FAKE_PNLCD                _IO(FBIO_MAGIC_NUMBER, 0xe8) // 0x46e8 (char *)
 
 #define FBIO_EINK_PROGRESSBAR               _IO(FBIO_MAGIC_NUMBER, 0xea) // 0x46ea (int: 0..100 -> draw progressbar || !(0..100) -> clear progressbar)
 #define FBIO_EINK_PROGRESSBAR_SET_XY        _IO(FBIO_MAGIC_NUMBER, 0xeb) // 0x46eb (progressbar_xy_t *)
 #define FBIO_EINK_PROGRESSBAR_BADGE         _IO(FBIO_MAGIC_NUMBER, 0xec) // 0x46ec (progressbar_badge_t);
 #define FBIO_EINK_PROGRESSBAR_BACKGROUND    _IO(FBIO_MAGIC_NUMBER, 0xf4) // 0x46f4 (int: EINKFB_WHITE || EINKFB_BLACK)
 
-// Deprecated from the HAL & Shim, but still used by microwindows when the legacy eInk driver is around.
+// Deprecated from the HAL & Shim.
 //
-#define FBIO_EINK_UPDATE_DISPLAY_ASYNC      _IO(FBIO_MAGIC_NUMBER, 0xde) // 0x46de (fx_type: fx_update_full || fx_update_partial)
+//#define FBIO_EINK_UPDATE_DISPLAY_ASYNC    _IO(FBIO_MAGIC_NUMBER, 0xde) // 0x46de (fx_type: fx_update_full || fx_update_partial)
+//#define FBIO_EINK_FAKE_PNLCD              _IO(FBIO_MAGIC_NUMBER, 0xe8) // 0x46e8 (char *)
 
 // For use with /proc/eink_fb/update_display.
 //
@@ -361,16 +379,17 @@ typedef enum progressbar_badge_t progressbar_badge_t;
 #define PROC_EINK_UPDATE_DISPLAY_OVRD       6   // FBIO_EINK_FPOW_OVERRIDE
 #define PROC_EINK_UPDATE_DISPLAY_FX         7   // FBIO_EINK_UPDATE_DISPLAY_FX
 //#define PROC_EINK_UPDATE_DISPLAY_SYNC     8   // FBIO_EINK_SYNC_BUFFERS
-#define PROC_EINK_UPDATE_DISPLAY_PNLCD      9   // FBIO_EINK_FAKE_PNLCD
+//#define PROC_EINK_UPDATE_DISPLAY_PNLCD    9   // FBIO_EINK_FAKE_PNLCD
 #define PROC_EINK_SET_REBOOT_BEHAVIOR      10   // FBIO_EINK_SET_REBOOT_BEHAVIOR
 #define PROC_EINK_SET_PROGRESSBAR_XY       11   // FBIO_EINK_PROGRESSBAR_SET_XY
 #define PROC_EINK_UPDATE_DISPLAY_SCRN_SLP  12   // FBIO_EINK_SPLASH_SCREEN_SLEEP
 #define PROC_EINK_PROGRESSBAR_BADGE        13   // FBIO_EINK_PROGRESSBAR_BADGE
 #define PROC_EINK_SET_DISPLAY_ORIENTATION  14   // FBIO_EINK_SET_DISPLAY_ORIENTATION
 #define PROC_EINK_RESTORE_DISPLAY          15   // FBIO_EINK_RESTORE_DISPLAY
+#define PROC_EINK_SET_SLEEP_BEHAVIOR       16   // FBIO_EINK_SET_SLEEP_BEHAVIOR
 #define PROC_EINK_PROGRESSBAR_BACKGROUND   17   // FBIO_EINK_PROGRESSBAR_BACKGROUND
 
-#define PROC_EINK_FAKE_PNLCD_TEST         100   // Programmatically drive FBIO_EINK_FAKE_PNLCD (not implemented)
+//#define PROC_EINK_FAKE_PNLCD_TEST       100   // Programmatically drive FBIO_EINK_FAKE_PNLCD (not implemented)
 #define PROC_EINK_GRAYSCALE_TEST          101   // Fills display with white-to-black ramp at current bit depth
 
 // Inter-module/inter-driver eink ioctl access.

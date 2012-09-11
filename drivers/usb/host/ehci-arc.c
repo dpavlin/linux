@@ -2,6 +2,8 @@
  * drivers/usb/host/ehci-arc.c
  *
  * Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2008-2009 Amazon Technologies, Inc. All Rights Reserved.
+ * Manish Lachwani (lachwani@lab126.com)
  */
 
 /*
@@ -32,9 +34,9 @@
 #include <linux/fsl_devices.h>
 #include <linux/usb/otg.h>
 #include <linux/usb/fsl_xcvr.h>
+
 #include <asm/io.h>
 #include <asm/arch/fsl_usb.h>
-
 #include "ehci-fsl.h"
 
 #undef dbg
@@ -51,6 +53,46 @@
 #else
 #define vdbg(fmt, ...) do {} while (0)
 #endif
+
+#define EHCI_IDLE_SUSPEND_THRESHOLD	20000	/* Restart the idle thread 20 secs after resume */
+extern void gpio_wan_usb_enable(int);
+extern void ehci_hcd_recalc_work(void);
+extern void ehci_hcd_restart_idle(void);
+
+int wakeup_value = 0;
+extern int suspend_count;
+
+static ssize_t wakeup_enable_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	return sprintf(buf, "%d\n", wakeup_value);
+}
+
+static ssize_t wakeup_enable_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	if (strstr(buf, "1") != NULL) {
+		wakeup_value = 1;
+		/* Restart the workqueue */
+		ehci_hcd_restart_idle();
+	}
+	else {
+		ehci_hcd_recalc_work();
+		wakeup_value = 0;
+	}
+	
+	return size;
+}
+static DEVICE_ATTR(wakeup_enable, 0644, wakeup_enable_show, wakeup_enable_store);
+
+
+static ssize_t suspend_counter_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	return sprintf(buf, "%d\n", suspend_count);
+}
+
+static DEVICE_ATTR(suspend_counter, 0644, suspend_counter_show, NULL);
 
 extern void fsl_platform_set_vbus_power(struct fsl_usb2_platform_data *pdata,
 					int on);
@@ -77,6 +119,7 @@ static int usb_hcd_fsl_probe(const struct hc_driver *driver,
 	struct resource *res;
 	int irq;
 	int retval;
+	static struct device *ehci_arc_dev;
 	struct ehci_hcd *ehci;
 
 	pr_debug("initializing FSL-SOC USB Controller\n");
@@ -132,7 +175,14 @@ static int usb_hcd_fsl_probe(const struct hc_driver *driver,
 	 */
 	fsl_platform_set_host_mode(hcd);
 
-	retval = usb_add_hcd(hcd, irq, IRQF_SHARED);
+	ehci_arc_dev = &pdev->dev;
+	if (sysfs_create_file(&ehci_arc_dev->kobj, &dev_attr_wakeup_enable.attr) < 0)
+		printk (KERN_ERR "ehci: could not create wakeup_value sysfs entry\n");
+
+	if (sysfs_create_file(&ehci_arc_dev->kobj, &dev_attr_suspend_counter.attr) < 0)
+		printk (KERN_ERR "ehci: could not create suspend_counter sysfs entry\n");
+
+	retval = usb_add_hcd(hcd, irq, IRQF_DISABLED);
 	if (retval != 0) {
 		pr_debug("failed with usb_add_hcd\n");
 		goto err2;
@@ -179,6 +229,7 @@ static void usb_hcd_fsl_remove(struct usb_hcd *hcd,
 {
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
+	static struct device *ehci_arc_dev;
 
 	dbg("%s  hcd=0x%p\n", __FUNCTION__, hcd);
 
@@ -192,6 +243,10 @@ static void usb_hcd_fsl_remove(struct usb_hcd *hcd,
 		put_device(ehci->transceiver->dev);
 	}
 	usb_put_hcd(hcd);
+
+	ehci_arc_dev = &pdev->dev;
+	sysfs_remove_file(&ehci_arc_dev->kobj, &dev_attr_wakeup_enable.attr);
+	sysfs_remove_file(&ehci_arc_dev->kobj, &dev_attr_suspend_counter.attr);
 
 	/*
 	 * do platform specific un-initialization:
@@ -209,8 +264,6 @@ static int ehci_fsl_reinit(struct ehci_hcd *ehci)
 
 	return 0;
 }
-
-extern void ehci_work_tq(struct work_struct *work);
 
 /* called during probe() after chip reset completes */
 static int ehci_fsl_setup(struct usb_hcd *hcd)
@@ -248,9 +301,29 @@ static int ehci_fsl_setup(struct usb_hcd *hcd)
 	ehci_reset(ehci);
 
 	retval = ehci_fsl_reinit(ehci);
-
-	INIT_WORK(&ehci->tq, ehci_work_tq);
 	return retval;
+}
+
+/* USB EHCI bus suspend */
+static int ehci_arc_bus_suspend(struct usb_hcd *hcd)
+{
+	/*
+	 * Check if bus already suspended. If yes, then no need to redo suspend
+	 */
+	if (!wakeup_value) {
+		/* Call the hub suspend now */
+		ehci_bus_suspend(hcd);
+	}
+
+	return 0;
+}
+
+/* USB EHCI bus resume */
+static int ehci_arc_bus_resume(struct usb_hcd *hcd)
+{
+	/* Call the hub resume now */
+	ehci_bus_resume(hcd);
+	return 0;
 }
 
 /* *INDENT-OFF* */
@@ -290,15 +363,18 @@ static const struct hc_driver ehci_arc_hc_driver = {
 	 */
 	.hub_status_data	= ehci_hub_status_data,
 	.hub_control		= ehci_hub_control,
-	.bus_suspend		= ehci_bus_suspend,
-	.bus_resume		= ehci_bus_resume,
+	.bus_suspend		= ehci_arc_bus_suspend,
+	.bus_resume		= ehci_arc_bus_resume,
 };
 /* *INDENT-ON* */
 
-#ifdef CONFIG_USB_OTG
 volatile static struct ehci_regs usb_ehci_regs;
 
+#ifdef CONFIG_PM
 /* suspend/resume, section 4.3 */
+
+volatile static struct ehci_regs usb_ehci_regs;
+static u32 usb_ehci_portsc;
 
 /* These routines rely on the bus (pci, platform, etc)
  * to handle powerdown and wakeup, and currently also on
@@ -311,32 +387,56 @@ static int ehci_arc_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
-	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
-	u32 cmd;
+	u32 cmd, tmp;
 	
-	if (pdata->does_otg != 1)
-		return 0;
-
 	pr_debug("%s pdev=0x%p  ehci=0x%p  hcd=0x%p\n",
 		 __FUNCTION__, pdev, ehci, hcd);
 	pr_debug("%s ehci->regs=0x%p  hcd->regs=0x%p  hcd->state=%d\n",
 		 __FUNCTION__, ehci->regs, hcd->regs, hcd->state);
 
-	if (state.event != PM_EVENT_SUSPEND)
-		hcd->state = HC_STATE_HALT;	/* ignore non-host interrupts */	
+	hcd->state = HC_STATE_SUSPENDED;
+	pdev->dev.power.power_state = PMSG_SUSPEND;
 
 	if (hcd->driver->suspend)
 		return hcd->driver->suspend(hcd, state);
+
+	/* Clear the wakeup_value to stop idle */
+	wakeup_value = 0;
+
+	/* Cancel the low power idle workqueue */
+	cancel_rearming_delayed_work(&ehci->dwork);
+
+	/* ignore non-host interrupts */
+	clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
 
 	cmd = ehci_readl(ehci, &ehci->regs->command);
 	cmd &= ~CMD_RUN;
 	ehci_writel(ehci, cmd, &ehci->regs->command);
 
-	memcpy((void *)&usb_ehci_regs, ehci->regs, sizeof(struct ehci_regs));
-	usb_ehci_regs.port_status[0] &=
-	    cpu_to_le32(~(PORT_PEC | PORT_OCC | PORT_CSC));
+	/* save EHCI registers */
+	usb_ehci_regs.command = ehci_readl(ehci, &ehci->regs->command);
+	usb_ehci_regs.status = ehci_readl(ehci, &ehci->regs->status);
+	usb_ehci_regs.intr_enable = ehci_readl(ehci, &ehci->regs->intr_enable);
+	usb_ehci_regs.frame_index = ehci_readl(ehci, &ehci->regs->frame_index);
+	usb_ehci_regs.segment = ehci_readl(ehci, &ehci->regs->segment);
+	usb_ehci_regs.frame_list = ehci_readl(ehci, &ehci->regs->frame_list);
+	usb_ehci_regs.async_next = ehci_readl(ehci, &ehci->regs->async_next);
+	usb_ehci_regs.configured_flag =
+		ehci_readl(ehci, &ehci->regs->configured_flag);
+	usb_ehci_portsc = ehci_readl(ehci, &ehci->regs->port_status[0]);
+	
+	/* clear the W1C bits */
+	usb_ehci_portsc &= cpu_to_le32(~PORT_RWC_BITS);
+	
+	/* clear PP to cut power to the port */
+	tmp = ehci_readl(ehci, &ehci->regs->port_status[0]);
+	tmp &= ~PORT_POWER;
+	ehci_writel(ehci, tmp, &ehci->regs->port_status[0]);
 
-	fsl_platform_set_vbus_power(pdata, 0);
+	/* Gate the PHY clock */
+	tmp = ehci_readl(ehci, &ehci->regs->port_status[0]);
+	tmp |= PORT_PHCD;
+	ehci_writel(ehci, tmp, &ehci->regs->port_status[0]);
 
 	return 0;
 }
@@ -348,37 +448,47 @@ static int ehci_arc_resume(struct platform_device *pdev)
 	u32 tmp;
 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 
-	if (pdata->does_otg != 1)
-		return 0;	
-
 	dbg("%s pdev=0x%p  pdata=0x%p  ehci=0x%p  hcd=0x%p\n",
 	    __FUNCTION__, pdev, pdata, ehci, hcd);
 
 	vdbg("%s ehci->regs=0x%p  hcd->regs=0x%p  usbmode=0x%x\n",
 	     __FUNCTION__, ehci->regs, hcd->regs, pdata->usbmode);
 
-	if (hcd->state == HC_STATE_HALT)
-		hcd->state = HC_STATE_RUNNING;
+	/* set host mode */
+	tmp = USBMODE_CM_HOST | (pdata->es ? USBMODE_ES : 0);
+	ehci_writel(ehci, tmp, hcd->regs + FSL_SOC_USB_USBMODE);
 
-	tmp = USBMODE_CM_HOST;
-	if (ehci_big_endian_mmio(ehci))
-		tmp |= USBMODE_BE;
+	/* restore EHCI registers */
+	ehci_writel(ehci, usb_ehci_regs.command, &ehci->regs->command);
+	ehci_writel(ehci, usb_ehci_regs.intr_enable, &ehci->regs->intr_enable);
+	ehci_writel(ehci, usb_ehci_regs.frame_index, &ehci->regs->frame_index);
+	ehci_writel(ehci, usb_ehci_regs.segment, &ehci->regs->segment);
+	ehci_writel(ehci, usb_ehci_regs.frame_list, &ehci->regs->frame_list);
+	ehci_writel(ehci, usb_ehci_regs.async_next, &ehci->regs->async_next);
+	ehci_writel(ehci, usb_ehci_regs.configured_flag,
+			&ehci->regs->configured_flag);
+	ehci_writel(ehci, usb_ehci_regs.frame_list, &ehci->regs->frame_list);
+	ehci_writel(ehci, usb_ehci_portsc, &ehci->regs->port_status[0]);
 
-	ehci_writel(ehci, tmp, (u32 *)pdata->usbmode);
-
-	memcpy(ehci->regs, (void *)&usb_ehci_regs, sizeof(struct ehci_regs));
+	set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+	hcd->state = HC_STATE_RUNNING;
+	pdev->dev.power.power_state = PMSG_ON;
 
 	tmp = ehci_readl(ehci, &ehci->regs->command);
 	tmp |= CMD_RUN;
 	ehci_writel(ehci, tmp, &ehci->regs->command);
 
-	fsl_platform_set_vbus_power(pdata, 1);
-
 	usb_hcd_resume_root_hub(hcd);
+
+	/* Enter low power IDLE now */	
+	wakeup_value = 1;
+
+	/* Restart the workqueue */
+	schedule_delayed_work(&ehci->dwork, msecs_to_jiffies(EHCI_IDLE_SUSPEND_THRESHOLD));
 
 	return 0;
 }
-#endif				/* CONFIG_USB_OTG */
+#endif
 
 static int ehci_hcd_drv_probe(struct platform_device *pdev)
 {
@@ -391,9 +501,7 @@ static int ehci_hcd_drv_probe(struct platform_device *pdev)
 static int __init_or_module ehci_hcd_drv_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
-	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 
-	cancel_work_sync(&ehci->tq);
 	usb_hcd_fsl_remove(hcd, pdev);
 
 	return 0;
@@ -403,9 +511,9 @@ static int __init_or_module ehci_hcd_drv_remove(struct platform_device *pdev)
 static struct platform_driver ehci_fsl_driver = {
 	.probe   = ehci_hcd_drv_probe,
 	.remove  = ehci_hcd_drv_remove,
-#ifdef CONFIG_USB_OTG
+#ifdef CONFIG_PM
 	.suspend = ehci_arc_suspend,
-	.resume  = ehci_arc_resume,
+	.resume = ehci_arc_resume,
 #endif
 	.driver  = {
 			.name = "fsl-ehci",

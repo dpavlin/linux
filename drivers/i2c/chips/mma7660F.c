@@ -1,26 +1,21 @@
 /*
 ** Freescale MMA7660F Accelerometer driver routine for Mario.  (C) 2008 Lab126
+** Copyright (C) Amazon Technologies, All rights reserved.
+** Manish Lachwani (lachwani@lab126.com)
 */
 
-#include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include <linux/input.h>
-#include <linux/mm.h>
-#include <linux/slab.h>
-#include <linux/vmalloc.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
-#include <linux/fb.h>
-#include <linux/version.h>
-#include <linux/sched.h>
-#include <linux/syscalls.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
-#include <linux/init.h>
 #include <linux/proc_fs.h>
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
+#include <linux/clk.h>
+#include <linux/i2c.h>
 
 #include <asm/uaccess.h>
 #include <asm/irq.h>
@@ -34,9 +29,8 @@
 
 #include <asm/arch-mxc/mx31_pins.h>
 #include <asm/arch/gpio.h>
-
-#include <linux/i2c.h>
 #include <asm/arch-mxc/mxc_i2c.h>
+#include <asm/arch-mxc/clock.h>
 
 //Logging
 unsigned int logging_mask;
@@ -56,9 +50,10 @@ static struct miscdevice mma7660F_dev = { MISC_DYNAMIC_MINOR,
 
 // Global variables
 
+extern void accel_enable(int);
 static char device_orientation = DEVICE_INIT_ORIENTATION;
 static int mma7660F_reads_OK = 0;
-static bool accel_locked = false;
+static int accel_locked = 0;
 static bool mma7660F_v1p1 = false;
 static signed char calibration_regs[5];
 static bool calibration_done = false;
@@ -94,6 +89,8 @@ static iomux_pin_name_t int_gpio;
 static int mma7660F_attach(struct i2c_adapter *adapter);
 static int mma7660F_detach(struct i2c_client *client);
 
+/* PWM clock */
+struct clk *pwm_clk;
 
 /*!
  * This structure is used to register the device with the i2c driver
@@ -228,14 +225,31 @@ static int write_mma7660F_reg(unsigned char reg_addr, char wr_data)
 {
    unsigned char mma7660F_reg_addr;
    char mma7660F_wr_data[ACCEL_REG_DATA_LEN];
-   int ret_code;
+   int ret_code = 0, timeout = 10;
 
+retry:
    mma7660F_reg_addr = reg_addr;
    mma7660F_wr_data[0] = wr_data;
    ret_code = mma7660F_i2c_client_xfer(ACCEL_I2C_ADDRESS, &mma7660F_reg_addr,
               ACCEL_REG_ADDR_LEN, mma7660F_wr_data, ACCEL_REG_DATA_LEN, 
               MXC_I2C_FLAG_WRITE);
    LLOG_DEBUG3("Wrote 0x%02X to register 0x%02X; ret_code = 0x%02X\n", mma7660F_wr_data[0], mma7660F_reg_addr, ret_code);
+
+   /*
+    * i2c returns back a -EREMOTEIO is suspended/busy. Hence, we need to retry
+    * rather than giving up
+    */
+   if (ret_code == -EREMOTEIO) {
+	timeout--;
+	if (timeout) {
+		yield(); /* i2c could be suspended and hence relinquish the CPU */
+		ret_code = 0; /* re-init to 0 */
+		goto retry;
+	}
+	else
+		printk(KERN_ERR "%s: timeout expired: %d\n", __FUNCTION__, ret_code);
+   }
+	
    if (ret_code < 0) {
       LLOG_ERROR("write_err", "", "Attempted writing 0x%02X to MMA7660F register 0x%02X; failed with ret_code = 0x%X\n", mma7660F_wr_data[0], mma7660F_reg_addr, ret_code);
    }
@@ -802,7 +816,10 @@ void mma7660F_sleep(void)
       LLOG_DEBUG1("Disabling IRQ and putting accelerometer in standby mode...\n");
 
       // Disable IRQ line
-      disable_irq(INT_IRQ);
+      free_irq(INT_IRQ, NULL);
+
+      mario_disable_pullup_pad(int_gpio);
+      mxc_free_iomux(int_gpio, OUTPUTCONFIG_GPIO, INPUTCONFIG_GPIO);
 
       // Stop any pending delayed work items
       cancel_rearming_delayed_work(&mma7660F_tq_d);
@@ -811,7 +828,9 @@ void mma7660F_sleep(void)
       // Put Freescale MMA7660F Accelerometer in standby mode
       write_mma7660F_reg(ACCEL_MODE_REG, 0);
 
-      accel_locked = true;
+      clk_disable(pwm_clk);
+      accel_locked = 1;
+      accel_enable(0);
    }
 }
 
@@ -822,18 +841,33 @@ void mma7660F_sleep(void)
  */
 void mma7660F_wake(void)
 {
+   int rqstatus = 0;
+
    if (accel_locked) {
       // Only perform locking functions if accelerometer is locked
       LLOG_DEBUG1("Enabling IRQ and waking mma7660F\n");
 
-      // Enable IRQ line
-      enable_irq(INT_IRQ);
+      rqstatus = request_irq(INT_IRQ, (irq_handler_t) mma7660F_irq, 0, "mma7660F", NULL);
+      if (rqstatus != 0) {
+         LLOG_ERROR("irq_req_fail", "", "request_irq failed; INT IRQ line = 0x%X; request status = %d\n", INT_IRQ, rqstatus);
+      }
+
+      if (mxc_request_iomux(int_gpio, OUTPUTCONFIG_GPIO, INPUTCONFIG_GPIO)) {
+            LLOG_ERROR("req_iomux_fail", "", "mxc_request_iomux failed; could not obtain GPIO pin for MMA7660F INT line\n");
+      }
+      else {
+             mario_enable_pullup_pad(int_gpio);
+             mxc_set_gpio_direction(int_gpio, 1);
+      }
+
+      clk_enable(pwm_clk);
 
       // Initialize the MMA7660F; an interrupt will be generated when
       // the first measurement is available
       init_mma7660F();
 
-      accel_locked = false;
+      accel_locked = 0;
+      accel_enable(1);
    }
 }
 
@@ -870,7 +904,6 @@ static int mma7660F_resume(struct platform_device *pdev)
    LLOG_INFO("resume", "", "status=unlocked\n");
    return 0;
 }
-
 
 /*
  * This function returns the current orientation reported by the MMA7660F
@@ -918,7 +951,6 @@ int mma7660F_proc_read( char *page, char **start, off_t off,
 
    return len;
 }
-
 
 ssize_t mma7660F_proc_write( struct file *filp, const char __user *buff,
                             unsigned long len, void *data )
@@ -1275,7 +1307,7 @@ static int __devinit mma7660F_probe(struct platform_device *pdev)
    }
 
    // Initialize semaphore 
-   accel_locked = false;
+   accel_locked = 0;
 
    // Initialize the MMA7660F; an interrupt will be generated when
    // the first measurement is available, if the chip is rev 1.2 or later
@@ -1292,6 +1324,8 @@ static int __devinit mma7660F_probe(struct platform_device *pdev)
 
    LLOG_INFO("dev_initd", "", "MMA7660F device has been initialized\n");
 
+   pwm_clk = clk_get(NULL, "pwm_clk");
+   accel_enable(1);
    return 0;
 }
 
@@ -1407,27 +1441,23 @@ static int __devexit mma7660F_remove(struct platform_device *pdev)
    i2c_del_driver(&mma7660F_i2c_driver);
 
    LLOG_INFO("exit", "", "IRQ released and device disabled.\n");
-
+   clk_put(pwm_clk);
+   accel_enable(0);
    return 0;
 }
-
 
 /*!
  * This structure contains pointers to the power management callback functions.
  */
 static struct platform_driver mma7660F_driver = {
-        .driver = {
-                   .name = "mma7660F",
-                   .owner  = THIS_MODULE,
-                   //.bus = &platform_bus_type,
-                   },
-        .suspend = mma7660F_suspend,
-        .resume  = mma7660F_resume,
-        .probe   = mma7660F_probe,
-        .remove  = __devexit_p(mma7660F_remove),
+	.probe   = mma7660F_probe,
+	.remove  = __devexit_p(mma7660F_remove),
+	.suspend = mma7660F_suspend,
+	.resume = mma7660F_resume,
+	.driver = {
+             .name = "mma7660F",
+        },
 };
-
-
 
 /*!
  * This function is called for module initialization.
@@ -1471,8 +1501,6 @@ static void __exit mma7660F_exit(void)
         mma7660F_remove(NULL);
         platform_driver_unregister(&mma7660F_driver);
 }
-
-
 
 module_init(mma7660F_init);
 module_exit(mma7660F_exit);

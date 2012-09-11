@@ -70,6 +70,9 @@
 #define GS_DEFAULT_PARITY		USB_CDC_NO_PARITY
 #define GS_DEFAULT_CHAR_FORMAT		USB_CDC_1_STOP_BITS
 
+#define GS_VBUS_DRAW_ENUMERATED 	500
+#define GS_VBUS_DRAW_NON_ENUMERATED	100
+
 /* maxpacket and other transfer characteristics vary by speed. */
 static inline struct usb_endpoint_descriptor *
 choose_ep_desc(struct usb_gadget *g, struct usb_endpoint_descriptor *hs,
@@ -349,7 +352,6 @@ static struct usb_config_descriptor gs_bulk_config_desc = {
 	.bConfigurationValue =	GS_BULK_CONFIG_ID,
 	.iConfiguration =	GS_BULK_CONFIG_STR_ID,
 	.bmAttributes =		USB_CONFIG_ATT_ONE | USB_CONFIG_ATT_SELFPOWER,
-	.bMaxPower =		1,
 };
 
 static struct usb_config_descriptor gs_acm_config_desc = {
@@ -360,7 +362,6 @@ static struct usb_config_descriptor gs_acm_config_desc = {
 	.bConfigurationValue =	GS_ACM_CONFIG_ID,
 	.iConfiguration =	GS_ACM_CONFIG_STR_ID,
 	.bmAttributes =		USB_CONFIG_ATT_ONE | USB_CONFIG_ATT_SELFPOWER,
-	.bMaxPower =		1,
 };
 
 static const struct usb_interface_descriptor gs_bulk_interface_desc = {
@@ -1421,7 +1422,7 @@ static int __init gs_bind(struct usb_gadget *gadget)
 		gs_acm_config_desc.bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 	}
 
-	gs_device = dev = kmalloc(sizeof(struct gs_dev), GFP_KERNEL);
+	gs_device = dev = kzalloc(sizeof(struct gs_dev), GFP_KERNEL);
 	if (dev == NULL)
 		return -ENOMEM;
 
@@ -1429,7 +1430,6 @@ static int __init gs_bind(struct usb_gadget *gadget)
 		init_utsname()->sysname, init_utsname()->release,
 		gadget->name);
 
-	memset(dev, 0, sizeof(struct gs_dev));
 	dev->dev_gadget = gadget;
 	spin_lock_init(&dev->dev_lock);
 	INIT_LIST_HEAD(&dev->dev_req_list);
@@ -1608,6 +1608,8 @@ static int gs_setup_standard(struct usb_gadget *gadget,
 		spin_lock(&dev->dev_lock);
 		ret = gs_set_config(dev, wValue);
 		spin_unlock(&dev->dev_lock);
+		usb_gadget_vbus_draw(gadget, wValue ?
+				GS_VBUS_DRAW_ENUMERATED : GS_VBUS_DRAW_NON_ENUMERATED);
 		break;
 
 	case USB_REQ_GET_CONFIGURATION:

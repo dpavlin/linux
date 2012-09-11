@@ -58,7 +58,7 @@
 
 
 #ifndef CHRG_LOG_VERBOSE			/* normally not defined */
-#define CHRG_LOG_DEFAULT    CHRG_MSK_INTERRUPTS
+#define CHRG_LOG_DEFAULT    0
 #else
 #define CHRG_LOG_DEFAULT    (CHRG_MSK_READINGS | CHRG_MSK_CALCS | CHRG_MSK_API_CALLS | CHRG_MSK_INTERRUPTS)
 #endif

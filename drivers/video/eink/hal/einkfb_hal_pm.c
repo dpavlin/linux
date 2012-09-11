@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_pm.c -- eInk frame buffer device HAL power management
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2008 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -180,7 +180,12 @@ void EINKFB_SET_POWER_LEVEL(einkfb_power_level power_level)
         // Skip changing the power level altogether if we're flashing the ROM.
         //
         if ( !EINKFB_FLASHING_ROM() )
+        {
+            EINKFB_DOZE_DISABLE(power_level);
             (*hal_ops.hal_set_power_level)(power_level);
+
+            EINKFB_DOZE_ENABLE(power_level);
+        }
         
         // Note whether we had to change the passed-in power level or not.
         //
@@ -298,6 +303,7 @@ void EINKFB_SET_BLANK_UNBLANK_LEVEL(einkfb_power_level power_level)
 
 int einkfb_blank(int blank, struct fb_info *info)
 {
+    sleep_behavior_t sleep_behavior = einkfb_get_sleep_behavior();
     einkfb_power_level power_level;
     int result = EINKFB_SUCCESS;
     einkfb_event_t event;
@@ -324,12 +330,18 @@ int einkfb_blank(int blank, struct fb_info *info)
         goto set_power_level;
         
         case FB_BLANK_HSYNC_SUSPEND:
-            power_level = einkfb_power_level_sleep;
+            power_level = sleep_behavior_prevent_sleep == sleep_behavior ?
+                einkfb_power_level_standby :
+                einkfb_power_level_sleep;
         goto set_power_level;
         
         case FB_BLANK_POWERDOWN:
-            power_level = einkfb_power_level_off;
-            einkfb_post_event(&event);
+            power_level = sleep_behavior_prevent_sleep == sleep_behavior ?
+                einkfb_power_level_standby :
+                einkfb_power_level_off;
+            
+            if ( einkfb_power_level_off == power_level )
+                einkfb_post_event(&event);
         /* goto set_power_level; */
         
         set_power_level:
@@ -346,15 +358,18 @@ int einkfb_blank(int blank, struct fb_info *info)
 
 void einkfb_start_power_timer(void)
 {
-	init_timer(&einkfb_power_timer);
-	
-	einkfb_power_timer.function = einkfb_power_timer_function;
-	einkfb_power_timer.data = 0;
-
-	einkfb_power_timer_active  = true;
-    einkfb_power_timer_primed  = false;
+    if ( !einkfb_power_timer_active )
+    {
+        init_timer(&einkfb_power_timer);
+        
+        einkfb_power_timer.function = einkfb_power_timer_function;
+        einkfb_power_timer.data = 0;
     
-    einkfb_start_power_thread();
+        einkfb_power_timer_active  = true;
+        einkfb_power_timer_primed  = false;
+        
+        einkfb_start_power_thread();
+    }
 }
 
 void einkfb_stop_power_timer(void)
@@ -394,15 +409,42 @@ void einkfb_prime_power_timer(bool delay_timer)
 
 int einkfb_get_power_timer_delay(void)
 {
-    return ( einkfb_power_timer_delay );
+     int power_timer_delay = 0;
+     
+     // The power timing thread is only meaningful if the underlying hardware
+     // can actually get/set the power level.
+     //
+     if ( hal_ops.hal_get_power_level )
+        power_timer_delay = einkfb_power_timer_delay;
+
+    return ( power_timer_delay );
 }
 
 void einkfb_set_power_timer_delay(int power_timer_delay)
 {
-    if ( IN_RANGE(power_timer_delay, EINKFB_POWER_TIMER_DELAY_MIN, EINFFB_POWER_TIMER_DELAY_MAX) )
-        einkfb_power_timer_delay = power_timer_delay;
-    else
-        einkfb_power_timer_delay = EINKFB_POWER_TIMER_DELAY_DEFAULT;
+     // The power timing thread is only meaningful if the underlying hardware
+     // can actually get/set the power level.
+     //
+    if ( hal_ops.hal_get_power_level )
+    {
+        if ( IN_RANGE(power_timer_delay, EINKFB_POWER_TIMER_DELAY_MIN, EINFFB_POWER_TIMER_DELAY_MAX) )
+            einkfb_power_timer_delay = power_timer_delay;
+        else
+        {
+            if ( power_timer_delay )
+                einkfb_power_timer_delay = EINKFB_POWER_TIMER_DELAY_DEFAULT;
+            else
+            {
+                einkfb_power_timer_delay = 0;
+                einkfb_stop_power_timer();
+            }
+        }
+        
+        if ( einkfb_power_timer_delay )
+            einkfb_start_power_timer();
+        else
+            einkfb_stop_power_timer();
+    }
 }
 
 void einkfb_power_override_begin(void)

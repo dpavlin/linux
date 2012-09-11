@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_mem.c -- eInk frame buffer device HAL memory
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -18,6 +18,12 @@
 // Hack Warning -- not true on all architectures.
 #define VMALLOC_VMADDR(x) ((unsigned long)(x))
 
+struct einkfb_vma_list_entry
+{
+	struct list_head list;
+	struct vm_area_struct *vma;
+};
+
 static struct page **einkfb_pages = NULL;
 static int num_einkfb_pages = 0;
 
@@ -29,12 +35,6 @@ static LIST_HEAD(vma_list);
     #pragma mark Local Utilities
     #pragma mark -
 #endif
-
-struct einkfb_vma_list_entry
-{
-	struct list_head list;
-	struct vm_area_struct *vma;
-};
 
 static int add_vma(struct vm_area_struct *vma)
 {
@@ -80,7 +80,7 @@ static int remove_vma(struct vm_area_struct *vma)
 	entry = einkfb_find_vma_entry(vma);
 	if ( entry )
 	{
-		list_del((struct list_head *) entry);
+		list_del((struct list_head *)entry);
 		kfree(entry);
 	}
 
@@ -89,7 +89,7 @@ static int remove_vma(struct vm_area_struct *vma)
 	return ( EINKFB_SUCCESS );
 }
 
-static struct page *vmalloc_2_page( void *addr)
+static struct page *vmalloc_2_page(void *addr)
 {
 	unsigned long lpage;
 	pgd_t *pgd;
@@ -139,45 +139,20 @@ static struct page *einkfb_vma_nopage(struct vm_area_struct *vma, unsigned long 
 	return ( page );
 }
 
-#if PRAGMAS
-    #pragma mark -
-    #pragma mark External Interfaces
-    #pragma mark -
-#endif
-
-struct vm_operations_struct einkfb_vma_ops =
-{
-	open:   einkfb_vma_open,
-	close:  einkfb_vma_close,
-	nopage: einkfb_vma_nopage,
-};
-
-int einkfb_mmap(FB_MMAP_PARAMS)
-{
-	vma->vm_ops = &einkfb_vma_ops;
-	vma->vm_flags |= VM_RESERVED;
-	einkfb_vma_open(vma);
-
-	return ( EINKFB_SUCCESS );
-}
-
-int einkfb_alloc_page_array()
+static int einkfb_alloc_page_array(size_t size, void *start)
 {
 	int result = EINKFB_FAILURE;
 
-	struct einkfb_info info;
-	einkfb_get_info(&info);
-	
-	num_einkfb_pages = (info.mem >> PAGE_SHIFT) + 1;
+	num_einkfb_pages = (size >> PAGE_SHIFT) + 1;
 
 	einkfb_pages = kmalloc(num_einkfb_pages * sizeof(struct page *), GFP_KERNEL);
 
     if ( einkfb_pages )
     {
         int i;
-
-        for (i = 0; (i << PAGE_SHIFT) < info.mem; i++)
-            einkfb_pages[i] =  vmalloc_2_page(info.start + (i << PAGE_SHIFT));
+        
+        for ( i = 0; (i << PAGE_SHIFT) < size; i++ )
+            einkfb_pages[i] =  vmalloc_2_page(start + (i << PAGE_SHIFT));
 
         sema_init(&vma_list_semaphore, 1);
 
@@ -187,7 +162,7 @@ int einkfb_alloc_page_array()
 	return ( result );
 }
 
-void einkfb_free_page_array(void)
+static void einkfb_free_page_array(void)
 {
     if ( einkfb_pages )
     {
@@ -196,20 +171,90 @@ void einkfb_free_page_array(void)
     }
 }
 
-void *einkfb_malloc(size_t size)
+struct vm_operations_struct einkfb_vma_ops =
+{
+	open:   einkfb_vma_open,
+	close:  einkfb_vma_close,
+	nopage: einkfb_vma_nopage,
+};
+
+#if PRAGMAS
+    #pragma mark -
+    #pragma mark External Interfaces
+    #pragma mark -
+#endif
+
+int einkfb_mmap(FB_MMAP_PARAMS)
+{
+    struct einkfb_info hal_info;
+    einkfb_get_info(&hal_info);
+    
+    if ( hal_info.dma )
+        dma_mmap_coherent(hal_info.fbinfo->device, vma, hal_info.start, hal_info.phys->addr,
+            hal_info.phys->size);
+    else
+    {
+        vma->vm_ops = &einkfb_vma_ops;
+        vma->vm_flags |= VM_RESERVED;
+
+        einkfb_vma_open(vma);
+    }
+
+	return ( EINKFB_SUCCESS );
+}
+
+void *einkfb_malloc(size_t size, einkfb_dma_addr_t *phys, bool mmap)
 {
     void *result = NULL;
     
     if ( size )
-        result = kmalloc( size, GFP_KERNEL);
+    {
+        if ( phys )
+        {
+            struct einkfb_info info;
+            einkfb_get_info(&info);
+
+	        result = dma_alloc_coherent(info.fbinfo->device, size, &phys->addr,
+	            GFP_DMA);
+	            
+	        if ( result )
+	            phys->size = size;
+        }
+        else
+        {
+            result = vmalloc(size);
+            
+            if ( result && mmap )
+            {
+                if ( EINKFB_FAILURE == einkfb_alloc_page_array(size, result) )
+                {
+                    vfree(result);
+                    result = NULL;
+                }
+            }
+        }
+    }
     
     return ( result );
 }
 
-void einkfb_free(void *ptr)
+void einkfb_free(void *ptr, einkfb_dma_addr_t *phys, bool mmap)
 {
     if ( ptr )
-        kfree(ptr);
+    {
+        if ( mmap )
+            einkfb_free_page_array();
+
+        if ( phys )
+        {
+            struct einkfb_info info;
+            einkfb_get_info(&info);
+	        
+	        dma_free_coherent(info.fbinfo->device, phys->size, ptr, phys->addr);
+	    }
+        else
+            vfree(ptr);
+    }
 }
 
 static void einkfb_memcpy_schedule(u8 *dst, const u8 *src, size_t dst_length, size_t src_length)
@@ -282,5 +327,7 @@ void einkfb_memset(void *destination, int value, size_t length)
         einkfb_memcpy_schedule((u8 *)destination, (u8 *)&value, length, 0);
 }
 
+EXPORT_SYMBOL(einkfb_malloc);
+EXPORT_SYMBOL(einkfb_free);
 EXPORT_SYMBOL(einkfb_memcpy);
 EXPORT_SYMBOL(einkfb_memset);

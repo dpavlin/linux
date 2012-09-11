@@ -40,6 +40,7 @@
 #include <asm/dma.h>
 #include <asm/arch/hardware.h>
 #include <asm/arch/mxc_uart.h>
+#include <asm/arch/clock.h>
 
 #if defined(CONFIG_SERIAL_MXC_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
@@ -48,6 +49,10 @@
 #define SERIAL_MXC_MINOR        16
 #define MXC_ISR_PASS_LIMIT      256
 #define UART_CREAD_BIT          256
+
+/* Power Management related defines */
+#define MXC_UART_IDLE_START	60000	/* Start off with a 60 second workqueue */
+#define MXC_UART_IDLE_THRESH	30000	/* Monitor UART activity every 30 seconds */
 
 /* IRDA minimum pulse duration in micro seconds */
 #define MIN_PULSE_DUR           2
@@ -60,6 +65,15 @@
  * Receive DMA sub-buffer size
  */
 #define RXDMA_BUFF_SIZE         128
+
+static int last_interrupt_count = 0;
+static int new_interrupt_count = 0;
+
+static void mxcuart_low_power(struct work_struct *work);
+static DECLARE_DELAYED_WORK(mxc_lp_work, mxcuart_low_power);
+static int mxc_uart_clock_gate = 0;     /* 1: Gate the uart_clk, 0: Do not gate */
+
+#define MXC_CCM_CGR0	(IO_ADDRESS(CCM_BASE_ADDR) + 0x20)
 
 /*!
  * This structure is used to store the information for DMA data transfer.
@@ -101,11 +115,93 @@ extern void config_uartdma_event(int port);
 
 static uart_mxc_port *mxc_ports[MXC_UART_NR];
 
+/*
+ * Modify the CGR0 to gate the uart_clk
+ */
+static void clk_gate_uart(void)
+{
+	unsigned int reg;
+	
+	reg = __raw_readl(MXC_CCM_CGR0);
+	reg &= 0xffcfffff;
+	__raw_writel(reg, MXC_CCM_CGR0);
+}
+
+/*
+ * Modify CGR0 to enable the uart_clk
+ */
+static void clk_enable_uart(void)
+{
+	unsigned int reg;
+
+	reg = __raw_readl(MXC_CCM_CGR0);
+	reg |= 0x300000;
+	__raw_writel(reg, MXC_CCM_CGR0);
+}
+
+/*
+ * Kick the uart out of gated state
+ */
+static void mxcuart_enable_clk(void)
+{
+	new_interrupt_count++;
+	clk_enable_uart();
+}
+
 /*!
  * This array holds the DMA channel information for each MXC UART
  */
 static dma_info dma_list[MXC_UART_NR];
 
+static void mxcuart_low_power(struct work_struct *work)
+{
+	uart_mxc_port *umxc = mxc_ports[0];
+
+	if (last_interrupt_count == new_interrupt_count) {
+		if (clk_get_usecount(umxc->clk) && mxc_uart_clock_gate) {
+			printk(KERN_ERR "uart: I def:clk gate::uart clk gated\n");
+			clk_gate_uart();
+		}
+	}
+	else {
+		last_interrupt_count = new_interrupt_count;
+		if (mxc_uart_clock_gate)
+			schedule_delayed_work(&mxc_lp_work, msecs_to_jiffies(MXC_UART_IDLE_THRESH));
+	}
+}
+
+/* Enable/disable the uart_clk gating */
+static ssize_t
+show_uart_clk_state(struct device *_dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", mxc_uart_clock_gate);
+}
+
+static ssize_t
+store_uart_clk_state(struct device *_dev, struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	int value;
+
+	if (sscanf(buf, "%d", &value) > 0) {
+		if ( (value > 0) && !mxc_uart_clock_gate) {
+			schedule_delayed_work(&mxc_lp_work,
+					msecs_to_jiffies(MXC_UART_IDLE_THRESH));
+			mxc_uart_clock_gate = 1;
+			printk(KERN_ERR "uart: I def:flag::writing a 1\n");
+		}
+		if ( (value <= 0) && mxc_uart_clock_gate) {
+			mxc_uart_clock_gate = 0;
+			cancel_rearming_delayed_work(&mxc_lp_work);
+			mxcuart_enable_clk();
+			printk(KERN_ERR "uart: I def:flag::writing a 0\n");
+		}
+		return strlen(buf);
+	}
+	return -EINVAL;
+}
+static DEVICE_ATTR(uart_clk_state, S_IRUGO|S_IWUSR, show_uart_clk_state, store_uart_clk_state);
+			
 /*!
  * This function is called by the core driver to stop UART transmission.
  * This might be due to the TTY layer indicating that the user wants to stop
@@ -222,6 +318,8 @@ static void mxcuart_start_tx(struct uart_port *port)
 	volatile unsigned int cr1;
 	mxc_dma_requestbuf_t writechnl_request;
 	int tx_num;
+
+	mxcuart_enable_clk();
 
 	cr1 = readl(port->membase + MXC_UARTUCR1);
 	/* Enable Transmitter rdy interrupt */
@@ -505,6 +603,8 @@ static irqreturn_t mxcuart_int(int irq, void *dev_id)
 	unsigned int pass_counter = MXC_ISR_PASS_LIMIT;
 	unsigned int term_cond = 0;
 	int handled = 0;
+
+	mxcuart_enable_clk();
 
 	sr1 = readl(umxc->port.membase + MXC_UARTUSR1);
 	sr2 = readl(umxc->port.membase + MXC_UARTUSR2);
@@ -805,6 +905,8 @@ static void mxcuart_break_ctl(struct uart_port *port, int break_state)
 {
 	volatile unsigned int cr1;
 	unsigned long flags;
+
+	mxcuart_enable_clk();
 
 	spin_lock_irqsave(&port->lock, flags);
 	cr1 = readl(port->membase + MXC_UARTUCR1);
@@ -1795,6 +1897,8 @@ static int mxcuart_suspend(struct platform_device *pdev, pm_message_t state)
 		writel(MXC_UARTUCR1_RTSDEN, umxc->port.membase + MXC_UARTUCR1);
 		gpio_uart_active(umxc->port.line, umxc->ir_mode);
 	}
+	cancel_rearming_delayed_work(&mxc_lp_work);
+	mxcuart_enable_clk();
 
 	return 0;
 }
@@ -1824,7 +1928,7 @@ static int mxcuart_resume(struct platform_device *pdev)
 		gpio_uart_inactive(umxc->port.line, umxc->ir_mode);
 	}
 	uart_resume_port(&mxc_reg, &umxc->port);
-
+	schedule_delayed_work(&mxc_lp_work, msecs_to_jiffies(MXC_UART_IDLE_THRESH));
 	return 0;
 }
 
@@ -1863,6 +1967,12 @@ static int mxcuart_probe(struct platform_device *pdev)
 		uart_add_one_port(&mxc_reg, &mxc_ports[id]->port);
 		platform_set_drvdata(pdev, mxc_ports[id]);
 		pdev->dev.power.can_wakeup = 1;
+
+		if (id == 0) {
+			if (device_create_file(mxc_ports[id]->port.dev,
+					&dev_attr_uart_clk_state) < 0)
+				printk(KERN_ERR "MXC Uart: Error creating uart_clk_state file\n");
+		}
 	}
 	return 0;
 }
@@ -1884,6 +1994,8 @@ static int mxcuart_remove(struct platform_device *pdev)
 
 	if (umxc) {
 		uart_remove_one_port(&mxc_reg, &umxc->port);
+		if (pdev->id == 0)
+			device_remove_file(umxc->port.dev, &dev_attr_uart_clk_state);
 	}
 	return 0;
 }
@@ -1921,6 +2033,8 @@ static int __init mxcuart_init(void)
 			uart_unregister_driver(&mxc_reg);
 		}
 	}
+	mxc_uart_clock_gate = 1;	/* Turn on clock gating by default */
+	schedule_delayed_work(&mxc_lp_work, msecs_to_jiffies(MXC_UART_IDLE_START));
 	return ret;
 }
 

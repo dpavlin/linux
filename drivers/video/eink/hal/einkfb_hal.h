@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal.h -- eInk frame buffer device HAL definitions
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2009 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -15,6 +15,7 @@
 #include <asm/uaccess.h>
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/dma-mapping.h>
 #include <linux/errno.h>
 #include <linux/fb.h>
 #include <linux/init.h>
@@ -36,90 +37,6 @@
 #include <linux/syscalls.h>
 #include <linux/timer.h>
 #include <linux/vmalloc.h>
-
-#ifdef CONFIG_ARCH_FIONA    //------------- Fiona (Linux 2.6.10) Build
-
-#include <asm/arch/fiona.h>
-#include "llog.h"
-
-enum bool
-{
-        false = 0,
-        true
-};
-typedef enum bool bool;
-
-#define __INIT_DATA     __initdata
-#define __INIT_CODE     __init
-
-#define FB_DSHOW_PARAMS struct device *dev, char *buf
-#define FB_DSTOR_PARAMS struct device *dev, const char *buf, size_t count
-#define FB_IOCTL_PARAMS struct inode *inode, struct file *file, unsigned int cmd, unsigned long arg, struct fb_info *info
-#define FB_MMAP_PARAMS  struct fb_info *info, struct file *file, struct vm_area_struct *vma
-
-#ifdef  _EINKFB_HAL_MAIN
-#define FB_FILLRECT     cfb_fillrect
-#define FB_COPYAREA     cfb_copyarea
-#define FB_IMAGEBLIT    cfb_imageblit
-
-#define REBOOT_PRIORITY FIONA_REBOOT_EINK_FB
-
-#define FB_PROBE_PARAM  struct device *device
-#define FB_PROBE_INIT   struct platform_device *dev = to_platform_device(device);
-#define FB_SETDRVDATA() dev_set_drvdata(&dev->dev, info)
-
-#define FB_REMOVE_PARAM FB_PROBE_PARAM
-#define FB_GETDRVDATA() dev_get_drvdata(device)
-
-#define FB_SUSPEND_PARM struct device *dev, u32 state, u32 level
-#define FB_RESUME_PARAM struct device *dev, u32 level
-
-#define FB_DRVREG(d)    driver_register(d)
-#define FB_DRVUNREG(d)  driver_unregister(d)
-
-#define FB_PLATREG(d)   platform_device_register(d)
-#define FB_PLATFREE(d)  d = NULL
-
-#define FB_PLATALLOC(d, n)                              \
-static struct platform_device EINKFB_DEVICE =           \
-{                                                       \
-    .name	= n,                                        \
-    .id	    = 0,                                        \
-    .dev	=                                           \
-    {                                                   \
-        .release = einkfb_platform_release,             \
-    }                                                   \
-};                                                      \
-d = &EINKFB_DEVICE
-
-#define FB_DRIVER(d, n, p, r)                           \
-static struct device_driver d =                         \
-{                                                       \
-    .name    = n,                                       \
-    .bus     = &platform_bus_type,                      \
-    .probe   = p,                                       \
-    .remove  = r,                                       \
-    .suspend = einkfb_suspend,                          \
-	.resume  = einkfb_resume                            \
-}
-
-static void einkfb_platform_release(struct device *device)
-{
-}
-
-#define FB_ROUNDUP(a, b) (a)
-
-#endif  // _EINKFB_HAL_MAIN
-
-#define FB_DEVICE_CREATE_FILE(d, f)                     \
-    device_create_file(d, f)
-
-#define	FB_GET_CLOCK_TICKS()                            OSCR
-
-#define FB_DECLARE_WORK(n, f)                           DECLARE_WORK(n, f, NULL)
-#define FB_WORK_PARAM                                   void *unused
-
-#else   // -------------------------------- Mario (Linux 2.6.22) Build
 
 #include <asm/arch/board_id.h>
 #include <linux/platform_device.h>
@@ -159,7 +76,9 @@ static void einkfb_platform_release(struct device *device)
     d = NULL
 
 #define FB_PLATALLOC(d, n)                              \
-    d = platform_device_alloc(n, 0)
+    d = platform_device_alloc(n, 0);                    \
+    if ( d )                                            \
+        d->dev.coherent_dma_mask = 0xFFFFFFFF
 
 #define FB_DRIVER(d, n, p, r)                           \
 static struct platform_driver d =                       \
@@ -190,8 +109,6 @@ static struct platform_driver d =                       \
 
 #define FB_DECLARE_WORK(n, f)                           DECLARE_WORK(n, f)
 #define FB_WORK_PARAM                                   struct work_struct *unused
-
-#endif  // --------------------------------
 
 #include <asm/types.h>
 #include <linux/einkfb.h>
@@ -323,8 +240,13 @@ extern unsigned long einkfb_logging;
 #define EINKFB_8BPP             EINK_8BPP
 #define EINKFB_BPP_MAX          EINK_BPP_MAX
 
-#define EINKFB_WHITE            EINK_WHITE  // For whacking all the pixels in a...
-#define EINKFB_BLACK            EINK_BLACK  // ...byte (8, 4, 2, or 1) at once.
+#define EINKFB_WHITE            EINK_WHITE
+#define EINKFB_BLACK            EINK_BLACK
+
+#define einkfb_white(b)         eink_white(b)
+#define einkfb_black(b)         eink_black(b)
+
+#define einkfb_pixels(b, p)     eink_pixels(b, p)
 
 #define EINKFB_ORIENT_LANDSCAPE EINK_ORIENT_LANDSCAPE
 #define EINKFB_ORIENT_PORTRAIT  EINK_ORIENT_PORTRAIT
@@ -352,6 +274,12 @@ extern unsigned long einkfb_logging;
 #define EINKFB_MEMCPYUF(d,s,l)  einkfb_memcpy(EINKFB_IOCTL_FROM_USER, EINKFB_IOCTL_USER, d, s, l)
 #define EINKFB_MEMCPYUT(d,s,l)  einkfb_memcpy(EINKFB_IOCTL_TO_USER, EINKFB_IOCTL_USER, d, s, l)
 #define EINKFB_MEMCPYK(d,s,l)   einkfb_memcpy(EINKFB_KERNEL_MEMCPY, EINKFB_IOCTL_KERN, d, s, l)
+
+#define EINKFB_MALLOC_HAL(s, a) einkfb_malloc((s), (a), true)
+#define EINKFB_FREE_HAL(p, a)   einkfb_free((p), (a), true)
+
+#define EINKFB_MALLOC_MOD(s, a) einkfb_malloc((s), (a), false)
+#define EINKFB_FREE_MOD(p, a)   einkfb_free((p), (a), false)
 
 #define DEVICE_MODE_RW			(S_IWUGO | S_IRUGO)
 #define DEVICE_MODE_R		    S_IRUGO
@@ -405,6 +333,8 @@ extern unsigned long einkfb_logging;
 //
 #define HAL_SW_INIT(v, f)       (hal_ops.hal_sw_init ? hal_ops.hal_sw_init(v, f) : EINKFB_FAILURE)
 #define HAL_SW_DONE()           if (hal_ops.hal_sw_done) hal_ops.hal_sw_done()
+
+#define HAL_NEEDS_DMA()         (hal_ops.hal_needs_dma_buffer ? hal_ops.hal_needs_dma_buffer() : false)
 
 #define FULL_BRINGUP            true  // Bring hardware up from scratch.
 #define DONT_BRINGUP            false // Do minimal hardware bring-up (e.g., avoid disturbing the screen).
@@ -504,10 +434,31 @@ struct einkfb_hal_ops_t
     //
     bool (*hal_set_display_orientation)(orientation_t orientation);
     orientation_t (*hal_get_display_orientation)(void);
+    
+    // Optional operation:  If the controller needs a DMA-capable buffer, it should return
+    // true when this call is made.
+    //
+    // Note:  This call will be made very early, so the module shouldn't do much here except
+    //        say whether it uses DMA or not.  It will be called after the hal_sw_init call
+    //        is made and before the hal_hw_init call is made.
+    //
+    bool (*hal_needs_dma_buffer)(void);
 };
 typedef struct einkfb_hal_ops_t einkfb_hal_ops_t;
 
+#define INIT_EINKFB_OPS_T() { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, \
+                              NULL, NULL, NULL, NULL, NULL, NULL, NULL }
+
 extern einkfb_hal_ops_t hal_ops;
+
+struct einkfb_dma_addr_t
+{
+    dma_addr_t             addr;    // phys address
+    unsigned long          size;    // phys size
+};
+typedef struct einkfb_dma_addr_t einkfb_dma_addr_t;
+
+#define INIT_EINKFB_DMA_ADDR_T() { 0, 0 }
 
 // For use with einkfb_get_info().
 //
@@ -534,7 +485,13 @@ struct einkfb_info
     
     unsigned long          jif_on,  // jiffie tick at last power-on
                            align;   // byte alignment if not based on bpp
+                           
+    bool                   dma;     // buffer's allocated for DMA use
+    einkfb_dma_addr_t      *phys;   // DMA-capable address space
 };
+
+#define EINKFB_PHYS_VFB_OFFSET(i)   (dma_addr_t)(i.mem/3)
+#define EINKFB_PHYS_BUF_OFFSET(i)   (dma_addr_t)((i.mem/3) << 1)
 
 // For use with einkfb_set_info_hook().
 //
@@ -604,6 +561,9 @@ extern void einkfb_set_jif_on(unsigned long jif_on);
 extern void einkfb_set_reboot_behavior(reboot_behavior_t behavior);
 extern reboot_behavior_t einkfb_get_reboot_behavior(void);
 
+extern void einkfb_set_sleep_behavior(sleep_behavior_t behavior);
+extern sleep_behavior_t einkfb_get_sleep_behavior(void);
+
 extern void einkfb_set_reboot_hook(einkfb_reboot_hook_t reboot_hook);
 extern void einkfb_set_suspend_resume_hook(einkfb_suspend_resume_hook_t suspend_resume_hook);
 
@@ -659,11 +619,8 @@ extern void einkfb_remove_proc_entries(void);
 //
 extern int  einkfb_mmap(FB_MMAP_PARAMS);
 
-extern int  einkfb_alloc_page_array(void);
-extern void einkfb_free_page_array(void);
-
-extern void *einkfb_malloc(size_t size);
-extern void einkfb_free(void *ptr);
+extern void *einkfb_malloc(size_t size, einkfb_dma_addr_t *phys, bool mmap);
+extern void einkfb_free(void *ptr, einkfb_dma_addr_t *phys, bool mmap);
 
 extern int  einkfb_memcpy(bool direction, unsigned long flag, void *destination, const void *source, size_t length);
 extern void einkfb_memset(void *destination, int value, size_t length);
@@ -710,5 +667,11 @@ extern int einkfb_events_release(struct inode *inode, struct file *file);
 
 extern ssize_t einkfb_events_read(struct file *file, char *buf, size_t count, loff_t *ofs);
 extern unsigned int einkfb_events_poll(struct file *file, poll_table *wait);
+
+// From system.c
+//
+extern void eink_doze_enable(int enable);
+#define EINKFB_DOZE_DISABLE(p)  if (einkfb_power_level_on == (p)) eink_doze_enable(0)
+#define EINKFB_DOZE_ENABLE(p)   if (einkfb_power_level_on != (p)) eink_doze_enable(1)
 
 #endif // _EINKFB_HAL_H

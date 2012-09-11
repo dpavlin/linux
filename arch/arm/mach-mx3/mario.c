@@ -2,6 +2,8 @@
  *  Copyright (C) 2000 Deep Blue Solutions Ltd
  *  Copyright (C) 2002 Shane Nay (shane@minirl.com)
  *  Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
+ *  Copyright 2008-2009 Amazon Technologies , Inc. All Rights Reserved.
+ *  Manish Lachwani (lachwani@lab126.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -711,13 +713,9 @@ static void __init mxc_init_pmic_audio(void)
 	pll_clk = clk_get(NULL, "mcu_pll");
 	ssi_clk = clk_get(NULL, "ssi_clk.0");
 	clk_set_parent(ssi_clk, pll_clk);
-	clk_enable(ssi_clk);
-	clk_put(ssi_clk);
 
 	ssi_clk = clk_get(NULL, "ssi_clk.1");
 	clk_set_parent(ssi_clk, pll_clk);
-	clk_enable(ssi_clk);
-	clk_put(ssi_clk);
 	clk_put(pll_clk);
 
 	gpio_activate_audio_ports();

@@ -480,8 +480,13 @@ extern unsigned int LLOG_G_LOG_MASK;
 	#define LTP_TEST_NAME "nonamegiven"
 #endif
 
-#define _LTPMSG_PRINT( kern_level, test_case_name, instance_num, status_type, format, ... ) \
+#ifndef __KERNEL__
+   #define _LTPMSG_PRINT( kern_level, test_case_name, instance_num, status_type, format, ... ) \
+	printf( test_case_name " " instance_num " " status_type " : " format "\n", ##__VA_ARGS__ )
+#else
+   #define _LTPMSG_PRINT( kern_level, test_case_name, instance_num, status_type, format, ... ) \
 	printk( kern_level test_case_name " " instance_num " " status_type " : " format "\n", ##__VA_ARGS__ )
+#endif
 
 #define _LTPMSG_CHK( kern_level, test_case_name, instance_num, status_type, format, ... ) \
 	if (strchr(test_case_name, ' ')) \

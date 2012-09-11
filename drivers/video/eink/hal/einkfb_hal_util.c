@@ -743,7 +743,7 @@ void einkfb_display_grayscale_ramp(void)
         // Blit the appropriate gray into the framebuffer for
         // this row.
         //
-        row_gray = gray_table ? gray_table[row] : (u8)row;
+        row_gray = gray_table ? gray_table[row] : einkfb_pixels(info.bpp, (u8)row);
         row_size = row_bytes * height;
         
         einkfb_memset(row_start, row_gray, row_size);
@@ -931,7 +931,7 @@ void einkfb_restore_display(fx_type update_mode)
 void einkfb_clear_display(fx_type update_mode)
 {
     struct einkfb_info info; einkfb_get_info(&info);
-    einkfb_memset(info.start, EINKFB_WHITE, info.size);
+    einkfb_memset(info.start, einkfb_white(info.bpp), info.size);
     
     einkfb_update_display(update_mode);
 }

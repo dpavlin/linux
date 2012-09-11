@@ -172,7 +172,8 @@ static void mx31_serial_board_numbers(void)
 	}
 	mx31_pcb_id[j] = '\0';
 
-	printk ("MX31 Serial Number - %s\n", mx31_serial_number);
+	// Removed per official request to rid the log of FSN 
+	//printk ("MX31 Serial Number - %s\n", mx31_serial_number);
 	printk ("MX31 Board id - %s\n", mx31_board_id);
 	printk ("MX31 Panel id - %s\n", mx31_panel_id);
 	printk ("MX31 PCB id - %s\n", mx31_pcb_id);

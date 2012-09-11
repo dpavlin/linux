@@ -113,6 +113,16 @@ enum {
 /* EMAC defines how many samples are included in EMA calculation */
 #define DVFS_EMAC		(0x20 << MXC_CCM_LTR2_EMAC_OFFSET)
 
+#ifdef CONFIG_MACH_MARIO_MX
+
+#define WDOG_RST_LSH	0
+#define USB_RST_LSH	1
+#define PMIC_PC_LSH	2
+
+u32 saved_last_seconds=0;
+EXPORT_SYMBOL(saved_last_seconds);
+#endif
+
 const static u8 ltr_gp_weight[] = {
 	0,			/* 0 */
 	0,
@@ -331,36 +341,50 @@ static void stop_dvfs(void)
 void pmic_voltage_init(void)
 {
 	t_regulator_voltage volt;
+#ifdef CONFIG_MACH_MARIO_MX
 	unsigned int reg;
 	unsigned int reg_memory_a;
+	unsigned int regA = 0, regB = 0;
 
 	reg = __raw_readl(MXC_CCM_RCSR);
+	printk(KERN_ERR "RCSR register - %x\n", reg);
 
 	if (reg & 0x2) {
-		/* Clear out MEMA */
-		pmic_write_reg(REG_MEMORY_A, 0, 0xffffffff);
+		/* Clear out bit #0 */
+		pmic_write_reg(REG_MEMORY_A, (0 << WDOG_RST_LSH), (1 << WDOG_RST_LSH));
 		/* Turn on bit #0 */
-		pmic_write_reg(REG_MEMORY_A, (1 << 0), (1 << 0));
-
+		pmic_write_reg(REG_MEMORY_A, (1 << WDOG_RST_LSH), (1 << WDOG_RST_LSH));
 		printk(KERN_ERR "boot: I def:wdrbt::Previous reset was a watchdog ... rebooting\n");
 		kernel_restart(NULL);
 	}
 
-	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << 0));
-
+	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << WDOG_RST_LSH));
 	if (reg_memory_a & 0x1) {
-		/* Clear out MEMA */
-		pmic_write_reg(REG_MEMORY_A, 0, 0xffffffff);
+		/* Clear out bit #0 */
+		pmic_write_reg(REG_MEMORY_A, (0 << WDOG_RST_LSH), (1 << WDOG_RST_LSH));
 		printk(KERN_ERR "boot: I def:wdrst::Watchdog Reset Encountered\n");
 	}
 
-	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << 1));
+	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << USB_RST_LSH));
 	if (reg_memory_a & 0x2) {
-		/* Clear out MEMA */
-		pmic_write_reg(REG_MEMORY_A, 0, 0xffffffff);
+		/* Clear out bit #1 */
+		pmic_write_reg(REG_MEMORY_A, (0 << USB_RST_LSH), (1 << USB_RST_LSH));
 		printk(KERN_ERR "boot: I def:usbhost::USB Host Detection restart\n");
 	}
 
+	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << PMIC_PC_LSH));
+	if (reg_memory_a & 0x4) {
+		/* Clear out MEMA - bit #2 */
+		pmic_write_reg(REG_MEMORY_A, (0 << 2), (1 << PMIC_PC_LSH));
+		printk(KERN_ERR "boot: I def:pcut::Atlas power cut encountered\n");
+	}
+
+	/* Get the last good saved seconds */
+	pmic_read_reg(REG_MEMORY_A, &regA, (0xff << 16));
+	pmic_read_reg(REG_MEMORY_B, &regB, 0x00ffffff);
+
+	saved_last_seconds = (regA << 8)| regB;
+#endif
 	/* Enable 4 mc13783 output voltages */
 	pmic_write_reg(REG_ARBITRATION_SWITCHERS, (1 << 5), (1 << 5));
 

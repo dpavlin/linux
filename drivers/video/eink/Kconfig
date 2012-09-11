@@ -27,10 +27,6 @@ config FB_EINK_SHIM
     tristate "eink Shim Driver (Legacy-to-HAL Bridge)"
     depends on FB_EINK
     
-config FB_EINK_PNLCD
-    tristate "eInk PNLCD Emulator"
-    depends on FB_EINK
-
 config FB_EINK_HAL
     tristate "eink HAL Umbrella Config"
     depends on FB_EINK
@@ -39,24 +35,8 @@ config FB_EINK_HAL_EMULATOR
     tristate "eInk HAL Driver for the Emulator"
     depends on FB_EINK_HAL
     
-config FB_EINK_HAL_APOLLO
-    tristate "eInk HAL Driver for the Apollo Controller"
-    depends on FB_EINK_HAL && ARCH_FIONA
-
-config FB_EINK_HAL_STEPHANIE
-    tristate "eInk HAL Driver for the Stephanie Controller"
-    depends on FB_EINK_HAL && ARCH_FIONA
-
-config FB_EINK_HAL_EIGHTRACK
-    tristate "eInk HAL Driver for the 8-Track Controller"
-    depends on FB_EINK_HAL && ARCH_FIONA
-
 config FB_EINK_HAL_BROADSHEET
     tristate "eInk HAL Driver for the Broadsheet Controller"
-    depends on FB_EINK_HAL && ARCH_MXC
-
-config FB_EINK_HAL_ISIS
-    tristate "eInk HAL Driver for the ISIS Controller"
     depends on FB_EINK_HAL && ARCH_MXC
 
 #

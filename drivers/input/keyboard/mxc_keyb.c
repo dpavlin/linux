@@ -119,6 +119,13 @@ static short **release_scancode;
 static const unsigned short *mxckpd_keycodes;
 static unsigned short mxckpd_keycodes_size;
 
+/*!
+ * Keycode press counters
+ */
+#define MAX_CODES 256
+static int keycode_count[MAX_CODES];
+
+
 #define press_left_code     30
 #define press_right_code    29
 #define press_up_code       28
@@ -210,6 +217,10 @@ void report_event(struct input_dev *dev, unsigned int type, unsigned int code, i
 	   {
 		LLOG_ERROR("uevent", "", "Keyboard failed to send uevent\n" );
 	   }
+	   // Increment keycode counter
+	   if ((code >= 0) && (code < MAX_CODES)) {
+	      keycode_count[code]++;
+	   }
 	}
 }
 
@@ -239,6 +250,10 @@ static void input_repeat_key(unsigned long data)
  * Do mapping for Nell top-row keys which are numeric when ALT is pressed
  */
 unsigned int nell_alt_convert(unsigned int keycode) {
+	if ((kb_rev != KB_REV_NELL) && (kb_rev != KB_REV_NELL_EVT1)) {
+	   return  keycode;
+	}
+	
 	switch (keycode) {
 	case KEY_Q:
 	   return KEY_1;
@@ -496,6 +511,7 @@ static int mxc_kpp_scan_matrix(void)
 	               mxckbd_dev->rep[REP_DELAY] = repeat_delay;
 	               // Get the keycode from the mapping
                        keycode = mxckpd_keycodes[scancode];
+                       nell_alt_keycode = nell_alt_convert(keycode);
 
                        //Did the timer expire and we are still in the "Sticky ALT" state?
                        if (ALT_state == AltStateSticky && end_sticky != sticky_alt_jiffies && time_after(jiffies, end_sticky)) {
@@ -505,18 +521,16 @@ static int mxc_kpp_scan_matrix(void)
                        // ALT key state machine - press
                        switch (ALT_state) {
                        case AltStateStart:
-                          if ((keycode == KEY_LEFTALT) &&
-                              (kb_rev == KB_REV_NELL)) {
+                          if (keycode == KEY_LEFTALT) {
                              // First press of ALT; no codes sent; change state
                              ALT_state = AltStateFirstDown;
                           }
                           else {
-	                     // Not ALT or no Nell; send the appropriate keycode
+	                     // Not ALT; send the appropriate keycode
 	                     report_event(mxckbd_dev, EV_KEY, keycode, 1);
                           }
                        break;
                        case AltStateFirstDown:
-	                  nell_alt_keycode = nell_alt_convert(keycode);
 	                  if (keycode == nell_alt_keycode) {
 	                     // Not a special Nell numeric ALT+key
 	                     // Send the ALT key we had previously detected
@@ -529,7 +543,6 @@ static int mxc_kpp_scan_matrix(void)
                           ALT_state = AltStateDown;
                        break;
                        case AltStateDown:
-	                  nell_alt_keycode = nell_alt_convert(keycode);
 	                  if (keycode != nell_alt_keycode) {
 	                     // This is a special Nell numeric ALT+key
 	                     // Send a fake ALT release before sending
@@ -554,7 +567,6 @@ static int mxc_kpp_scan_matrix(void)
                              ALT_state = AltStateFirstDown;
                           }
                           else {
-	                     nell_alt_keycode = nell_alt_convert(keycode);
 	                     if (keycode == nell_alt_keycode) {
 	                        // Not a special Nell numeric ALT+key
 	                        // Send the ALT key we had previously detected
@@ -617,12 +629,12 @@ static int mxc_kpp_scan_matrix(void)
 	               scancode = release_scancode[row][col]- MXC_KEYRELEASE;
 	               // Get the keycode from the mapping
 	               keycode = mxckpd_keycodes [scancode];
-
+	               nell_alt_keycode = nell_alt_convert(keycode);
+	               
                        // ALT key state machine - release
                        switch (ALT_state) {
                        case AltStateStart:
                           // Send the key release event; no state change
-	                  nell_alt_keycode = nell_alt_convert(keycode);
 	                  report_event(mxckbd_dev, EV_KEY, keycode, 0);
 	                  report_event(mxckbd_dev, EV_KEY, nell_alt_keycode, 0);
                        break;
@@ -640,7 +652,6 @@ static int mxc_kpp_scan_matrix(void)
 	                  }
                        break;
                        case AltStateDown:
-	                  nell_alt_keycode = nell_alt_convert(keycode);
 	                  if (keycode == KEY_LEFTALT) {
 	                     // Released ALT key
 	                     report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 0);
@@ -1072,6 +1083,17 @@ ssize_t keypad_proc_write( struct file *filp, const char __user *buff,
 	 report_event(mxckbd_dev, EV_KEY, keycode, 0);
       }
    }
+   else if ( !strncmp(command, "keycnt", 6) ) {
+      // Requested the key-pressed count for selected keycodes
+      LLOG_INFO("keycnt_home", "HOME_keycount=%d", "\n", keycode_count[KEY_KPSLASH]);
+      LLOG_INFO("keycnt_menu", "MENU_keycount=%d", "\n", keycode_count[KEY_MENU]);
+      LLOG_INFO("keycnt_back", "BACK_keycount=%d", "\n", keycode_count[KEY_HIRAGANA]);
+      LLOG_INFO("keycnt_next_left", "NEXT_LEFT_keycount=%d", "\n", keycode_count[KEY_PAGEUP]);
+      LLOG_INFO("keycnt_next_right", "NEXT_RIGHT_keycount=%d", "\n", keycode_count[KEY_YEN]);
+      LLOG_INFO("keycnt_prev", "PREV_keycount=%d", "\n", keycode_count[KEY_PAGEDOWN]);
+      LLOG_INFO("keycnt_font", "FONT_keycount=%d", "\n", keycode_count[KEY_KATAKANA]);
+      LLOG_INFO("keycnt_sym", "SYM_keycount=%d", "\n", keycode_count[KEY_MUHENKAN]);
+   }
    else if ( !strncmp(command, "debug", 5) ) {
       // Requested to set debug level
       sscanf(command, "debug %d", &debug);
@@ -1303,6 +1325,11 @@ static int mxc_kpp_probe(struct platform_device *pdev)
 	}
 	memset(cur_rcmap, 0, kpp_dev.kpp_rows * sizeof(cur_rcmap[0]));
 	memset(prev_rcmap, 0, kpp_dev.kpp_rows * sizeof(prev_rcmap[0]));
+
+	// Initialize key press counters
+	for (i = 0; i < MAX_CODES; i++) {
+		keycode_count[i] = 0;
+	}
 
 	keypad_lock = false;
 	/* Initialize the polling timer */

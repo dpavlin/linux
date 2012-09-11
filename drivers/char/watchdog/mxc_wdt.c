@@ -6,7 +6,8 @@
  * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
  * 2005 (c) MontaVista Software, Inc.  All Rights Reserved.
  *
- * Copyright (c) 2008 lachwani@lab126.com Lab126, Inc.
+ * Copyright 2009 Amazon Technologies, Inc. All Rights Reserved.
+ * Manish Lachwani (lachwani@lab126.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -57,6 +58,7 @@
 #include <linux/interrupt.h>
 #include <linux/moduleparam.h>
 #include <linux/clk.h>
+#include <linux/timer.h>
 
 #include <asm/io.h>
 #include <asm/uaccess.h>
@@ -71,6 +73,7 @@
 #define WDOG_SEC_TO_COUNT(s)  (((s * 2) + 1) << 8)
 #define WDOG_COUNT_TO_SEC(c)  (((c >> 8) - 1) / 2)
 
+#define WATCHDOG_PING_THRESHOLD	10	/* 10 second refresh rate */
 static u32 wdt_base_reg;
 static int mxc_wdt_users;
 static struct clk *mxc_wdt_clk;
@@ -80,6 +83,9 @@ module_param(timer_margin, uint, 0);
 MODULE_PARM_DESC(timer_margin, "initial watchdog timeout (in seconds)");
 
 static unsigned dev_num = 0;
+
+static void do_watchdog_timer(unsigned long unused);
+static struct timer_list wdt_timer;
 
 /*
  * TESTING ONLY
@@ -100,6 +106,12 @@ static void mxc_wdt_ping(u32 base)
 	/* issue the service sequence instructions */
 	__raw_writew(WDT_MAGIC_1, base + MXC_WDT_WSR);
 	__raw_writew(WDT_MAGIC_2, base + MXC_WDT_WSR);
+}
+
+static void do_watchdog_timer(unsigned long unused)
+{
+	mxc_wdt_ping(wdt_base_reg);
+	mod_timer(&wdt_timer, jiffies + WATCHDOG_PING_THRESHOLD*HZ);
 }
 
 static void mxc_wdt_config(u32 base)
@@ -324,6 +336,16 @@ static int __init mxc_wdt_probe(struct platform_device *pdev)
 	pr_info("MXC Watchdog # %d Timer: initial timeout %d sec\n", dev_num,
 		timer_margin);
 
+	mxc_wdt_config(wdt_base_reg);
+	mxc_wdt_set_timeout(wdt_base_reg);
+	mxc_wdt_enable(wdt_base_reg);
+	mxc_wdt_ping(wdt_base_reg);
+
+	init_timer(&wdt_timer);	
+	wdt_timer.function = do_watchdog_timer;
+	mod_timer(&wdt_timer, jiffies + WATCHDOG_PING_THRESHOLD*HZ);
+	pr_info("MXC Watchdog: Started %d second watchdog refresh\n", WATCHDOG_PING_THRESHOLD);
+
 	ret = device_create_file(&pdev->dev, &dev_attr_mxc_wdt_timeout);
 	return 0;
 
@@ -338,6 +360,7 @@ static void mxc_wdt_shutdown(struct platform_device *pdev)
 	struct resource *res = platform_get_drvdata(pdev);
 	mxc_wdt_disable(res->start);
 	pr_info("MXC Watchdog # %d shutdown\n", dev_num);
+	del_timer_sync(&wdt_timer);
 }
 
 static int __exit mxc_wdt_remove(struct platform_device *pdev)
@@ -347,11 +370,35 @@ static int __exit mxc_wdt_remove(struct platform_device *pdev)
 	release_resource(mem);
 	pr_info("MXC Watchdog # %d removed\n", dev_num);
 	device_remove_file(&pdev->dev, &dev_attr_mxc_wdt_timeout);
+	del_timer_sync(&wdt_timer);
 	return 0;
 }
 
+#ifdef CONFIG_PM
+
+/*
+ * Cannot stop a running watchdog. The watchdog automatically stops counting
+ * in state retention mode. We just cancel the timer that pings
+ * the watchdog.
+ */
+static int mxc_wdt_suspend(struct platform_device *pdev, pm_message_t state)
+{
+	del_timer_sync(&wdt_timer);
+	return 0;
+}
+
+static int mxc_wdt_resume(struct platform_device *pdev)
+{
+	mod_timer(&wdt_timer, jiffies + WATCHDOG_PING_THRESHOLD*HZ);
+	return 0;
+}
+
+#else /* CONFIG_PM */
+
 #define	mxc_wdt_suspend	NULL
 #define	mxc_wdt_resume	NULL
+
+#endif /* CONFIG_PM */
 
 static struct platform_driver mxc_wdt_driver = {
 	.driver = {

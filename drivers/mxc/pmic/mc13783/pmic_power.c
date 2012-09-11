@@ -32,6 +32,10 @@
 static bool VBKUP1_EN = false;
 static bool VBKUP2_EN = false;
 
+#ifdef CONFIG_MACH_MARIO_MX
+#define PMIC_POWER_CUT_LSH	2
+#endif
+
 /*
  * Power Pmic API
  */
@@ -107,6 +111,15 @@ static int pmic_power_resume(struct platform_device *pdev)
 PMIC_STATUS pmic_power_off(void)
 {
 	unsigned int mask, value;
+
+#ifdef CONFIG_MACH_MARIO_MX
+	/*
+	 * Turn on bit #2 in MEMORY_A to indicate that a Atlas power cut
+	 * was invoked
+	 */
+	CHECK_ERROR(pmic_write_reg(REG_MEMORY_A,
+			(1 << PMIC_POWER_CUT_LSH), (1 << PMIC_POWER_CUT_LSH)));
+#endif
 
 	mask = BITFMASK(MC13783_PWRCTRL_USER_OFF_SPI);
 	value = BITFVAL(MC13783_PWRCTRL_USER_OFF_SPI,

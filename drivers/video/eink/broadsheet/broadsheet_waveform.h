@@ -28,7 +28,7 @@
 #define EINK_ADDR_FPL_SIZE              0x0014  // 1 byte  (0x32=5", 0x3C=6", 0x50=8", 0x61=9.7")
 #define EINK_ADDR_FPL_LOT               0x000E  // 2 bytes (little-endian)
 #define EINK_ADDR_ADHESIVE_RUN_NUM      0x0010  // 1 byte  (mode version when EINK_ADDR_FPL_PLATFORM is 0x03 or later)
-#define EINK_ADDR_MODE_VERSION          0x0010  // 1 byte  (0x01 -> 0 INIT, 1 DU, 2 GC16, 3 GC4)
+#define EINK_ADDR_MODE_VERSION          0x0010  // 1 byte  (0x00=MU/GU/GC/PU, 0x01=DU/GC4/GC16, 0x02=DU/GC4D/GC16/GC4)
 
 #define EINK_ADDR_WAVEFORM_VERSION      0x0011  // 1 byte  (BCD)
 #define EINK_ADDR_WAVEFORM_SUBVERSION   0x0012  // 1 byte  (BCD)

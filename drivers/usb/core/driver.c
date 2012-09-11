@@ -25,8 +25,19 @@
 #include <linux/device.h>
 #include <linux/usb.h>
 #include <linux/workqueue.h>
+#include <linux/clk.h>
+#include <asm/arch/clock.h>
 #include "hcd.h"
 #include "usb.h"
+
+/*
+ * This is the usb_ahb_clk. If the clock is gated while a USB
+ * suspend is invoked, the controller will hang.
+ */
+struct clk *usb_clk;
+
+/* Track status of the usb_clk */
+static int clken = 0;
 
 #ifdef CONFIG_HOTPLUG
 
@@ -170,6 +181,8 @@ static int usb_probe_device(struct device *dev)
 	udev->pm_usage_cnt = !(udriver->supports_autosuspend);
 
 	error = udriver->probe(udev);
+	usb_clk = clk_get(NULL, "usb_ahb_clk");
+
 	return error;
 }
 
@@ -1498,6 +1511,13 @@ static int usb_suspend(struct device *dev, pm_message_t message)
 {
 	if (!is_usb_device(dev))	/* Ignore PM for interfaces */
 		return 0;
+
+	/* If the refcnt on the clock is > 0, then the clk is already enabled */
+	if (!clk_get_usecount(usb_clk)) {
+		clk_enable(usb_clk);
+		clken++;
+	}
+
 	return usb_external_suspend_device(to_usb_device(dev), message);
 }
 
@@ -1507,6 +1527,13 @@ static int usb_resume(struct device *dev)
 
 	if (!is_usb_device(dev))	/* Ignore PM for interfaces */
 		return 0;
+
+	/* Gate the usb_clk only if it was enabled on suspend */
+	if (clken) {
+		clk_disable(usb_clk);
+		clken--;
+	}
+
 	udev = to_usb_device(dev);
 	if (udev->autoresume_disabled)
 		return -EPERM;

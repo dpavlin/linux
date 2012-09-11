@@ -2,6 +2,8 @@
   USB Driver for GSM modems
 
   Copyright (C) 2005  Matthias Urlichs <smurf@smurf.noris.de>
+  Copyright (C) 2009 Amazon Technlogies Inc., All Rights Reserved.
+  Manish Lachwani (lachwani@lab126.com)
 
   This driver is free software; you can redistribute it and/or modify
   it under the terms of Version 2 of the GNU General Public License as
@@ -65,6 +67,12 @@ static int  option_tiocmget(struct usb_serial_port *port, struct file *file);
 static int  option_tiocmset(struct usb_serial_port *port, struct file *file,
 				unsigned int set, unsigned int clear);
 static int  option_send_setup(struct usb_serial_port *port);
+
+static int option_suspend(struct usb_serial *serial, pm_message_t message);
+static int option_resume(struct usb_serial *serial);
+
+/* Wakeup the bus */
+extern void ehci_hcd_recalc_work(void);
 
 /* Vendor and product IDs */
 #define OPTION_VENDOR_ID			0x0AF0
@@ -191,6 +199,8 @@ static struct usb_driver option_driver = {
 	.name       = "option",
 	.probe      = usb_serial_probe,
 	.disconnect = usb_serial_disconnect,
+	.suspend    = usb_serial_suspend,
+	.resume     = usb_serial_resume,
 	.id_table   = option_ids,
 	.no_dynamic_id = 	1,
 };
@@ -226,6 +236,8 @@ static struct usb_serial_driver option_1port_device = {
 	.attach            = option_startup,
 	.shutdown          = option_shutdown,
 	.read_int_callback = option_instat_callback,
+	.suspend	   = option_suspend,
+	.resume		   = option_resume,
 };
 
 #ifdef CONFIG_USB_DEBUG
@@ -236,15 +248,8 @@ static int debug;
 
 /* per port private data */
 
-#ifdef CONFIG_USB_STATIC_IRAM
-/* Match the IRAM TD size and NTDs */
-#define N_IN_URB 16 /* Increase the number of buffers */
-#define IN_BUFLEN 4096
-#else
 #define N_IN_URB 4
 #define IN_BUFLEN 4096
-#endif
-
 #define N_OUT_URB 1
 #define OUT_BUFLEN 128
 
@@ -278,6 +283,7 @@ static int __init option_init(void)
 	if (retval)
 		goto failed_driver_register;
 
+	ehci_hcd_recalc_work();
 	dbg(DRIVER_DESC ": " DRIVER_VERSION);
 
 	return 0;
@@ -299,23 +305,27 @@ module_exit(option_exit);
 
 static void option_rx_throttle(struct usb_serial_port *port)
 {
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 }
 
 static void option_rx_unthrottle(struct usb_serial_port *port)
 {
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 }
 
 static void option_break_ctl(struct usb_serial_port *port, int break_state)
 {
 	/* Unfortunately, I don't know how to send a break */
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 }
 
 static void option_set_termios(struct usb_serial_port *port,
 			struct ktermios *old_termios)
 {
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 
 	option_send_setup(port);
@@ -363,6 +373,89 @@ static int option_ioctl(struct usb_serial_port *port, struct file *file,
 	return -ENOIOCTLCMD;
 }
 
+static void stop_read_write_urbs(struct usb_serial *serial)
+{
+        int i, j;
+        struct usb_serial_port *port;
+        struct option_port_private *portdata;
+
+        for (i = 0; i < serial->num_ports; ++i) {
+                port = serial->port[i];
+                portdata = usb_get_serial_port_data(port);
+                for (j = 0; j < N_IN_URB; j++)
+                        usb_kill_urb(portdata->in_urbs[j]);
+        }
+}
+
+/* 
+ * Device suspend
+ */
+static int option_suspend(struct usb_serial *serial, pm_message_t message)
+{
+	dbg("%s entered", __func__);
+	stop_read_write_urbs(serial);
+
+	return 0;
+}
+
+/*
+ * Device resume
+ */
+static int option_resume(struct usb_serial *serial)
+{
+	int err, i, j;
+	struct usb_serial_port *port;
+	struct urb *urb;
+	struct option_port_private *portdata;
+
+	dbg("%s entered", __func__);
+
+	/* get the interrupt URBs resubmitted unconditionally */
+	for (i = 0; i < serial->num_ports; i++) {
+		port = serial->port[i];
+		if (!port->interrupt_in_urb) {
+			dbg("%s: No interrupt URB for port %d\n", __func__, i);
+			continue;
+		}
+		port->interrupt_in_urb->dev = serial->dev;
+		err = usb_submit_urb(port->interrupt_in_urb, GFP_NOIO);
+		dbg("Submitted interrupt URB for port %d (result %d)", i, err);
+		if (err < 0) {
+			err("%s: Error %d for interrupt URB of port%d",
+				__func__, err, i);
+			return err;
+		}
+	}
+
+	for (i = 0; i < serial->num_ports; i++) {
+		/* walk all ports */
+		port = serial->port[i];
+		portdata = usb_get_serial_port_data(port);
+		mutex_lock(&port->mutex);
+
+		/* skip closed ports */
+		if (!port->open_count) {
+			mutex_unlock(&port->mutex);
+			continue;
+		}
+
+		for (j = 0; j < N_IN_URB; j++) {
+			urb = portdata->in_urbs[j];
+			err = usb_submit_urb(urb, GFP_NOIO);
+			if (err < 0) {
+				mutex_unlock(&port->mutex);
+				err("%s: Error %d for bulk URB %d",
+					__func__, err, i);
+				return err;
+			}
+		}
+
+		mutex_unlock(&port->mutex);
+	}
+
+	return 0;
+}
+
 /* Write */
 static int option_write(struct usb_serial_port *port,
 			const unsigned char *buf, int count)
@@ -375,6 +468,7 @@ static int option_write(struct usb_serial_port *port,
 
 	portdata = usb_get_serial_port_data(port);
 
+	ehci_hcd_recalc_work();
 	dbg("%s: write (%d chars)", __FUNCTION__, count);
 
 	i = 0;
@@ -429,6 +523,7 @@ static void option_indat_callback(struct urb *urb)
 	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
 
+	ehci_hcd_recalc_work();
 	dbg("%s: %p", __FUNCTION__, urb);
 
 	endpoint = usb_pipeendpoint(urb->pipe);
@@ -450,9 +545,10 @@ static void option_indat_callback(struct urb *urb)
 		/* Resubmit urb so we continue receiving */
 		if (port->open_count && urb->status != -ESHUTDOWN) {
 			err = usb_submit_urb(urb, GFP_ATOMIC);
-			if (err)
+			if (err) {
 				printk(KERN_ERR "%s: resubmit read urb failed. "
 					"(%d)", __FUNCTION__, err);
+			}
 		}
 	}
 	return;
@@ -462,6 +558,7 @@ static void option_outdat_callback(struct urb *urb)
 {
 	struct usb_serial_port *port;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 
 	port = (struct usb_serial_port *) urb->context;
@@ -476,6 +573,7 @@ static void option_instat_callback(struct urb *urb)
 	struct option_port_private *portdata = usb_get_serial_port_data(port);
 	struct usb_serial *serial = port->serial;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 	dbg("%s: urb %p port %p has data %p", __FUNCTION__,urb,port,portdata);
 
@@ -537,6 +635,7 @@ static int option_write_room(struct usb_serial_port *port)
 			data_len += OUT_BUFLEN;
 	}
 
+	ehci_hcd_recalc_work();
 	dbg("%s: %d", __FUNCTION__, data_len);
 	return data_len;
 }
@@ -555,6 +654,7 @@ static int option_chars_in_buffer(struct usb_serial_port *port)
 		if (this_urb && this_urb->status == -EINPROGRESS)
 			data_len += this_urb->transfer_buffer_length;
 	}
+	ehci_hcd_recalc_work();
 	dbg("%s: %d", __FUNCTION__, data_len);
 	return data_len;
 }
@@ -568,6 +668,7 @@ static int option_open(struct usb_serial_port *port, struct file *filp)
 
 	portdata = usb_get_serial_port_data(port);
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 
 	/* Set some sane defaults */
@@ -622,6 +723,7 @@ static void option_close(struct usb_serial_port *port, struct file *filp)
 	struct usb_serial *serial = port->serial;
 	struct option_port_private *portdata;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 	portdata = usb_get_serial_port_data(port);
 
@@ -650,6 +752,8 @@ static struct urb *option_setup_urb(struct usb_serial *serial, int endpoint,
 	if (endpoint == -1)
 		return NULL;		/* endpoint not needed */
 
+	ehci_hcd_recalc_work();
+
 	urb = usb_alloc_urb(0, GFP_KERNEL);		/* No ISO */
 	if (urb == NULL) {
 		dbg("%s: alloc for endpoint %d failed.", __FUNCTION__, endpoint);
@@ -671,6 +775,7 @@ static void option_setup_urbs(struct usb_serial *serial)
 	struct usb_serial_port *port;
 	struct option_port_private *portdata;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 
 	for (i = 0; i < serial->num_ports; i++) {
@@ -697,7 +802,9 @@ static int option_send_setup(struct usb_serial_port *port)
 {
 	struct usb_serial *serial = port->serial;
 	struct option_port_private *portdata;
+	int status = 0;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 
 	if (port->number != 0)
@@ -712,9 +819,17 @@ static int option_send_setup(struct usb_serial_port *port)
 		if (portdata->rts_state)
 			val |= 0x02;
 
-		return usb_control_msg(serial->dev,
+		status = usb_control_msg(serial->dev,
 				usb_rcvctrlpipe(serial->dev, 0),
 				0x22,0x21,val,0,NULL,0,USB_CTRL_SET_TIMEOUT);
+
+		(void) usb_control_msg(serial->dev, usb_sndctrlpipe(serial->dev, 0),
+				USB_REQ_SET_FEATURE, USB_RECIP_DEVICE,
+				USB_DEVICE_REMOTE_WAKEUP, 0,
+				NULL, 0,
+				USB_CTRL_SET_TIMEOUT);
+
+		return status;
 	}
 
 	return 0;
@@ -726,6 +841,7 @@ static int option_startup(struct usb_serial *serial)
 	struct usb_serial_port *port;
 	struct option_port_private *portdata;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 
 	/* Now setup per port private data */
@@ -758,6 +874,7 @@ static void option_shutdown(struct usb_serial *serial)
 	struct usb_serial_port *port;
 	struct option_port_private *portdata;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __FUNCTION__);
 
 	/* Stop reading/writing urbs */

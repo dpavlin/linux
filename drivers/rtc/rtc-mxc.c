@@ -1,5 +1,7 @@
 /*
  * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2009 Amazon Technologies, Inc. All Rights Reserved.
+ * Manish Lachwani (lachwani@lab126.com)
  */
 
 /*
@@ -135,6 +137,76 @@ struct rtc_plat_data {
 #define MXC_EXTERNAL_RTC_NONE	-2
 
 static struct device *mxc_rtc_dev;
+
+#define RTC_TIMER_THRESHOLD	30000	/* 30 seconds */
+static void do_rtc_work(struct work_struct *work);
+static DECLARE_DELAYED_WORK(rtc_work, do_rtc_work);
+
+/* The last good value of the rtc time */
+extern u32 saved_last_seconds;
+
+/*!
+ * Early charging
+ */
+#define PMIC_ICHRG_DEFAULT_VALUE	0x3	/* Max current draw of 293mA */
+#define PMIC_ICHRG_MASK			0xf	/* ICHRG is 4 bits */
+#define PMIC_ICHRG_LSH			3	/* Bits 3-6 are for ICHRG */
+
+/*!
+ * Both MEMA and MEMB are 24-bit registers. The pmic rtc time is 32-bit.
+ * We save the top 8 bits in MEM_A and bottom 24 bits into MEM_B.
+ */
+static void do_rtc_work(struct work_struct *work)
+{
+	int ret = 0;
+	struct timeval tmp;
+	u32 seconds;
+	unsigned int regA = 0, regB = 0;
+
+	if (!pmic_rtc_loaded()) {
+		goto out;
+	}
+
+	ret = pmic_rtc_get_time(&tmp);
+
+	if (!ret) {
+		seconds = tmp.tv_sec;
+		
+		if (seconds > saved_last_seconds) {
+			/* Mask out 24-bits and save the rtc value */
+			regB = seconds & 0x00ffffff;
+			pmic_write_reg(REG_MEMORY_B, regB, 0x00ffffff);
+
+			/* The upper 8-bits are stored in MEM_A begining at location 16 */
+			regA = (seconds & 0xff000000) >> 24;
+			pmic_write_reg(REG_MEMORY_A, (regA << 16), (0xff << 16));
+		}
+	}
+out:
+	schedule_delayed_work(&rtc_work, msecs_to_jiffies(RTC_TIMER_THRESHOLD));
+}
+
+static int show_rtc_pmic_epoch_time(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	u32 seconds;
+	unsigned int regA = 0, regB = 0;
+
+	pmic_read_reg(REG_MEMORY_A, &regA, (0xff << 16));
+	pmic_read_reg(REG_MEMORY_B, &regB, 0x00ffffff);
+
+	regA &= 0x00ff0000; /* Clear out the remaining bits */
+
+	/* Extra shift the MEM_A value */
+	seconds = (regA << 8) | regB;
+	return sprintf(buf, "%x\n", seconds);
+}
+static DEVICE_ATTR(rtc_pmic_epoch_time, 0666, show_rtc_pmic_epoch_time, NULL);
+
+static int show_rtc_saved_last_seconds(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%x\n", saved_last_seconds);
+}
+static DEVICE_ATTR(rtc_saved_last_seconds, 0666, show_rtc_saved_last_seconds, NULL);
 
 /*!
  * This function reads the RTC value from some external source.
@@ -682,6 +754,8 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	struct rtc_plat_data *pdata = NULL;
 	u32 sec, reg;
 	int ret;
+	int ichrg = 0;
+	t_sensor_bits sensors;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
@@ -718,6 +792,15 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	pdata->rtc = rtc;
 	platform_set_drvdata(pdev, pdata);
 	ret = get_ext_rtc_time(&sec);
+
+	/*
+	 * If the current time is less than the saved time, use the saved time
+	 */
+	if (sec < saved_last_seconds) {
+		sec = saved_last_seconds;
+		set_ext_rtc_time(sec);
+	}
+
 	if (ret == MXC_EXTERNAL_RTC_OK) {
 		rtc_time_to_tm(sec, &temp_time);
 		mxc_rtc_set_time(&pdev->dev, &temp_time);
@@ -751,9 +834,42 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 
 	mxc_rtc_dev = &pdev->dev;
 	if (sysfs_create_file(&mxc_rtc_dev->kobj, &dev_attr_wakeup_enable.attr) < 0)
-		printk ("Error - could not create RTC sysfs entry\n");
+		printk (KERN_ERR "Error - could not create RTC sysfs entry\n");
 
 	device_init_wakeup(&pdev->dev, 1);
+	schedule_delayed_work(&rtc_work, msecs_to_jiffies(RTC_TIMER_THRESHOLD));
+	if (device_create_file(&pdev->dev, &dev_attr_rtc_pmic_epoch_time) < 0)
+		printk (KERN_ERR "mxc_rtc: error creating rtc_pmic_epoch_time entry\n");
+
+	if (device_create_file(&pdev->dev, &dev_attr_rtc_saved_last_seconds) < 0)
+		printk (KERN_ERR "mxc_rtc: error creating rtc_saved_last_seconds entry\n");
+
+	/*
+	 * Enable support for early charging. This kicks in when ichrg is 0, there is
+	 * USB connected (HOST/WALL) and there is no charger module loaded. The ichrg
+	 * may have been set by uBoot. Therefore, we first check if ichrg is set to 0 
+	 * or not. Note that ichrg cannot be set unless a charger is connected.
+	 *
+	 * Since we don't know whether the device is connected to a WALL charger or
+	 * host, set the ichrg to 0x1, i.e. 85mA. Once the charger module is loaded
+	 * it will do the detection and set the ichrg correctly.
+	 */
+	pmic_read_reg(REG_CHARGER, &ichrg, (PMIC_ICHRG_MASK << PMIC_ICHRG_LSH));
+	if (ichrg == 0) {
+		/* ichrg is 0, next check if there is a charger */
+		pmic_get_sensors(&sensors);
+		if (sensors.sense_usb4v4s ||
+			(sensors.sense_chgcurrs && sensors.sense_chgdets)) {
+				/* There is a charger and ichrg is 0 */
+				pmic_write_reg(REG_CHARGER,
+						(PMIC_ICHRG_DEFAULT_VALUE << PMIC_ICHRG_LSH),
+						(PMIC_ICHRG_MASK << PMIC_ICHRG_LSH));
+
+				pmic_read_reg(REG_CHARGER, &ichrg,
+						(PMIC_ICHRG_MASK << PMIC_ICHRG_LSH));
+				printk(KERN_INFO "mc13783: setting ichrg to %d\n", ichrg);
+		}
+	}
 
 	return ret;
 }
@@ -765,7 +881,10 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 	if (pdata->irq >= 0) {
 		free_irq(pdata->irq, pdev);
 	}
+	cancel_rearming_delayed_work(&rtc_work);
 	sysfs_remove_file(&mxc_rtc_dev->kobj, &dev_attr_wakeup_enable.attr);
+	device_remove_file(&pdev->dev, &dev_attr_rtc_pmic_epoch_time);
+	device_remove_file(&pdev->dev, &dev_attr_rtc_saved_last_seconds);
 	clk_disable(pdata->clk);
 	clk_put(pdata->clk);
 	kfree(pdata);
@@ -805,7 +924,8 @@ static int mxc_rtc_suspend(struct platform_device *pdev, pm_message_t state)
 		if (device_may_wakeup(&pdev->dev))
 			enable_irq_wake(platform_get_irq(pdev, 0));
 	}
-
+	
+	cancel_rearming_delayed_work(&rtc_work);
 	return 0;
 }
 
@@ -843,6 +963,7 @@ static int mxc_rtc_resume(struct platform_device *pdev)
 	do_settimeofday(&ts);
 	last_suspend_time = resume_time - suspend_time;
 	total_suspend_time += last_suspend_time;
+	schedule_delayed_work(&rtc_work, msecs_to_jiffies(RTC_TIMER_THRESHOLD));
 
 	return 0;
 }

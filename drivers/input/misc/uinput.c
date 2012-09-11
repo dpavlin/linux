@@ -362,45 +362,20 @@ static inline ssize_t uinput_inject_event(struct uinput_device *udev, const char
 	if (copy_from_user(&ev, buffer, sizeof(struct input_event)))
 		return -EFAULT;
 
+	input_event(udev->dev, ev.type, ev.code, ev.value);
+
 #if defined(CONFIG_MACH_LAB126) || defined(CONFIG_MACH_MARIO_MX)
 {
 	struct input_dev *dev = udev->dev;
-	int send_uevent = 0;
-	
-	// Simulate Turing/Nell's ALT-key behavior (from mxc_keyb.c).
-	//
-	static unsigned short ALT_pressed = 0;
-	
-	// On its first down, don't send the ALT code right away.
-	//
-	if ((ev.type == EV_KEY) && (ev.code == KEY_LEFTALT) && (ev.value == 1)) {
-		ALT_pressed = 1;
-	
-	} else {
-		if (ALT_pressed && (ev.type == EV_KEY) && (ev.value == 1)) {
-			input_event(udev->dev, EV_KEY, KEY_LEFTALT, 1);
-		}
-	
-		input_event(udev->dev, ev.type, ev.code, ev.value);
-		send_uevent = ev.value == 1;
-	}
-	
-	// On its first up, release the ALT code.
-	//
-	if ((ev.type == EV_KEY) && (ev.code == KEY_LEFTALT) && (ev.value == 0)) {
-		ALT_pressed = 0;
-	}
 
 	// Send uevent so userspace power daemon can monitor
 	// keyboard activity.  NOTE - the keycode is not sent through
 	// this medium; only the fact that a key event has happened.
 	//
-	if (send_uevent && kobject_uevent(&dev->cdev.kobj, KOBJ_CHANGE)) {
+	if (kobject_uevent(&dev->cdev.kobj, KOBJ_CHANGE)) {
 		LLOG_ERROR( "uinput", "", "failed to send uevent\n" );
 	}
 }
-#else
-	input_event(udev->dev, ev.type, ev.code, ev.value);
 #endif
 
 	return sizeof(struct input_event);

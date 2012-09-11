@@ -34,18 +34,43 @@ void broadsheet_get_commands_info(broadsheet_commands_info_t *info)
     if ( info )
     {
         bs_flash_select saved_flash_select = broadsheet_get_flash_select();
-        unsigned short type;
-        
         broadsheet_set_flash_select(bs_flash_commands);
         
-        broadsheet_read_from_flash_byte(EINK_ADDR_COMMANDS_VERS_MAJOR,  &info->vers_major);
-        broadsheet_read_from_flash_byte(EINK_ADDR_COMMANDS_VERS_MINOR,  &info->vers_minor);
-        broadsheet_read_from_flash_short(EINK_ADDR_COMMANDS_TYPE,       &type);
-        broadsheet_read_from_flash_long(EINK_ADDR_COMMANDS_CHECKSUM,    &info->checksum);
+        if ( broadsheet_supports_flash() )
+        {
+            unsigned short type;
+            
+            broadsheet_read_from_flash_byte(EINK_ADDR_COMMANDS_VERS_MAJOR,  &info->vers_major);
+            broadsheet_read_from_flash_byte(EINK_ADDR_COMMANDS_VERS_MINOR,  &info->vers_minor);
+            broadsheet_read_from_flash_short(EINK_ADDR_COMMANDS_TYPE,       &type);
+            broadsheet_read_from_flash_long(EINK_ADDR_COMMANDS_CHECKSUM,    &info->checksum);
+        
+            info->type  = ((type & 0xFF00) >> 8) | ((type & 0x00FF) << 8);
+            info->which = EINK_COMMANDS_BROADSHEET;
+        }
+        else
+        {
+            unsigned short code_size;
+            unsigned long  version;
+            int file_size;
+            
+            broadsheet_read_from_flash_long(EINK_ADDR_COMMANDS_VERSION,     &version);
+            broadsheet_read_from_flash_short(EINK_ADDR_COMMANDS_CODE_SIZE,  &code_size);
+            
+            version     = ((version & 0xFF000000) >> 24) |
+                          ((version & 0x00FF0000) >>  8) |
+                          ((version & 0x0000FF00) <<  8) |
+                          ((version & 0x000000FF) << 24);
+
+            file_size   = ((code_size + 1) << 1) + EINK_COMMANDS_FIXED_CODE_SIZE;
+
+            broadsheet_read_from_flash_long((file_size - 4),                &info->checksum);
+            
+            info->which = EINK_COMMANDS_ISIS;
+            info->version = version;
+        }
 
         broadsheet_set_flash_select(saved_flash_select);
-
-        info->type  = ((type & 0xFF00) >> 8) | ((type & 0x00FF) << 8);
     }
 }
 
@@ -60,31 +85,48 @@ char *broadsheet_get_commands_version_string(void)
 
     // Build a commands version string of the form:
     //
+    //  Broadsheet:
+    //
     //      <TYPE>_<VERS_MAJOR.VERS_MINOR> (C/S = <CHECKSUM>).
     //
-    // TYPE
+    //  ISIS:
     //
-    switch ( info.type )
-    {
-        case COMMANDS_TYPE_0:
-            commands_type = commands_type_0;
-        break;
-        
-        case COMMANDS_TYPE_1:
-            commands_type = commands_type_1;
-        break;
-        
-        default:
-            commands_type = commands_type_unknown;
-        break;
-    }
-    strcat(commands_version_string, commands_types_names[commands_type]);
-    strcat(commands_version_string, COMMANDS_VERSION_SEPERATOR);
+    //      V<VERSION> (C/S = <CHECKSUM>).
+    //
     
-    // VERSION
-    //
-    sprintf(temp_string, "%02X.%02X", info.vers_major, info.vers_minor);
-    strcat(commands_version_string, temp_string);
+    if ( EINK_COMMANDS_BROADSHEET == info.which )
+    {
+        // TYPE
+        //
+        switch ( info.type )
+        {
+            case COMMANDS_TYPE_0:
+                commands_type = commands_type_0;
+            break;
+            
+            case COMMANDS_TYPE_1:
+                commands_type = commands_type_1;
+            break;
+            
+            default:
+                commands_type = commands_type_unknown;
+            break;
+        }
+        strcat(commands_version_string, commands_types_names[commands_type]);
+        strcat(commands_version_string, COMMANDS_VERSION_SEPERATOR);
+        
+        // VERSION
+        //
+        sprintf(temp_string, "%02X.%02X", info.vers_major, info.vers_minor);
+        strcat(commands_version_string, temp_string);
+    }
+    else
+    {
+        // VERSION
+        //
+        sprintf(temp_string, "V%04lX", (info.version % 0x10000));
+        strcat(commands_version_string, temp_string);
+    }
     
     // CHECKSUM
     //
