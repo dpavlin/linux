@@ -23,25 +23,28 @@
 #define EINK_ADDR_SERIAL_NUMBER         0x0008  // 4 bytes (little-endian)
 
 #define EINK_ADDR_RUN_TYPE              0x000C  // 1 byte  (0x00=[B]aseline, 0x01=[T]est/trial, 0x02=[P]roduction, 0x03=[Q]ualification, 0x04=V110[A],
-                                                //          0x05=V220[C], 0x06=V250[D], 0x07=V220[E], 0x08-0x10=F-N)
+                                                //          0x05=V220[C], 0x06=D, 0x07=V220[E], 0x08-0x10=F-N)
 
-#define EINK_ADDR_FPL_PLATFORM          0x000D  // 1 byte  (0x00=2.0, 0x01=2.1, 0x02=2.3; 0x03=V110, 0x04=V110A, 0x06=V220, 0x07=V250)
-#define EINK_ADDR_FPL_SIZE              0x0014  // 1 byte  (0x32=5", 0x3C=6", 0x50=8", 0x61=9.7")
+#define EINK_ADDR_FPL_PLATFORM          0x000D  // 1 byte  (0x00=2.0, 0x01=2.1, 0x02=2.3; 0x03=V110, 0x04=V110A, 0x06=V220, 0x07=V250, 0x08=V220E)
+#define EINK_ADDR_FPL_SIZE              0x0014  // 1 byte  (0x32=5", 0x3C=6", 0x3F=6" 0x50=8", 0x61=9.7", 0x63=9.7")
 #define EINK_ADDR_FPL_LOT               0x000E  // 2 bytes (little-endian)
 #define EINK_ADDR_ADHESIVE_RUN_NUM      0x0010  // 1 byte  (mode version when EINK_ADDR_FPL_PLATFORM is 0x03 or later)
-#define EINK_ADDR_MODE_VERSION          0x0010  // 1 byte  (0x00=MU/GU/GC/PU, 0x01=DU/GC4/GC16, 0x02=DU/GC4D/GC16/GC4)
+#define EINK_ADDR_MODE_VERSION          0x0010  // 1 byte  (0x00=MU/GU/GC/PU, 0x01,0x02=DU/GC16/GC4, 0x03=DU/GC16/GC4/AU, 0x04=DU/GC16/AU)
 
 #define EINK_ADDR_WAVEFORM_VERSION      0x0011  // 1 byte  (BCD)
 #define EINK_ADDR_WAVEFORM_SUBVERSION   0x0012  // 1 byte  (BCD)
 #define EINK_ADDR_WAVEFORM_TYPE         0x0013  // 1 byte  (0x0B=TE, 0x0E=WE, 0x15=WJ, 0x16=WK, 0x17=WL)
 #define EINK_ADDR_WAVEFORM_TUNING_BIAS  0x0016  // 1 byte  (0x00=Standard, 0x01=Increased DS Blooming V1XX, 0x02=Increased DS Blooming V2XX)
 
-#define EINK_ADDR_FPL_RATE              0x00017 // 1 byte  (0x50=50Hz, 0x85=85Hz)
+#define EINK_ADDR_FPL_RATE              0x00017 // 1 byte  (0x50=50Hz, 0x60=60Hz, 0x85=85Hz)
 
 #define EINK_FPL_SIZE_60                0x3C    // 6.0-inch panel,  800 x  600
+#define EINK_FPL_SIZE_63                0x3F    // 6.0-inch panel,  800 x  600
 #define EINK_FPL_SIZE_97                0x61    // 9.7-inch panel, 1200 x  825
+#define EINK_FPL_SIZE_99                0x63    // 9.7-inch panel, 1600 x 1200
 
 #define EINK_FPL_RATE_50                0x50    // 50Hz waveform
+#define EINK_FPL_RATE_60                0x60    // 60Hz waveform
 #define EINK_FPL_RATE_85                0x85    // 85Hz waveform
 
 struct broadsheet_waveform_info_t

@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_commands.h --
  *  eInk frame buffer device HAL broadsheet commands defs
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2010 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -43,7 +43,7 @@ struct broadsheet_commands_info_t
 
     unsigned long   version;            // ISIS
     
-    unsigned long   checksum;           // Broadsheet = CRC32, ISIS = CRC8
+    unsigned long   checksum;           // Broadsheet = CRC32, ISIS = SUM32
 };
 typedef struct broadsheet_commands_info_t broadsheet_commands_info_t;
 

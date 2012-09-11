@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_commands.c --
  *  eInk frame buffer device HAL broadsheet commands code
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2010 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -36,7 +36,7 @@ void broadsheet_get_commands_info(broadsheet_commands_info_t *info)
         bs_flash_select saved_flash_select = broadsheet_get_flash_select();
         broadsheet_set_flash_select(bs_flash_commands);
         
-        if ( broadsheet_supports_flash() )
+        if ( BS_BROADSHEET() )
         {
             unsigned short type;
             

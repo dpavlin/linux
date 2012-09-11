@@ -70,6 +70,7 @@
 
 #define BS_PRD_CODE_ISIS        0x004D  // All ISISes
 
+#define BS_BROADSHEET()         (!BS_ISIS())
 #define BS_ISIS()               bs_isis()
 #define BS_ASIC()               bs_asic()
 #define BS_FPGA()               bs_fpga()

@@ -136,8 +136,6 @@ static void mxc_sdma_channel_work(struct work_struct *work)
 
 		memset(&request_t, 0, sizeof(dma_request_t));
 		mxc_dma_get_config(arg, &request_t, data_priv->buf_tail);
-
-		schedule();
 	}
 }
 static int mxc_sdma_channeltasklet_audio(unsigned long arg)
@@ -348,10 +346,7 @@ static void mxc_dma_chnl_callback(void *arg)
 	data_priv = mxc_sdma_channels[priv].private;
 
 	/* Process the buffers in a tasklet */
-	if (audio_playing_flag == 0)
-		mxc_sdma_channeltasklet(priv);
-	else 
-		schedule_work(&data_priv->sdma_channel_work);
+	mxc_sdma_channeltasklet(priv);
 }
 
 static void mxc_dma_chnl_callback_audio(void *arg)
@@ -568,9 +563,6 @@ int mxc_dma_sg_config(int channel_num, struct scatterlist *sg,
 		}
 		sg++;
 		num_of_bytes -= (dma_buf + i)->num_of_bytes;
-	
-		if (!irqs_disabled())
-			schedule();
 	}
 
 	ret = mxc_dma_config(channel_num, dma_buf, num_buf, mode);

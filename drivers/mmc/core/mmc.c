@@ -263,8 +263,9 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	u32 cid[4];
 	unsigned int max_dtr;
 	char product_revision;
-	unsigned long manufacturer_id;
+	unsigned long manufacturer_id = 0;
 	unsigned int serial_num;
+	struct mmc_command cmd;
 
 	BUG_ON(!host);
 	WARN_ON(!host->claimed);
@@ -354,9 +355,9 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			host->predefined = 0;
 			break;
 		case HYNIX_MANF_ID:
-			printk(KERN_INFO "%s: Using open-ended mode on Hynix eMMC\n",
+			printk(KERN_INFO "%s: Using predefined mode on Hynix eMMC\n",
 					mmc_hostname(host));
-			host->predefined = 0;
+			host->predefined = 1;
 			break;
 		default:
 			printk(KERN_INFO "%s: Using open-ended mode on eMMC\n",
@@ -449,6 +450,29 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 
 		mmc_set_bus_width(card->host, MMC_BUS_WIDTH_4);
 	}
+
+#ifdef CONFIG_MACH_LAB126
+	if (manufacturer_id == SANDISK_MANF_ID) {
+		printk(KERN_INFO "mmc0: Sandisk part - waiting for busy line\n");
+		do {
+			memset(&cmd, 0, sizeof(struct mmc_command));
+ 
+			cmd.opcode = MMC_SEND_STATUS;
+			cmd.arg = card->rca << 16;
+			cmd.flags = MMC_RSP_R1 | MMC_CMD_AC;
+
+			err = mmc_wait_for_cmd(card->host, &cmd, 5);
+
+			if (err) {
+				printk(KERN_ERR "%s: error %d requesting status\n",
+						mmc_hostname(card->host), err);
+				goto free_card;
+			}
+
+		} while (!(cmd.resp[0] & R1_READY_FOR_DATA) ||
+			(R1_CURRENT_STATE(cmd.resp[0]) == 7)); 
+	}
+#endif
 
 	if (!oldcard)
 		host->card = card;

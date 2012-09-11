@@ -34,14 +34,15 @@ enum platforms
 {
     matrix_2_0_unsupported, matrix_2_1_unsupported, matrix_Vizplex_100, matrix_Vizplex_110,
     matrix_Vizplex_110A, matrix_Vizplex_unknown, matrix_Vizplex_220, matrix_Vizplex_250,
-    unknown_platform, num_platforms
+    matrix_Vizplex_220E, unknown_platform, num_platforms
 };
 typedef enum platforms platforms;
 
 enum panel_sizes
 {
-    five_oh, six_oh, eight_oh, nine_seven, unknown_panel_size, num_panel_sizes,
-    five_inch = 50, six_inch = 60, eight_inch = 80, nine_inch = 97
+    five_oh, six_oh, six_three, eight_oh, nine_seven, nine_nine, unknown_panel_size, num_panel_sizes,
+    five_inch = 50, six_inch = 60, six_three_inch = 63, eight_inch = 80,
+    nine_seven_inch = 97, nine_nine_inch = 99
 };
 typedef enum panel_sizes panel_sizes;
 
@@ -70,12 +71,12 @@ static char *wf_type_names[num_wf_types] =
 static char *platform_names[num_platforms] =
 {
     "????", "????", "V100", "V110", "110A", "????", "V220", "V250",
-    "????"
+    "220E", "????"
 };
 
 static char *panel_size_names[num_panel_sizes] =
 {
-    "50", "60", "80", "97", "??"
+    "50", "60", "63", "80", "97", "99", "??"
 };
 
 static char *tuning_bias_names[num_tuning_biases] =
@@ -83,8 +84,9 @@ static char *tuning_bias_names[num_tuning_biases] =
     "S", "D", "D", "?"
 };
 
-#define IS_VIZP(v) ((matrix_Vizplex_110 == (v)) || (matrix_Vizplex_110A == (v)) || \
-                    (matrix_Vizplex_220 == (v)) || (matrix_Vizplex_250  == (v)))
+#define IS_VIZP(v) ((matrix_Vizplex_110  == (v)) || (matrix_Vizplex_110A == (v)) || \
+                    (matrix_Vizplex_220  == (v)) || (matrix_Vizplex_250  == (v)) || \
+                    (matrix_Vizplex_220E == (v)))
 
 #define IN_RANGE(n, m, M) (((n) >= (m)) && ((n) <= (M)))
 
@@ -92,7 +94,7 @@ static char *tuning_bias_names[num_tuning_biases] =
     ((0 != (s)) && (UINT_MAX != (s)) && (rt_t != (r)) && (rt_q != (r)))
 
 #define has_valid_fpl_rate(r) \
-    ((EINK_FPL_RATE_50 == (r)) || (EINK_FPL_RATE_85 == (r)))
+    ((EINK_FPL_RATE_50 == (r)) || (EINK_FPL_RATE_60 == (r)) || (EINK_FPL_RATE_85 == (r)))
 
 #define BS_CHECKSUM(c1, c2) (((c2) << 16) | (c1))
 
@@ -239,6 +241,7 @@ char *broadsheet_get_waveform_version_string(void)
         case matrix_Vizplex_110A:
         case matrix_Vizplex_220:
         case matrix_Vizplex_250:
+        case matrix_Vizplex_220E:
             strcat(waveform_version_string, platform_names[fpl.platform]);
         break;
 
@@ -284,13 +287,21 @@ char *broadsheet_get_waveform_version_string(void)
         case six_inch:
             panel_size = six_oh;
         break;
-        
+
+        case six_three_inch:
+            panel_size = six_three;
+        break;
+
         case eight_inch:
             panel_size = eight_oh;
         break;
 
-        case nine_inch:
+        case nine_seven_inch:
             panel_size = nine_seven;
+        break;
+        
+        case nine_nine_inch:
+            panel_size = nine_nine;
         break;
 
         default:
@@ -302,8 +313,10 @@ char *broadsheet_get_waveform_version_string(void)
     {
         case five_oh:
         case six_oh:
+        case six_three:
         case eight_oh:
         case nine_seven:
+        case nine_nine:
             strcat(waveform_version_string, panel_size_names[panel_size]);
         break;
 

@@ -1,7 +1,7 @@
 /*
  * eInk display framebuffer driver
  * 
- * Copyright (C)2005-2008 Lab126, Inc.  All rights reserved.
+ * Copyright (C) 2005-2010 Amazon Technologies
  */
 
 #include "broadsheet_waveform.c"
@@ -62,13 +62,13 @@ unsigned long get_computed_waveform_checksum(unsigned char *buffer)
             //
             start     = 0;
             length    = EINK_ADDR_CHECKSUM1;
-            checksum1 = crc8(&buffer[start], length);
+            checksum1 = sum8(&buffer[start], length);
             
             // Checksum bytes (EINK_ADDR_CHECKSUM1 + 1)..(EINK_ADDR_CHECKSUM2 - 1).
             //
             start     = EINK_ADDR_CHECKSUM1 + 1;
             length    = EINK_ADDR_CHECKSUM2 - start;
-            checksum2 = crc8(&buffer[start], length);
+            checksum2 = sum8(&buffer[start], length);
             
             checksum  = BS_CHECKSUM(checksum1, checksum2);
         }
@@ -82,10 +82,26 @@ unsigned long get_embedded_commands_checksum(unsigned char *buffer)
     unsigned long checksum = 0;
     
     if ( buffer )
-        checksum = (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 0] <<  0) |
-                   (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 1] <<  8) |
-                   (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 2] << 16) |
-                   (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 3] << 24);
+    {
+        if ( BS_BROADSHEET() )
+        {
+            checksum = (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 0] <<  0) |
+                       (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 1] <<  8) |
+                       (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 2] << 16) |
+                       (buffer[EINK_ADDR_COMMANDS_CHECKSUM + 3] << 24);
+        }
+        else
+        {
+            unsigned short *short_buffer = (unsigned short *)buffer,
+                            code_size = short_buffer[EINK_ADDR_COMMANDS_CODE_SIZE >> 1];
+            int file_size = ((code_size + 1) << 1) + EINK_COMMANDS_FIXED_CODE_SIZE;
+            
+            checksum = (buffer[file_size - 4] <<  0) |
+                       (buffer[file_size - 3] <<  8) |
+                       (buffer[file_size - 2] << 16) |
+                       (buffer[file_size - 1] << 24);
+         }
+    }
         
     return ( checksum );
 }
@@ -95,7 +111,20 @@ unsigned long get_computed_commands_checksum(unsigned char *buffer)
     unsigned long checksum = 0;
     
     if ( buffer )
-        checksum = crc32((unsigned char *)buffer, (EINK_COMMANDS_FILESIZE - 4));
+    {
+        if ( BS_BROADSHEET() )
+            checksum = crc32((unsigned char *)buffer, (EINK_COMMANDS_FILESIZE - 4));
+        else
+        {
+            unsigned short *short_buffer = (unsigned short *)buffer,
+                            code_size = short_buffer[EINK_ADDR_COMMANDS_CODE_SIZE >> 1];
+            int file_size = ((code_size + 1) << 1) + EINK_COMMANDS_FIXED_CODE_SIZE,
+                start     = EINK_ADDR_COMMANDS_CODE_SIZE,
+                length    = (file_size - 4) - EINK_ADDR_COMMANDS_CODE_SIZE;
+            
+            checksum = sum32(&buffer[start], length);
+        }
+    }
     
     return ( checksum );
 }

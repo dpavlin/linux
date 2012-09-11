@@ -1939,7 +1939,7 @@ static int fsync_sub(struct lun *curlun)
 
 	if (curlun->ro || !filp)
 		return 0;
-	if (!filp->f_op->fsync)
+	if (!filp->f_op && !filp->f_op->fsync)
 		return -EINVAL;
 
 	inode = filp->f_path.dentry->d_inode;
