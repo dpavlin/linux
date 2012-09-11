@@ -388,7 +388,6 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 	struct proc_dir_entry * de;
 	int error = -ENOENT;
 
-	lock_kernel();
 	spin_lock(&proc_subdir_lock);
 	de = PDE(dir);
 	if (de) {
@@ -408,7 +407,6 @@ struct dentry *proc_lookup(struct inode * dir, struct dentry *dentry, struct nam
 		}
 	}
 	spin_unlock(&proc_subdir_lock);
-	unlock_kernel();
 
 	if (inode) {
 		dentry->d_op = &proc_dentry_operations;
@@ -436,8 +434,6 @@ int proc_readdir(struct file * filp,
 	int i;
 	struct inode *inode = filp->f_path.dentry->d_inode;
 	int ret = 0;
-
-	lock_kernel();
 
 	ino = inode->i_ino;
 	de = PDE(inode);
@@ -497,7 +493,7 @@ int proc_readdir(struct file * filp,
 			spin_unlock(&proc_subdir_lock);
 	}
 	ret = 1;
-out:	unlock_kernel();
+out:	
 	return ret;	
 }
 
@@ -671,6 +667,8 @@ struct proc_dir_entry *create_proc_entry(const char *name, mode_t mode,
 {
 	struct proc_dir_entry *ent;
 	nlink_t nlink;
+
+	WARN_ON_ONCE(kernel_locked());
 
 	if (S_ISDIR(mode)) {
 		if ((mode & S_IALLUGO) == 0)

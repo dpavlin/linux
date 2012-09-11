@@ -902,9 +902,39 @@ fb_blank(struct fb_info *info, int blank)
  	return ret;
 }
 
+#ifdef CONFIG_MACH_LAB126
+static int __fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigned long arg);
+
+static int
+fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
+	unsigned long arg)
+{
+	int fbidx = iminor(inode);
+	struct fb_info *info = registered_fb[fbidx];
+	int ret;
+	
+	mutex_lock(&info->hwlock);
+	ret = __fb_ioctl(inode, file, cmd, arg);
+	mutex_unlock(&info->hwlock);
+	return ret;
+}
+
+static long
+fb_unlocked_ioctl(struct file *file, unsigned int cmd,
+	unsigned long arg)
+{
+	struct inode *inode = file->f_path.dentry->d_inode;
+	return fb_ioctl(inode, file, cmd, arg);
+}
+
+static int
+__fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd, 
+	 unsigned long arg)
+#else
 static int 
 fb_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 	 unsigned long arg)
+#endif
 {
 	int fbidx = iminor(inode);
 	struct fb_info *info = registered_fb[fbidx];
@@ -1052,7 +1082,11 @@ static int fb_getput_cmap(struct inode *inode, struct file *file,
 	    put_user(compat_ptr(data), &cmap->transp))
 		return -EFAULT;
 
+#ifdef CONFIG_MACH_LAB126
+	err = __fb_ioctl(inode, file, cmd, (unsigned long) cmap);
+#else
 	err = fb_ioctl(inode, file, cmd, (unsigned long) cmap);
+#endif
 
 	if (!err) {
 		if (copy_in_user(&cmap32->start,
@@ -1106,7 +1140,11 @@ static int fb_get_fscreeninfo(struct inode *inode, struct file *file,
 
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
+#ifdef CONFIG_MACH_LAB126
+	err = __fb_ioctl(inode, file, cmd, (unsigned long) &fix);
+#else
 	err = fb_ioctl(inode, file, cmd, (unsigned long) &fix);
+#endif
 	set_fs(old_fs);
 
 	if (!err)
@@ -1124,7 +1162,11 @@ fb_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct fb_ops *fb = info->fbops;
 	long ret = -ENOIOCTLCMD;
 
+#ifdef CONFIG_MACH_LAB126
+	mutex_lock(&info->hwlock);
+#else
 	lock_kernel();
+#endif
 	switch(cmd) {
 	case FBIOGET_VSCREENINFO:
 	case FBIOPUT_VSCREENINFO:
@@ -1133,7 +1175,11 @@ fb_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case FBIOPUT_CON2FBMAP:
 		arg = (unsigned long) compat_ptr(arg);
 	case FBIOBLANK:
+#ifdef CONFIG_MACH_LAB126
+		ret = __fb_ioctl(inode, file, cmd, arg);
+#else
 		ret = fb_ioctl(inode, file, cmd, arg);
+#endif
 		break;
 
 	case FBIOGET_FSCREENINFO:
@@ -1150,7 +1196,11 @@ fb_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			ret = fb->fb_compat_ioctl(info, cmd, arg);
 		break;
 	}
+#ifdef CONFIG_MACH_LAB126
+	mutex_unlock(&info->hwlock);
+#else
 	unlock_kernel();
+#endif
 	return ret;
 }
 #endif
@@ -1174,9 +1224,17 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 		return -ENODEV;
 	if (fb->fb_mmap) {
 		int res;
+#ifdef CONFIG_MACH_LAB126
+		mutex_lock(&info->hwlock);
+#else
 		lock_kernel();
+#endif
 		res = fb->fb_mmap(info, vma);
+#ifdef CONFIG_MACH_LAB126
+		mutex_unlock(&info->hwlock);
+#else
 		unlock_kernel();
+#endif
 		return res;
 	}
 
@@ -1186,8 +1244,11 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 	return -EINVAL;
 #else
 	/* !sparc32... */
+#ifdef CONFIG_MACH_LAB126
+	mutex_lock(&info->hwlock);
+#else
 	lock_kernel();
-
+#endif
 	/* frame buffer memory */
 	start = info->fix.smem_start;
 	len = PAGE_ALIGN((start & ~PAGE_MASK) + info->fix.smem_len);
@@ -1195,13 +1256,21 @@ fb_mmap(struct file *file, struct vm_area_struct * vma)
 		/* memory mapped io */
 		off -= len;
 		if (info->var.accel_flags) {
+#ifdef CONFIG_MACH_LAB126
+			mutex_unlock(&info->hwlock);
+#else
 			unlock_kernel();
+#endif
 			return -EINVAL;
 		}
 		start = info->fix.mmio_start;
 		len = PAGE_ALIGN((start & ~PAGE_MASK) + info->fix.mmio_len);
 	}
+#ifdef CONFIG_MACH_LAB126
+	mutex_unlock(&info->hwlock);
+#else
 	unlock_kernel();
+#endif
 	start &= PAGE_MASK;
 	if ((vma->vm_end - vma->vm_start + off) > len)
 		return -EINVAL;
@@ -1286,11 +1355,19 @@ fb_release(struct inode *inode, struct file *file)
 {
 	struct fb_info * const info = file->private_data;
 
+#ifdef CONFIG_MACH_LAB126
+	mutex_lock(&info->hwlock);
+#else
 	lock_kernel();
+#endif
 	if (info->fbops->fb_release)
 		info->fbops->fb_release(info,1);
 	module_put(info->fbops->owner);
+#ifdef CONFIG_MACH_LAB126
+	mutex_unlock(&info->hwlock);
+#else
 	unlock_kernel();
+#endif
 	return 0;
 }
 
@@ -1298,7 +1375,11 @@ static const struct file_operations fb_fops = {
 	.owner =	THIS_MODULE,
 	.read =		fb_read,
 	.write =	fb_write,
+#ifdef CONFIG_MACH_LAB126
+	.unlocked_ioctl = fb_unlocked_ioctl,
+#else
 	.ioctl =	fb_ioctl,
+#endif
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = fb_compat_ioctl,
 #endif
@@ -1340,6 +1421,9 @@ register_framebuffer(struct fb_info *fb_info)
 			break;
 	fb_info->node = i;
 
+#ifdef CONFIG_MACH_LAB126
+	mutex_init(&fb_info->hwlock);
+#endif
 	fb_info->dev = device_create(fb_class, fb_info->device,
 				     MKDEV(FB_MAJOR, i), "fb%d", i);
 	if (IS_ERR(fb_info->dev)) {
@@ -1410,6 +1494,9 @@ unregister_framebuffer(struct fb_info *fb_info)
 	device_destroy(fb_class, MKDEV(FB_MAJOR, i));
 	event.info = fb_info;
 	fb_notifier_call_chain(FB_EVENT_FB_UNREGISTERED, &event);
+#ifdef CONFIG_MACH_LAB126
+	mutex_destroy(&fb_info->hwlock);
+#endif
 	return 0;
 }
 

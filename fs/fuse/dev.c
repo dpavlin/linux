@@ -1030,7 +1030,7 @@ const struct file_operations fuse_dev_operations = {
 	.aio_write	= fuse_dev_write,
 	.poll		= fuse_dev_poll,
 	.release	= fuse_dev_release,
-	.fasync		= fuse_dev_fasync,
+	.unlocked_fasync		= fuse_dev_fasync,
 };
 
 static struct miscdevice fuse_miscdevice = {

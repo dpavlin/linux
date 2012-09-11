@@ -57,11 +57,10 @@ loff_t generic_file_llseek(struct file *file, loff_t offset, int origin)
 
 EXPORT_SYMBOL(generic_file_llseek);
 
-loff_t remote_llseek(struct file *file, loff_t offset, int origin)
+loff_t remote_llseek_unlocked(struct file *file, loff_t offset, int origin)
 {
 	long long retval;
 
-	lock_kernel();
 	switch (origin) {
 		case SEEK_END:
 			offset += i_size_read(file->f_path.dentry->d_inode);
@@ -77,10 +76,9 @@ loff_t remote_llseek(struct file *file, loff_t offset, int origin)
 		}
 		retval = offset;
 	}
-	unlock_kernel();
 	return retval;
 }
-EXPORT_SYMBOL(remote_llseek);
+EXPORT_SYMBOL(remote_llseek_unlocked);
 
 loff_t no_llseek(struct file *file, loff_t offset, int origin)
 {

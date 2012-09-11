@@ -28,6 +28,12 @@
 #include <asm/traps.h>
 #include <asm/io.h>
 
+#ifdef CONFIG_ARCH_MXC
+#include <asm/arch/boot_globals.h>
+#endif
+
+extern void arch_reset(char mode);
+
 #include "ptrace.h"
 #include "signal.h"
 
@@ -43,6 +49,9 @@ static int __init user_debug_setup(char *str)
 }
 __setup("user_debug=", user_debug_setup);
 #endif
+
+char bug_buffer[100];
+static int bug_buffer_filled = 0;
 
 static void dump_mem(const char *str, unsigned long bottom, unsigned long top);
 
@@ -213,13 +222,59 @@ void show_stack(struct task_struct *tsk, unsigned long *sp)
 #define S_SMP ""
 #endif
 
+#ifndef CONFIG_ARCH_MXC
+
+#define OOPS_SAVE_SIZE 4096
+#define OOPS_SAVE_BASE 0x0 /* Might oops ...  hence fixit for other arches */
+
+#endif
+
+char die_buffer[OOPS_SAVE_SIZE];
+char *die_start;
+unsigned die_len;
+static unsigned die_oops_enable;
+
+void insert_oops_chars(char c)
+{
+	if (!die_oops_enable)
+		return;
+
+	die_buffer[die_len] = c;
+	die_len++;
+}
+EXPORT_SYMBOL(insert_oops_chars);
+
 static void __die(const char *str, int err, struct thread_info *thread, struct pt_regs *regs)
 {
 	struct task_struct *tsk = thread->task;
 	static int die_counter;
+	die_len = 0; /* Initialize */
+	die_start = die_buffer;
+
+	die_buffer[0] = 'O';
+	die_len++;
+	die_start++;
+
+	die_buffer[1] = 'O';
+	die_len++;
+	die_start++;
+
+	die_buffer[2] = 'P';
+	die_len++;
+	die_start++;
+
+	die_buffer[3] = 'S';
+	die_len++;
+	die_start++;
+
+	if (bug_buffer_filled == 1) {
+		die_len += sprintf(die_start, "%s\n", bug_buffer);
+		die_start += die_len;
+	}
 
 	printk("Internal error: %s: %x [#%d]" S_PREEMPT S_SMP "\n",
 	       str, err, ++die_counter);
+
 	print_modules();
 	__show_regs(regs);
 	printk("Process %s (pid: %d, stack limit = 0x%p)\n",
@@ -235,12 +290,22 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
 
 DEFINE_SPINLOCK(die_lock);
 
+#ifdef CONFIG_ARCH_MXC
+extern void *oops_start;
+#else
+/* FIXME - Non MXC arches */
+void *oops_start = 0x0;
+#endif
+
 /*
  * This function is protected against re-entrancy.
  */
 NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 {
 	struct thread_info *thread = current_thread_info();
+	void *die_oops_start = oops_start;
+	memset(die_oops_start, 0, OOPS_SAVE_SIZE);
+	die_oops_enable = 1;
 
 	oops_enter();
 
@@ -248,8 +313,17 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 	spin_lock_irq(&die_lock);
 	bust_spinlocks(1);
 	__die(str, err, thread, regs);
+	die_oops_enable = 0;
+	die_buffer[die_len++] = '\0';	
+
+	/* Try to write out */
+
 	bust_spinlocks(0);
+	memcpy((void *)die_oops_start, (void *)die_buffer, OOPS_SAVE_SIZE);
 	spin_unlock_irq(&die_lock);
+
+	if (bug_buffer_filled)
+		arch_reset((char)1);
 
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
@@ -257,6 +331,9 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 	if (panic_on_oops)
 		panic("Fatal exception");
 
+#ifdef CONFIG_MACH_MARIO_MX
+	arch_reset((char) 1);
+#endif
 	oops_exit();
 	do_exit(SIGSEGV);
 }
@@ -326,7 +403,7 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 		if ((instr & hook->instr_mask) == hook->instr_val &&
 		    (regs->ARM_cpsr & hook->cpsr_mask) == hook->cpsr_val) {
 			if (hook->fn(regs, instr) == 0) {
-				spin_unlock_irq(&undef_lock);
+				spin_unlock_irqrestore(&undef_lock, flags);
 				return;
 			}
 		}
@@ -659,7 +736,14 @@ baddataabort(int code, unsigned long instr, struct pt_regs *regs)
 
 void __attribute__((noreturn)) __bug(const char *file, int line)
 {
-	printk(KERN_CRIT"kernel BUG at %s:%d!\n", file, line);
+	unsigned tlen;
+	char *start = bug_buffer;
+
+	tlen = sprintf(start, "kernel BUG at %s:%d!\n", file, line);
+	printk(KERN_CRIT"%s\n", bug_buffer);
+
+	bug_buffer_filled = 1;
+	
 	*(int *)0 = 0;
 
 	/* Avoid "noreturn function does return" */

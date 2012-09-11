@@ -828,8 +828,7 @@ extern void ext3_get_inode_flags(struct ext3_inode_info *);
 extern void ext3_set_aops(struct inode *inode);
 
 /* ioctl.c */
-extern int ext3_ioctl (struct inode *, struct file *, unsigned int,
-		       unsigned long);
+extern long ext3_ioctl(struct file *, unsigned int, unsigned long);
 extern long ext3_compat_ioctl (struct file *, unsigned int, unsigned long);
 
 /* namei.c */

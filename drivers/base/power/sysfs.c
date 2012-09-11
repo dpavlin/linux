@@ -45,9 +45,11 @@ static ssize_t state_store(struct device * dev, struct device_attribute *attr, c
 	pm_message_t state;
 	int error = -EINVAL;
 
+#if 0 /* for testing only */
 	/* disallow incomplete suspend sequences */
 	if (dev->bus && (dev->bus->suspend_late || dev->bus->resume_early))
 		return error;
+#endif
 
 	state.event = PM_EVENT_SUSPEND;
 	/* Older apps expected to write "3" here - confused with PCI D3 */
@@ -141,12 +143,43 @@ wake_store(struct device * dev, struct device_attribute *attr,
 
 static DEVICE_ATTR(wakeup, 0644, wake_show, wake_store);
 
+static ssize_t can_suspend_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%s\n", dev->no_suspend ? "no" : "yes");
+}
+
+static ssize_t can_suspend_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t n)
+{
+	if (!n)
+		return -EINVAL;
+
+	switch (buf[0]) {
+	case 'y':
+	case 'Y':
+	case '1':
+		dev->no_suspend = 0;
+		break;
+	case 'n':
+	case 'N':
+	case '0':
+		dev->no_suspend = 1;
+		break;
+	}
+
+	return n;
+}
+static DEVICE_ATTR(can_suspend, 0644, can_suspend_show, can_suspend_store);
+
 
 static struct attribute * power_attrs[] = {
 #ifdef	CONFIG_PM_SYSFS_DEPRECATED
 	&dev_attr_state.attr,
 #endif
 	&dev_attr_wakeup.attr,
+	&dev_attr_can_suspend.attr,
 	NULL,
 };
 static struct attribute_group pm_attr_group = {

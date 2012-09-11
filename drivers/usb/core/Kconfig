@@ -92,7 +92,6 @@ config USB_OTG
 	select USB_SUSPEND
 	default n
 
-
 config USB_OTG_WHITELIST
 	bool "Rely on OTG Targeted Peripherals List"
 	depends on USB_OTG

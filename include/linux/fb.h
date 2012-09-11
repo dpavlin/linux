@@ -830,6 +830,9 @@ struct fb_info {
 	void *fbcon_par;                /* fbcon use-only private area */
 	/* From here on everything is device dependent */
 	void *par;	
+#ifdef CONFIG_MACH_LAB126
+	struct mutex hwlock;		/* mutex for protecting hw ops */
+#endif
 };
 
 #ifdef MODULE

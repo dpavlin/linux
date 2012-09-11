@@ -1,0 +1,14 @@
+#
+# Magnetic sensor driver configuration
+#
+config INPUT_MAG_SENSOR
+	tristate "Magnetic Sensor"
+	depends on INPUT
+	help
+	  Say Y here if you have a magnetic sensor installed in your system.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mag_sensor.
+

@@ -686,7 +686,7 @@ int usb_register_device_driver(struct usb_device_driver *new_udriver,
 	retval = driver_register(&new_udriver->drvwrap.driver);
 
 	if (!retval) {
-		pr_info("%s: registered new device driver %s\n",
+		pr_debug("%s: registered new device driver %s\n",
 			usbcore_name, new_udriver->name);
 		usbfs_update_special();
 	} else {
@@ -708,7 +708,7 @@ EXPORT_SYMBOL_GPL(usb_register_device_driver);
  */
 void usb_deregister_device_driver(struct usb_device_driver *udriver)
 {
-	pr_info("%s: deregistering device driver %s\n",
+	pr_debug("%s: deregistering device driver %s\n",
 			usbcore_name, udriver->name);
 
 	driver_unregister(&udriver->drvwrap.driver);
@@ -752,7 +752,7 @@ int usb_register_driver(struct usb_driver *new_driver, struct module *owner,
 	retval = driver_register(&new_driver->drvwrap.driver);
 
 	if (!retval) {
-		pr_info("%s: registered new interface driver %s\n",
+		pr_debug("%s: registered new interface driver %s\n",
 			usbcore_name, new_driver->name);
 		usbfs_update_special();
 		usb_create_newid_file(new_driver);
@@ -779,7 +779,7 @@ EXPORT_SYMBOL_GPL_FUTURE(usb_register_driver);
  */
 void usb_deregister(struct usb_driver *driver)
 {
-	pr_info("%s: deregistering interface driver %s\n",
+	pr_debug("%s: deregistering interface driver %s\n",
 			usbcore_name, driver->name);
 
 	usb_remove_newid_file(driver);

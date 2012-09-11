@@ -17,29 +17,11 @@
  *
  */
 
-#include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/delay.h>
-#include <linux/ioport.h>
-#include <linux/slab.h>
-#include <linux/errno.h>
-#include <linux/init.h>
-#include <linux/timer.h>
-#include <linux/list.h>
-#include <linux/interrupt.h>
 #include <linux/utsname.h>
-#include <linux/wait.h>
-#include <linux/proc_fs.h>
 #include <linux/device.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
-
-#include <asm/byteorder.h>
-#include <asm/io.h>
-#include <asm/irq.h>
-#include <asm/system.h>
-#include <asm/unaligned.h>
-#include <asm/uaccess.h>
 
 #include <linux/usb/ch9.h>
 #include <linux/usb/cdc.h>
@@ -88,12 +70,15 @@
 #define GS_DEFAULT_PARITY		USB_CDC_NO_PARITY
 #define GS_DEFAULT_CHAR_FORMAT		USB_CDC_1_STOP_BITS
 
-/* select highspeed/fullspeed, hiding highspeed if not configured */
-#ifdef CONFIG_USB_GADGET_DUALSPEED
-#define GS_SPEED_SELECT(is_hs,hs,fs) ((is_hs) ? (hs) : (fs))
-#else
-#define GS_SPEED_SELECT(is_hs,hs,fs) (fs)
-#endif /* CONFIG_USB_GADGET_DUALSPEED */
+/* maxpacket and other transfer characteristics vary by speed. */
+static inline struct usb_endpoint_descriptor *
+choose_ep_desc(struct usb_gadget *g, struct usb_endpoint_descriptor *hs,
+		struct usb_endpoint_descriptor *fs)
+{
+	if (gadget_is_dualspeed(g) && g->speed == USB_SPEED_HIGH)
+		return hs;
+	return fs;
+}
 
 /* debug settings */
 #ifdef GS_DEBUG
@@ -155,6 +140,9 @@ struct gs_port {
 	wait_queue_head_t	port_write_wait;/* waiting to write */
 	struct gs_buf		*port_write_buf;
 	struct usb_cdc_line_coding	port_line_coding;
+	u16			port_handshake_bits;
+#define RS232_RTS	(1 << 1)
+#define RS232_DTE	(1 << 0)
 };
 
 /* the device structure holds info for the USB device */
@@ -218,10 +206,12 @@ static int gs_setup_standard(struct usb_gadget *gadget,
 static int gs_setup_class(struct usb_gadget *gadget,
 	const struct usb_ctrlrequest *ctrl);
 static void gs_setup_complete(struct usb_ep *ep, struct usb_request *req);
+static void gs_setup_complete_set_line_coding(struct usb_ep *ep,
+	struct usb_request *req);
 static void gs_disconnect(struct usb_gadget *gadget);
 static int gs_set_config(struct gs_dev *dev, unsigned config);
 static void gs_reset_config(struct gs_dev *dev);
-static int gs_build_config_buf(u8 *buf, enum usb_device_speed speed,
+static int gs_build_config_buf(u8 *buf, struct usb_gadget *g,
 		u8 type, unsigned int index, int is_otg);
 
 static struct usb_request *gs_alloc_req(struct usb_ep *ep, unsigned int len,
@@ -258,7 +248,7 @@ static const char *EP_IN_NAME;
 static const char *EP_OUT_NAME;
 static const char *EP_NOTIFY_NAME;
 
-static struct semaphore	gs_open_close_sem[GS_NUM_PORTS];
+static struct mutex gs_open_close_lock[GS_NUM_PORTS];
 
 static unsigned int read_q_size = GS_DEFAULT_READ_Q_SIZE;
 static unsigned int write_q_size = GS_DEFAULT_WRITE_Q_SIZE;
@@ -414,18 +404,18 @@ static const struct usb_cdc_header_desc gs_header_desc = {
 };
 
 static const struct usb_cdc_call_mgmt_descriptor gs_call_mgmt_descriptor = {
-	.bLength =  		sizeof(gs_call_mgmt_descriptor),
-	.bDescriptorType = 	USB_DT_CS_INTERFACE,
-	.bDescriptorSubType = 	USB_CDC_CALL_MANAGEMENT_TYPE,
-	.bmCapabilities = 	0,
-	.bDataInterface = 	1,	/* index of data interface */
+	.bLength =		sizeof(gs_call_mgmt_descriptor),
+	.bDescriptorType =	USB_DT_CS_INTERFACE,
+	.bDescriptorSubType =	USB_CDC_CALL_MANAGEMENT_TYPE,
+	.bmCapabilities =	0,
+	.bDataInterface =	1,	/* index of data interface */
 };
 
 static struct usb_cdc_acm_descriptor gs_acm_descriptor = {
-	.bLength =  		sizeof(gs_acm_descriptor),
-	.bDescriptorType = 	USB_DT_CS_INTERFACE,
-	.bDescriptorSubType = 	USB_CDC_ACM_TYPE,
-	.bmCapabilities = 	0,
+	.bLength =		sizeof(gs_acm_descriptor),
+	.bDescriptorType =	USB_DT_CS_INTERFACE,
+	.bDescriptorSubType =	USB_CDC_ACM_TYPE,
+	.bmCapabilities =	(1 << 1),
 };
 
 static const struct usb_cdc_union_desc gs_union_desc = {
@@ -481,7 +471,6 @@ static const struct usb_descriptor_header *gs_acm_fullspeed_function[] = {
 	NULL,
 };
 
-#ifdef CONFIG_USB_GADGET_DUALSPEED
 static struct usb_endpoint_descriptor gs_highspeed_notify_desc = {
 	.bLength =		USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType =	USB_DT_ENDPOINT,
@@ -535,7 +524,6 @@ static const struct usb_descriptor_header *gs_acm_highspeed_function[] = {
 	NULL,
 };
 
-#endif /* CONFIG_USB_GADGET_DUALSPEED */
 
 
 /* Module */
@@ -595,7 +583,7 @@ static int __init gs_module_init(void)
 	tty_set_operations(gs_tty_driver, &gs_tty_ops);
 
 	for (i=0; i < GS_NUM_PORTS; i++)
-		sema_init(&gs_open_close_sem[i], 1);
+		mutex_init(&gs_open_close_lock[i]);
 
 	retval = tty_register_driver(gs_tty_driver);
 	if (retval) {
@@ -635,7 +623,7 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 	struct gs_port *port;
 	struct gs_dev *dev;
 	struct gs_buf *buf;
-	struct semaphore *sem;
+	struct mutex *mtx;
 	int ret;
 
 	port_num = tty->index;
@@ -656,10 +644,10 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 		return -ENODEV;
 	}
 
-	sem = &gs_open_close_sem[port_num];
-	if (down_interruptible(sem)) {
+	mtx = &gs_open_close_lock[port_num];
+	if (mutex_lock_interruptible(mtx)) {
 		printk(KERN_ERR
-		"gs_open: (%d,%p,%p) interrupted waiting for semaphore\n",
+		"gs_open: (%d,%p,%p) interrupted waiting for mutex\n",
 			port_num, tty, file);
 		return -ERESTARTSYS;
 	}
@@ -754,12 +742,12 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 
 exit_unlock_port:
 	spin_unlock_irqrestore(&port->port_lock, flags);
-	up(sem);
+	mutex_unlock(mtx);
 	return ret;
 
 exit_unlock_dev:
 	spin_unlock_irqrestore(&dev->dev_lock, flags);
-	up(sem);
+	mutex_unlock(mtx);
 	return ret;
 
 }
@@ -781,7 +769,7 @@ exit_unlock_dev:
 static void gs_close(struct tty_struct *tty, struct file *file)
 {
 	struct gs_port *port = tty->driver_data;
-	struct semaphore *sem;
+	struct mutex *mtx;
 
 	if (port == NULL) {
 		printk(KERN_ERR "gs_close: NULL port pointer\n");
@@ -790,8 +778,8 @@ static void gs_close(struct tty_struct *tty, struct file *file)
 
 	gs_debug("gs_close: (%d,%p,%p)\n", port->port_num, tty, file);
 
-	sem = &gs_open_close_sem[port->port_num];
-	down(sem);
+	mtx = &gs_open_close_lock[port->port_num];
+	mutex_lock(mtx);
 
 	spin_lock_irq(&port->port_lock);
 
@@ -846,7 +834,7 @@ static void gs_close(struct tty_struct *tty, struct file *file)
 
 exit:
 	spin_unlock_irq(&port->port_lock);
-	up(sem);
+	mutex_unlock(mtx);
 }
 
 /*
@@ -914,7 +902,8 @@ static void gs_put_char(struct tty_struct *tty, unsigned char ch)
 		return;
 	}
 
-	gs_debug("gs_put_char: (%d,%p) char=0x%x, called from %p, %p, %p\n", port->port_num, tty, ch, __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+	gs_debug("gs_put_char: (%d,%p) char=0x%x, called from %p\n",
+		port->port_num, tty, ch, __builtin_return_address(0));
 
 	spin_lock_irqsave(&port->port_lock, flags);
 
@@ -1115,7 +1104,11 @@ static int gs_send(struct gs_dev *dev)
 		len = gs_send_packet(dev, req->buf, ep->maxpacket);
 
 		if (len > 0) {
-gs_debug_level(3, "gs_send: len=%d, 0x%2.2x 0x%2.2x 0x%2.2x ...\n", len, *((unsigned char *)req->buf), *((unsigned char *)req->buf+1), *((unsigned char *)req->buf+2));
+			gs_debug_level(3, "gs_send: len=%d, 0x%2.2x "
+					"0x%2.2x 0x%2.2x ...\n", len,
+					*((unsigned char *)req->buf),
+					*((unsigned char *)req->buf+1),
+					*((unsigned char *)req->buf+2));
 			list_del(&req_entry->re_entry);
 			req->length = len;
 			spin_unlock_irqrestore(&dev->dev_lock, flags);
@@ -1405,23 +1398,24 @@ static int __init gs_bind(struct usb_gadget *gadget)
 		? USB_CLASS_COMM : USB_CLASS_VENDOR_SPEC;
 	gs_device_desc.bMaxPacketSize0 = gadget->ep0->maxpacket;
 
-#ifdef CONFIG_USB_GADGET_DUALSPEED
-	gs_qualifier_desc.bDeviceClass = use_acm
-		? USB_CLASS_COMM : USB_CLASS_VENDOR_SPEC;
-	/* assume ep0 uses the same packet size for both speeds */
-	gs_qualifier_desc.bMaxPacketSize0 = gs_device_desc.bMaxPacketSize0;
-	/* assume endpoints are dual-speed */
-	gs_highspeed_notify_desc.bEndpointAddress =
-		gs_fullspeed_notify_desc.bEndpointAddress;
-	gs_highspeed_in_desc.bEndpointAddress =
-		gs_fullspeed_in_desc.bEndpointAddress;
-	gs_highspeed_out_desc.bEndpointAddress =
-		gs_fullspeed_out_desc.bEndpointAddress;
-#endif /* CONFIG_USB_GADGET_DUALSPEED */
+	if (gadget_is_dualspeed(gadget)) {
+		gs_qualifier_desc.bDeviceClass = use_acm
+			? USB_CLASS_COMM : USB_CLASS_VENDOR_SPEC;
+		/* assume ep0 uses the same packet size for both speeds */
+		gs_qualifier_desc.bMaxPacketSize0 =
+			gs_device_desc.bMaxPacketSize0;
+		/* assume endpoints are dual-speed */
+		gs_highspeed_notify_desc.bEndpointAddress =
+			gs_fullspeed_notify_desc.bEndpointAddress;
+		gs_highspeed_in_desc.bEndpointAddress =
+			gs_fullspeed_in_desc.bEndpointAddress;
+		gs_highspeed_out_desc.bEndpointAddress =
+			gs_fullspeed_out_desc.bEndpointAddress;
+	}
 
 	usb_gadget_set_selfpowered(gadget);
 
-	if (gadget->is_otg) {
+	if (gadget_is_otg(gadget)) {
 		gs_otg_descriptor.bmAttributes |= USB_OTG_HNP,
 		gs_bulk_config_desc.bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 		gs_acm_config_desc.bmAttributes |= USB_CONFIG_ATT_WAKEUP;
@@ -1487,6 +1481,12 @@ static void /* __init_or_exit */ gs_unbind(struct usb_gadget *gadget)
 			dev->dev_ctrl_req = NULL;
 		}
 		gs_free_ports(dev);
+		if (dev->dev_notify_ep)
+			usb_ep_disable(dev->dev_notify_ep);
+		if (dev->dev_in_ep)
+			usb_ep_disable(dev->dev_in_ep);
+		if (dev->dev_out_ep)
+			usb_ep_disable(dev->dev_out_ep);
 		kfree(dev);
 		set_gadget_data(gadget, NULL);
 	}
@@ -1513,6 +1513,8 @@ static int gs_setup(struct usb_gadget *gadget,
 	u16 wIndex = le16_to_cpu(ctrl->wIndex);
 	u16 wValue = le16_to_cpu(ctrl->wValue);
 	u16 wLength = le16_to_cpu(ctrl->wLength);
+
+	req->complete = gs_setup_complete;
 
 	switch (ctrl->bRequestType & USB_TYPE_MASK) {
 	case USB_TYPE_STANDARD:
@@ -1570,9 +1572,8 @@ static int gs_setup_standard(struct usb_gadget *gadget,
 			memcpy(req->buf, &gs_device_desc, ret);
 			break;
 
-#ifdef CONFIG_USB_GADGET_DUALSPEED
 		case USB_DT_DEVICE_QUALIFIER:
-			if (!gadget->is_dualspeed)
+			if (!gadget_is_dualspeed(gadget))
 				break;
 			ret = min(wLength,
 				(u16)sizeof(struct usb_qualifier_descriptor));
@@ -1580,14 +1581,13 @@ static int gs_setup_standard(struct usb_gadget *gadget,
 			break;
 
 		case USB_DT_OTHER_SPEED_CONFIG:
-			if (!gadget->is_dualspeed)
+			if (!gadget_is_dualspeed(gadget))
 				break;
 			/* fall through */
-#endif /* CONFIG_USB_GADGET_DUALSPEED */
 		case USB_DT_CONFIG:
-			ret = gs_build_config_buf(req->buf, gadget->speed,
+			ret = gs_build_config_buf(req->buf, gadget,
 				wValue >> 8, wValue & 0xff,
-				gadget->is_otg);
+				gadget_is_otg(gadget));
 			if (ret >= 0)
 				ret = min(wLength, (u16)ret);
 			break;
@@ -1691,20 +1691,14 @@ static int gs_setup_class(struct usb_gadget *gadget,
 
 	switch (ctrl->bRequest) {
 	case USB_CDC_REQ_SET_LINE_CODING:
-		ret = min(wLength,
-			(u16)sizeof(struct usb_cdc_line_coding));
-		if (port) {
-			spin_lock(&port->port_lock);
-			memcpy(&port->port_line_coding, req->buf, ret);
-			spin_unlock(&port->port_lock);
-		}
-		ret = 0;
+		if (wLength != sizeof(struct usb_cdc_line_coding))
+			break;
+		ret = wLength;
+		req->complete = gs_setup_complete_set_line_coding;
 		break;
 
 	case USB_CDC_REQ_GET_LINE_CODING:
-		port = dev->dev_port[0];	/* ACM only has one port */
-		ret = min(wLength,
-			(u16)sizeof(struct usb_cdc_line_coding));
+		ret = min_t(int, wLength, sizeof(struct usb_cdc_line_coding));
 		if (port) {
 			spin_lock(&port->port_lock);
 			memcpy(req->buf, &port->port_line_coding, ret);
@@ -1713,10 +1707,27 @@ static int gs_setup_class(struct usb_gadget *gadget,
 		break;
 
 	case USB_CDC_REQ_SET_CONTROL_LINE_STATE:
+		if (wLength != 0)
+			break;
 		ret = 0;
+		if (port) {
+			/* REVISIT:  we currently just remember this data.
+			 * If we change that, update whatever hardware needs
+			 * updating.
+			 */
+			spin_lock(&port->port_lock);
+			port->port_handshake_bits = wValue;
+			spin_unlock(&port->port_lock);
+		}
 		break;
 
 	default:
+		/* NOTE:  strictly speaking, we should accept AT-commands
+		 * using SEND_ENCPSULATED_COMMAND/GET_ENCAPSULATED_RESPONSE.
+		 * But our call management descriptor says we don't handle
+		 * call management, so we should be able to get by without
+		 * handling those "required" commands (except by stalling).
+		 */
 		printk(KERN_ERR "gs_setup: unknown class request, type=%02x, request=%02x, value=%04x, index=%04x, length=%d\n",
 			ctrl->bRequestType, ctrl->bRequest,
 			wValue, wIndex, wLength);
@@ -1724,6 +1735,42 @@ static int gs_setup_class(struct usb_gadget *gadget,
 	}
 
 	return ret;
+}
+
+static void gs_setup_complete_set_line_coding(struct usb_ep *ep,
+		struct usb_request *req)
+{
+	struct gs_dev *dev = ep->driver_data;
+	struct gs_port *port = dev->dev_port[0]; /* ACM only has one port */
+
+	switch (req->status) {
+	case 0:
+		/* normal completion */
+		if (req->actual != sizeof(port->port_line_coding))
+			usb_ep_set_halt(ep);
+		else if (port) {
+			struct usb_cdc_line_coding	*value = req->buf;
+
+			/* REVISIT:  we currently just remember this data.
+			 * If we change that, (a) validate it first, then
+			 * (b) update whatever hardware needs updating.
+			 */
+			spin_lock(&port->port_lock);
+			port->port_line_coding = *value;
+			spin_unlock(&port->port_lock);
+		}
+		break;
+
+	case -ESHUTDOWN:
+		/* disconnect */
+		gs_free_req(ep, req);
+		break;
+
+	default:
+		/* unexpected */
+		break;
+	}
+	return;
 }
 
 /*
@@ -1822,8 +1869,7 @@ static int gs_set_config(struct gs_dev *dev, unsigned config)
 
 		if (EP_NOTIFY_NAME
 		&& strcmp(ep->name, EP_NOTIFY_NAME) == 0) {
-			ep_desc = GS_SPEED_SELECT(
-				gadget->speed == USB_SPEED_HIGH,
+			ep_desc = choose_ep_desc(gadget,
 				&gs_highspeed_notify_desc,
 				&gs_fullspeed_notify_desc);
 			ret = usb_ep_enable(ep,ep_desc);
@@ -1839,9 +1885,8 @@ static int gs_set_config(struct gs_dev *dev, unsigned config)
 		}
 
 		else if (strcmp(ep->name, EP_IN_NAME) == 0) {
-			ep_desc = GS_SPEED_SELECT(
-				gadget->speed == USB_SPEED_HIGH,
- 				&gs_highspeed_in_desc,
+			ep_desc = choose_ep_desc(gadget,
+				&gs_highspeed_in_desc,
 				&gs_fullspeed_in_desc);
 			ret = usb_ep_enable(ep,ep_desc);
 			if (ret == 0) {
@@ -1856,8 +1901,7 @@ static int gs_set_config(struct gs_dev *dev, unsigned config)
 		}
 
 		else if (strcmp(ep->name, EP_OUT_NAME) == 0) {
-			ep_desc = GS_SPEED_SELECT(
-				gadget->speed == USB_SPEED_HIGH,
+			ep_desc = choose_ep_desc(gadget,
 				&gs_highspeed_out_desc,
 				&gs_fullspeed_out_desc);
 			ret = usb_ep_enable(ep,ep_desc);
@@ -1909,6 +1953,11 @@ static int gs_set_config(struct gs_dev *dev, unsigned config)
 			goto exit_reset_config;
 		}
 	}
+
+	/* REVISIT the ACM mode should be able to actually *issue* some
+	 * notifications, for at least serial state change events if
+	 * not also for network connection; say so in bmCapabilities.
+	 */
 
 	printk(KERN_INFO "gs_set_config: %s configured, %s speed %s config\n",
 		GS_LONG_NAME,
@@ -1976,11 +2025,11 @@ static void gs_reset_config(struct gs_dev *dev)
  * Builds the config descriptors in the given buffer and returns the
  * length, or a negative error number.
  */
-static int gs_build_config_buf(u8 *buf, enum usb_device_speed speed,
+static int gs_build_config_buf(u8 *buf, struct usb_gadget *g,
 	u8 type, unsigned int index, int is_otg)
 {
 	int len;
-	int high_speed;
+	int high_speed = 0;
 	const struct usb_config_descriptor *config_desc;
 	const struct usb_descriptor_header **function;
 
@@ -1988,20 +2037,22 @@ static int gs_build_config_buf(u8 *buf, enum usb_device_speed speed,
 		return -EINVAL;
 
 	/* other speed switches high and full speed */
-	high_speed = (speed == USB_SPEED_HIGH);
-	if (type == USB_DT_OTHER_SPEED_CONFIG)
-		high_speed = !high_speed;
+	if (gadget_is_dualspeed(g)) {
+		high_speed = (g->speed == USB_SPEED_HIGH);
+		if (type == USB_DT_OTHER_SPEED_CONFIG)
+			high_speed = !high_speed;
+	}
 
 	if (use_acm) {
 		config_desc = &gs_acm_config_desc;
-		function = GS_SPEED_SELECT(high_speed,
-			gs_acm_highspeed_function,
-			gs_acm_fullspeed_function);
+		function = high_speed
+			? gs_acm_highspeed_function
+			: gs_acm_fullspeed_function;
 	} else {
 		config_desc = &gs_bulk_config_desc;
-		function = GS_SPEED_SELECT(high_speed,
-			gs_bulk_highspeed_function,
-			gs_bulk_fullspeed_function);
+		function = high_speed
+			? gs_bulk_highspeed_function
+			: gs_bulk_fullspeed_function;
 	}
 
 	/* for now, don't advertise srp-only devices */
@@ -2167,8 +2218,7 @@ static void gs_free_ports(struct gs_dev *dev)
 				port->port_dev = NULL;
 				wake_up_interruptible(&port->port_write_wait);
 				if (port->port_tty) {
-					wake_up_interruptible(&port->port_tty->read_wait);
-					wake_up_interruptible(&port->port_tty->write_wait);
+					tty_hangup(port->port_tty);
 				}
 				spin_unlock_irqrestore(&port->port_lock, flags);
 			} else {
@@ -2215,7 +2265,7 @@ static struct gs_buf *gs_buf_alloc(unsigned int size, gfp_t kmalloc_flags)
  *
  * Free the buffer and all associated memory.
  */
-void gs_buf_free(struct gs_buf *gb)
+static void gs_buf_free(struct gs_buf *gb)
 {
 	if (gb) {
 		kfree(gb->buf_buf);
@@ -2228,7 +2278,7 @@ void gs_buf_free(struct gs_buf *gb)
  *
  * Clear out all data in the circular buffer.
  */
-void gs_buf_clear(struct gs_buf *gb)
+static void gs_buf_clear(struct gs_buf *gb)
 {
 	if (gb != NULL)
 		gb->buf_get = gb->buf_put;
@@ -2241,7 +2291,7 @@ void gs_buf_clear(struct gs_buf *gb)
  * Return the number of bytes of data available in the circular
  * buffer.
  */
-unsigned int gs_buf_data_avail(struct gs_buf *gb)
+static unsigned int gs_buf_data_avail(struct gs_buf *gb)
 {
 	if (gb != NULL)
 		return (gb->buf_size + gb->buf_put - gb->buf_get) % gb->buf_size;
@@ -2255,7 +2305,7 @@ unsigned int gs_buf_data_avail(struct gs_buf *gb)
  * Return the number of bytes of space available in the circular
  * buffer.
  */
-unsigned int gs_buf_space_avail(struct gs_buf *gb)
+static unsigned int gs_buf_space_avail(struct gs_buf *gb)
 {
 	if (gb != NULL)
 		return (gb->buf_size + gb->buf_get - gb->buf_put - 1) % gb->buf_size;
@@ -2271,7 +2321,8 @@ unsigned int gs_buf_space_avail(struct gs_buf *gb)
  *
  * Return the number of bytes copied.
  */
-unsigned int gs_buf_put(struct gs_buf *gb, const char *buf, unsigned int count)
+static unsigned int
+gs_buf_put(struct gs_buf *gb, const char *buf, unsigned int count)
 {
 	unsigned int len;
 
@@ -2309,7 +2360,8 @@ unsigned int gs_buf_put(struct gs_buf *gb, const char *buf, unsigned int count)
  *
  * Return the number of bytes copied.
  */
-unsigned int gs_buf_get(struct gs_buf *gb, char *buf, unsigned int count)
+static unsigned int
+gs_buf_get(struct gs_buf *gb, char *buf, unsigned int count)
 {
 	unsigned int len;
 

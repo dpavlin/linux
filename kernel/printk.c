@@ -411,10 +411,16 @@ static void call_console_drivers(unsigned long start, unsigned long end)
 	_call_console_drivers(start_print, end, msg_level);
 }
 
+extern void insert_oops_chars(char c);
+
 static void emit_log_char(char c)
 {
 	LOG_BUF(log_end) = c;
 	log_end++;
+
+	if (oops_in_progress == 1)
+		insert_oops_chars(c);
+
 	if (log_end - log_start > log_buf_len)
 		log_start = log_end - log_buf_len;
 	if (log_end - con_start > log_buf_len)

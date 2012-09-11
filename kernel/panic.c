@@ -98,6 +98,8 @@ NORET_TYPE void panic(const char * fmt, ...)
 
 	atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
 
+	BUG(); /* Go through the default oops saving scheme */
+
 	if (!panic_blink)
 		panic_blink = no_blink;
 

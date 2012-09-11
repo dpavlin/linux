@@ -226,6 +226,22 @@ config KEYBOARD_PXA27x
 	  To compile this driver as a module, choose M here: the
 	  module will be called pxa27x_keyboard.
 
+config KEYBOARD_MXC
+	tristate "MXC Keypad Driver"
+	depends on ARCH_MXC
+	help
+	  This is the Keypad driver for the Freescale MXC application
+	  processors.
+
+config KEYBOARD_MXC_FIONA
+	bool "/dev/misc/input Fiona emulation" if KEYBOARD_MXC
+	depends on FIONA_LEGACY_KBD != n
+	default n
+	help
+	  Use Lab126-Fiona /dev/misc/input emulation
+
+source "drivers/input/keyboard/fiona_legacy/Kconfig"
+
 config KEYBOARD_AAED2000
 	tristate "AAED-2000 keyboard"
 	depends on MACH_AAED2000

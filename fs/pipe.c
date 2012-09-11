@@ -729,7 +729,7 @@ const struct file_operations read_fifo_fops = {
 	.ioctl		= pipe_ioctl,
 	.open		= pipe_read_open,
 	.release	= pipe_read_release,
-	.fasync		= pipe_read_fasync,
+	.unlocked_fasync		= pipe_read_fasync,
 };
 
 const struct file_operations write_fifo_fops = {
@@ -741,7 +741,7 @@ const struct file_operations write_fifo_fops = {
 	.ioctl		= pipe_ioctl,
 	.open		= pipe_write_open,
 	.release	= pipe_write_release,
-	.fasync		= pipe_write_fasync,
+	.unlocked_fasync		= pipe_write_fasync,
 };
 
 const struct file_operations rdwr_fifo_fops = {
@@ -754,7 +754,7 @@ const struct file_operations rdwr_fifo_fops = {
 	.ioctl		= pipe_ioctl,
 	.open		= pipe_rdwr_open,
 	.release	= pipe_rdwr_release,
-	.fasync		= pipe_rdwr_fasync,
+	.unlocked_fasync		= pipe_rdwr_fasync,
 };
 
 static const struct file_operations read_pipe_fops = {
@@ -766,7 +766,7 @@ static const struct file_operations read_pipe_fops = {
 	.ioctl		= pipe_ioctl,
 	.open		= pipe_read_open,
 	.release	= pipe_read_release,
-	.fasync		= pipe_read_fasync,
+	.unlocked_fasync		= pipe_read_fasync,
 };
 
 static const struct file_operations write_pipe_fops = {
@@ -778,7 +778,7 @@ static const struct file_operations write_pipe_fops = {
 	.ioctl		= pipe_ioctl,
 	.open		= pipe_write_open,
 	.release	= pipe_write_release,
-	.fasync		= pipe_write_fasync,
+	.unlocked_fasync		= pipe_write_fasync,
 };
 
 static const struct file_operations rdwr_pipe_fops = {
@@ -791,7 +791,7 @@ static const struct file_operations rdwr_pipe_fops = {
 	.ioctl		= pipe_ioctl,
 	.open		= pipe_rdwr_open,
 	.release	= pipe_rdwr_release,
-	.fasync		= pipe_rdwr_fasync,
+	.unlocked_fasync		= pipe_rdwr_fasync,
 };
 
 struct pipe_inode_info * alloc_pipe_info(struct inode *inode)

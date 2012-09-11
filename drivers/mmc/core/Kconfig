@@ -14,3 +14,12 @@ config MMC_UNSAFE_RESUME
 	  This option is usually just for embedded systems which use
 	  a MMC/SD card for rootfs. Most people should say N here.
 
+config MMC_DETECT_SYNC
+	bool "Synchronous MMC detection processing"
+	depends on MACH_LAB126
+	default y
+	help
+	  This selects whether or not to have MMC card detection processing
+	  operate in a synchronous fashion for non-IRQ-based card insertion
+	  events.  This must be enabled for Mario MoviNAND-based platforms.
+

@@ -285,7 +285,7 @@ static const struct file_operations tsdev_fops = {
 	.release =	tsdev_release,
 	.read =		tsdev_read,
 	.poll =		tsdev_poll,
-	.fasync =	tsdev_fasync,
+	.unlocked_fasync =	tsdev_fasync,
 	.ioctl =	tsdev_ioctl,
 };
 

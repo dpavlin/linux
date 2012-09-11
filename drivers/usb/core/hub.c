@@ -106,7 +106,7 @@ MODULE_PARM_DESC (blinkenlights, "true to cycle leds on hubs");
  * otherwise the new scheme is used.  If that fails and "use_both_schemes"
  * is set, then the driver will make another attempt, using the other scheme.
  */
-static int old_scheme_first = 0;
+static int old_scheme_first = 1;
 module_param(old_scheme_first, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(old_scheme_first,
 		 "start with the old device initialization scheme");
@@ -123,6 +123,8 @@ MODULE_PARM_DESC(use_both_schemes,
 DECLARE_RWSEM(ehci_cf_port_reset_rwsem);
 EXPORT_SYMBOL_GPL(ehci_cf_port_reset_rwsem);
 
+void doze_disable(void);
+void doze_enable(void);
 
 static inline char *portspeed(int portstatus)
 {
@@ -512,9 +514,9 @@ static void hub_quiesce(struct usb_hub *hub)
 	/* (blocking) stop khubd and related activity */
 	usb_kill_urb(hub->urb);
 	if (hub->has_indicators)
-		cancel_delayed_work(&hub->leds);
-	if (hub->has_indicators || hub->tt.hub)
-		flush_scheduled_work();
+		cancel_rearming_delayed_work(&hub->leds);
+	if (hub->tt.hub)
+		cancel_work_sync(&hub->tt.kevent);
 }
 
 static void hub_activate(struct usb_hub *hub)
@@ -648,7 +650,7 @@ static int hub_configure(struct usb_hub *hub,
 	}
 
 	hdev->maxchild = hub->descriptor->bNbrPorts;
-	dev_info (hub_dev, "%d port%s detected\n", hdev->maxchild,
+	dev_dbg (hub_dev, "%d port%s detected\n", hdev->maxchild,
 		(hdev->maxchild == 1) ? "" : "s");
 
 	wHubCharacteristics = le16_to_cpu(hub->descriptor->wHubCharacteristics);
@@ -927,7 +929,7 @@ descriptor_error:
 		goto descriptor_error;
 
 	/* We found a hub */
-	dev_info (&intf->dev, "USB hub found\n");
+	dev_dbg (&intf->dev, "USB hub found\n");
 
 	hub = kzalloc(sizeof(*hub), GFP_KERNEL);
 	if (!hub) {
@@ -1219,7 +1221,7 @@ void usb_disconnect(struct usb_device **pdev)
 	 * this quiesces everyting except pending urbs.
 	 */
 	usb_set_device_state(udev, USB_STATE_NOTATTACHED);
-	dev_info (&udev->dev, "USB disconnect, address %d\n", udev->devnum);
+	dev_dbg (&udev->dev, "USB disconnect, address %d\n", udev->devnum);
 
 	usb_lock_device(udev);
 
@@ -2144,6 +2146,7 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 		delay = HUB_LONG_RESET_TIME;
 
 	mutex_lock(&usb_address0_mutex);
+	doze_disable();
 
 	/* Reset the device; full speed may morph to high speed */
 	retval = hub_port_reset(hub, port1, udev, delay);
@@ -2195,7 +2198,7 @@ hub_port_init (struct usb_hub *hub, struct usb_device *udev, int port1,
 				break;
 	default: 		speed = "?";	break;
 	}
-	dev_info (&udev->dev,
+	dev_dbg (&udev->dev,
 		  "%s %s speed %sUSB device using %s and address %d\n",
 		  (udev->config) ? "reset" : "new", speed, type,
 		  udev->bus->controller->driver->name, udev->devnum);
@@ -2349,6 +2352,7 @@ fail:
 	if (retval)
 		hub_port_disable(hub, port1, 0);
 	mutex_unlock(&usb_address0_mutex);
+	doze_enable();
 	return retval;
 }
 
@@ -2909,7 +2913,7 @@ static int config_descriptors_changed(struct usb_device *udev)
 		if (len < le16_to_cpu(udev->config[index].desc.wTotalLength))
 			len = le16_to_cpu(udev->config[index].desc.wTotalLength);
 	}
-	buf = kmalloc (len, GFP_KERNEL);
+	buf = kmalloc (len, GFP_NOIO);
 	if (buf == NULL) {
 		dev_err(&udev->dev, "no mem to re-read configs after reset\n");
 		/* assume the worst */

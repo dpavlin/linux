@@ -37,6 +37,11 @@
   #define SMC_USE_16BIT		0
   #define SMC_USE_32BIT		1
 #endif
+#ifdef CONFIG_MACH_MARIO_MX
+  #undef SMC_USE_PXA_DMA
+  #define SMC_USE_16BIT               0
+  #define SMC_USE_32BIT               1
+#endif
 
 
 /*
@@ -70,7 +75,7 @@
 
 
 
-#if	 SMC_USE_PXA_DMA
+#ifdef	 SMC_USE_PXA_DMA
 #define SMC_USE_DMA
 
 /*
@@ -527,6 +532,7 @@ smc_pxa_dma_outsw(struct device *dev, u_long ioaddr, u_long physaddr,
 
 #define FLOW			(0x08)	  /* R/W */
 #define FLOW_FCPT_			(0xFFFF0000)
+#define FLOW_FCPT_ALT_			(0x00010000)
 #define FLOW_FCPASS_			(0x00000004)
 #define FLOW_FCEN_			(0x00000002)
 #define FLOW_FCBSY_			(0x00000001)

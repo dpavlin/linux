@@ -185,6 +185,8 @@ config FB_TILEBLITTING
 comment "Frame buffer hardware drivers"
 	depends on FB
 
+source "drivers/video/eink/Kconfig"
+
 config FB_CIRRUS
 	tristate "Cirrus Logic support"
 	depends on FB && (ZORRO || PCI)
@@ -320,6 +322,10 @@ config FB_CLPS711X
 	help
 	  Say Y to enable the Framebuffer driver for the CLPS7111 and
 	  EP7212 processors.
+
+if ARCH_MXC
+source "drivers/video/mxc/Kconfig"
+endif
 
 config FB_SA1100
 	bool "SA-1100 LCD support"

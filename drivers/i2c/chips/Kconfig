@@ -4,6 +4,26 @@
 
 menu "Miscellaneous I2C Chip support"
 
+config SENSORS_MMA7455L
+	tristate "Freescale MMA7455L Digital Output Accelerometer"
+	depends on INPUT
+        select INPUT_POLLDEV
+	help
+	  If you say yes here you get support for the Freescale MMA7455L
+	  Digital Output Accelerometer.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called mma7455L.
+
+config SENSORS_MMA7660F
+	tristate "Freescale MMA7660F Digital Output Accelerometer"
+	help
+	  If you say yes here you get support for the Freescale MMA7660F
+	  Digital Output Accelerometer.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called mma7660F.
+
 config SENSORS_DS1337
 	tristate "Dallas Semiconductor DS1337 and DS1339 Real Time Clock"
 	depends on EXPERIMENTAL

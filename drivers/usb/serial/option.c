@@ -168,8 +168,16 @@ static struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x1430) }, /* Novatel Merlin XU870 HSDPA/3G */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2100) }, /* Novatel EV620 CDMA/EV-DO */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2110) }, /* Novatel Merlin ES620 / Merlin ES720 / Ovation U720 */
+#ifdef CONFIG_MACH_LAB126
+	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2120) }, /* Novatel E725 */
+	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x8000) }, /* Novatel E727 */
+#endif
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2130) }, /* Novatel Merlin ES620 SM Bus */
 	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2410) }, /* Novatel EU740 */
+#ifdef CONFIG_MACH_LAB126
+	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x2420) }, /* Novatel EU860D/EU870D */
+	{ USB_DEVICE(NOVATELWIRELESS_VENDOR_ID, 0x9001) }, /* Novatel EU960D/EU970D */
+#endif
 	{ USB_DEVICE(ANYDATA_VENDOR_ID, ANYDATA_PRODUCT_ADU_E100A) },
 	{ USB_DEVICE(ANYDATA_VENDOR_ID, ANYDATA_PRODUCT_ADU_500A) },
 	{ USB_DEVICE(BANDRICH_VENDOR_ID, BANDRICH_PRODUCT_C100_1) },
@@ -228,9 +236,16 @@ static int debug;
 
 /* per port private data */
 
-#define N_IN_URB 4
-#define N_OUT_URB 1
+#ifdef CONFIG_USB_STATIC_IRAM
+/* Match the IRAM TD size and NTDs */
+#define N_IN_URB 16 /* Increase the number of buffers */
 #define IN_BUFLEN 4096
+#else
+#define N_IN_URB 4
+#define IN_BUFLEN 4096
+#endif
+
+#define N_OUT_URB 1
 #define OUT_BUFLEN 128
 
 struct option_port_private {
@@ -263,7 +278,7 @@ static int __init option_init(void)
 	if (retval)
 		goto failed_driver_register;
 
-	info(DRIVER_DESC ": " DRIVER_VERSION);
+	dbg(DRIVER_DESC ": " DRIVER_VERSION);
 
 	return 0;
 
@@ -734,7 +749,6 @@ static int option_startup(struct usb_serial *serial)
 	}
 
 	option_setup_urbs(serial);
-
 	return (0);
 }
 

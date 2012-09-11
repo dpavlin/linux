@@ -1,0 +1,14 @@
+#
+# Haptic device driver configuration
+#
+config INPUT_HAPTIC
+	tristate "Haptic device driver"
+	depends on INPUT
+	help
+	  Say Y here if you have a haptic device connected to your system.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called haptic.
+

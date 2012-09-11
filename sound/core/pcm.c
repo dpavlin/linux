@@ -30,6 +30,14 @@
 #include <sound/control.h>
 #include <sound/info.h>
 
+#ifdef CONFIG_MACH_MARIO_MX
+
+#include <asm/arch-mxc/mx31_pins.h>
+#include <asm/arch/gpio.h>
+#define MARIO_SPEAKER_ENABLE_GPIO MX31_PIN_UART1_RTS
+
+#endif
+
 MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>, Abramo Bagnara <abramo@alsa-project.org>");
 MODULE_DESCRIPTION("Midlevel PCM code for ALSA.");
 MODULE_LICENSE("GPL");
@@ -339,6 +347,60 @@ static void snd_pcm_substream_proc_info_read(struct snd_info_entry *entry,
 			       buffer);
 }
 
+#ifdef CONFIG_MACH_MARIO_MX
+
+void mario_set_speaker_enable(int enabled)
+{
+    mxc_set_gpio_direction(MARIO_SPEAKER_ENABLE_GPIO, 0);
+    mxc_set_gpio_dataout(MARIO_SPEAKER_ENABLE_GPIO, enabled);
+}
+
+int mario_get_speaker_enable(void)
+{
+    int enabled = 0;
+
+    // On Mario, speaker GPIO is the UART1_RTS pin...
+    enabled = mxc_get_gpio_datain(MARIO_SPEAKER_ENABLE_GPIO);
+    return( enabled );
+}
+
+static void snd_pcm_proc_speaker_enable_write(struct snd_info_entry *entry,
+				     struct snd_info_buffer *buffer)
+{
+	char line[64];
+    int enable = 1;
+	if (!snd_info_get_line(buffer, line, sizeof(line))) {
+		enable = simple_strtoul(line, NULL, 10);
+        mario_set_speaker_enable(enable);
+    }
+}
+
+static void snd_pcm_proc_speaker_enable_read(struct snd_pcm_substream *substream,
+				   struct snd_info_buffer *buffer)
+{
+    int speaker_enabled = 0;
+
+    speaker_enabled = mario_get_speaker_enable();
+
+	snd_iprintf(buffer, "%d\n", speaker_enabled);
+}
+
+static void snd_pcm_substream_proc_speaker_enable_read(struct snd_info_entry *entry,
+						  struct snd_info_buffer *buffer)
+{
+	snd_pcm_proc_speaker_enable_read((struct snd_pcm_substream *)entry->private_data,
+			       buffer);
+}
+
+static void snd_pcm_substream_proc_speaker_enable_write(struct snd_info_entry *entry,
+						  struct snd_info_buffer *buffer)
+{
+	snd_pcm_proc_speaker_enable_write((struct snd_info_entry *)entry->private_data, buffer);
+}
+
+#endif // CONFIG_MACH_MARIO_MX
+
+
 static void snd_pcm_substream_proc_hw_params_read(struct snd_info_entry *entry,
 						  struct snd_info_buffer *buffer)
 {
@@ -539,6 +601,24 @@ static int snd_pcm_substream_proc_init(struct snd_pcm_substream *substream)
 	}
 	substream->proc_hw_params_entry = entry;
 
+#ifdef CONFIG_MACH_MARIO_MX
+	if ((entry = snd_info_create_card_entry(card, "speaker", substream->proc_root)) != NULL) {
+		snd_info_set_text_ops(entry, substream,
+				      snd_pcm_substream_proc_speaker_enable_read);
+		entry->c.text.read = snd_pcm_substream_proc_speaker_enable_read;
+        entry->c.text.write = snd_pcm_substream_proc_speaker_enable_write;
+		entry->mode |= S_IWUSR;
+		entry->private_data = NULL;
+		if (snd_info_register(entry) < 0) {
+			snd_info_free_entry(entry);
+			entry = NULL;
+		}
+	}
+
+	substream->proc_speaker_enable_entry = entry;
+
+#endif
+
 	if ((entry = snd_info_create_card_entry(card, "sw_params", substream->proc_root)) != NULL) {
 		snd_info_set_text_ops(entry, substream,
 				      snd_pcm_substream_proc_sw_params_read);
@@ -568,6 +648,8 @@ static int snd_pcm_substream_proc_done(struct snd_pcm_substream *substream)
 	substream->proc_info_entry = NULL;
 	snd_info_free_entry(substream->proc_hw_params_entry);
 	substream->proc_hw_params_entry = NULL;
+	snd_info_free_entry(substream->proc_speaker_enable_entry);
+	substream->proc_speaker_enable_entry = NULL;
 	snd_info_free_entry(substream->proc_sw_params_entry);
 	substream->proc_sw_params_entry = NULL;
 	snd_info_free_entry(substream->proc_status_entry);

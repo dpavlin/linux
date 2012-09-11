@@ -446,7 +446,7 @@ static inline void dbs_timer_init(void)
 
 static inline void dbs_timer_exit(void)
 {
-	cancel_delayed_work(&dbs_work);
+	cancel_rearming_delayed_work(&dbs_work);
 	return;
 }
 
@@ -469,10 +469,12 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		if (policy->cpuinfo.transition_latency >
 				(TRANSITION_LATENCY_LIMIT * 1000))
 			return -EINVAL;
-		if (this_dbs_info->enable) /* Already enabled */
-			break;
 		 
 		mutex_lock(&dbs_mutex);
+		if (this_dbs_info->enable) {
+			mutex_unlock(&dbs_mutex);
+			break;
+		}
 
 		rc = sysfs_create_group(&policy->kobj, &dbs_attr_group);
 		if (rc) {

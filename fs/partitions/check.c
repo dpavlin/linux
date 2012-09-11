@@ -111,7 +111,7 @@ static int (*check_part[])(struct parsed_partitions *, struct block_device *) = 
 #endif
 	NULL
 };
- 
+
 /*
  * disk_name() is used by partition check code and the genhd driver.
  * It formats the devicename of the indicated disk into
@@ -205,7 +205,7 @@ struct part_attribute {
 	ssize_t (*store)(struct hd_struct *,const char *, size_t);
 };
 
-static ssize_t 
+static ssize_t
 part_attr_show(struct kobject * kobj, struct attribute * attr, char * page)
 {
 	struct hd_struct * p = container_of(kobj,struct hd_struct,kobj);
@@ -242,7 +242,7 @@ static ssize_t part_uevent_store(struct hd_struct * p,
 static ssize_t part_dev_read(struct hd_struct * p, char *page)
 {
 	struct gendisk *disk = container_of(p->kobj.parent,struct gendisk,kobj);
-	dev_t dev = MKDEV(disk->major, disk->first_minor + p->partno); 
+	dev_t dev = MKDEV(disk->major, disk->first_minor + p->partno);
 	return print_dev_t(page, dev);
 }
 static ssize_t part_start_read(struct hd_struct * p, char *page)
@@ -371,11 +371,12 @@ void delete_partition(struct gendisk *disk, int part)
 void add_partition(struct gendisk *disk, int part, sector_t start, sector_t len, int flags)
 {
 	struct hd_struct *p;
+	int err;
 
 	p = kmalloc(sizeof(*p), GFP_KERNEL);
 	if (!p)
 		return;
-	
+
 	memset(p, 0, sizeof(*p));
 	p->start_sect = start;
 	p->nr_sects = len;
@@ -389,10 +390,10 @@ void add_partition(struct gendisk *disk, int part, sector_t start, sector_t len,
 	p->kobj.parent = &disk->kobj;
 	p->kobj.ktype = &ktype_part;
 	kobject_init(&p->kobj);
-	kobject_add(&p->kobj);
+	err = kobject_add(&p->kobj);
 	if (!disk->part_uevent_suppress)
 		kobject_uevent(&p->kobj, KOBJ_ADD);
-	sysfs_create_link(&p->kobj, &block_subsys.kobj, "subsystem");
+	err = sysfs_create_link(&p->kobj, &block_subsys.kobj, "subsystem");
 	if (flags & ADDPART_FLAG_WHOLEDISK) {
 		static struct attribute addpartattr = {
 			.name = "whole_disk",
@@ -400,7 +401,7 @@ void add_partition(struct gendisk *disk, int part, sector_t start, sector_t len,
 			.owner = THIS_MODULE,
 		};
 
-		sysfs_create_file(&p->kobj, &addpartattr);
+		err = sysfs_create_file(&p->kobj, &addpartattr);
 	}
 	partition_sysfs_add_subdir(p);
 	disk->part[part-1] = p;

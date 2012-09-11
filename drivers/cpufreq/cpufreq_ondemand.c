@@ -490,7 +490,7 @@ static inline void dbs_timer_init(struct cpu_dbs_info_s *dbs_info)
 static inline void dbs_timer_exit(struct cpu_dbs_info_s *dbs_info)
 {
 	dbs_info->enable = 0;
-	cancel_delayed_work(&dbs_info->work);
+	cancel_rearming_delayed_work(&dbs_info->work);
 }
 
 static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
@@ -514,10 +514,13 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 			       "due to too long transition latency\n");
 			return -EINVAL;
 		}
-		if (this_dbs_info->enable) /* Already enabled */
-			break;
 
 		mutex_lock(&dbs_mutex);
+		if (this_dbs_info->enable) {
+			mutex_unlock(&dbs_mutex);
+			break;
+		}
+
 		dbs_enable++;
 
 		rc = sysfs_create_group(&policy->kobj, &dbs_attr_group);

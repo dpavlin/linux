@@ -1443,6 +1443,7 @@ static void do_tty_hangup(struct work_struct *work)
 		tty_ldisc_enable(tty);
 		tty_ldisc_deref(ld);
 	}
+
 	unlock_kernel();
 	if (f)
 		fput(f);
@@ -1540,8 +1541,6 @@ void disassociate_ctty(int on_exit)
 	struct tty_struct *tty;
 	struct pid *tty_pgrp = NULL;
 
-	lock_kernel();
-
 	mutex_lock(&tty_mutex);
 	tty = get_current_tty();
 	if (tty) {
@@ -1562,7 +1561,6 @@ void disassociate_ctty(int on_exit)
 			put_pid(old_pgrp);
 		}
 		mutex_unlock(&tty_mutex);
-		unlock_kernel();	
 		return;
 	}
 	if (tty_pgrp) {
@@ -1597,7 +1595,6 @@ void disassociate_ctty(int on_exit)
 	read_lock(&tasklist_lock);
 	session_clear_tty(task_session(current));
 	read_unlock(&tasklist_lock);
-	unlock_kernel();
 }
 
 /**
@@ -1714,13 +1711,11 @@ static ssize_t tty_read(struct file * file, char __user * buf, size_t count,
 	/* We want to wait for the line discipline to sort out in this
 	   situation */
 	ld = tty_ldisc_ref_wait(tty);
-	lock_kernel();
 	if (ld->read)
 		i = (ld->read)(tty,file,buf,count);
 	else
 		i = -EIO;
 	tty_ldisc_deref(ld);
-	unlock_kernel();
 	if (i > 0)
 		inode->i_atime = current_fs_time(inode->i_sb);
 	return i;
@@ -1792,9 +1787,7 @@ static inline ssize_t do_tty_write(
 		ret = -EFAULT;
 		if (copy_from_user(tty->write_buf, buf, size))
 			break;
-		lock_kernel();
 		ret = write(tty, file, tty->write_buf, size);
-		unlock_kernel();
 		if (ret <= 0)
 			break;
 		written += ret;

@@ -677,7 +677,7 @@ static const struct file_operations mousedev_fops = {
 	.poll =		mousedev_poll,
 	.open =		mousedev_open,
 	.release =	mousedev_release,
-	.fasync =	mousedev_fasync,
+	.unlocked_fasync =	mousedev_fasync,
 };
 
 static int mousedev_connect(struct input_handler *handler, struct input_dev *dev,

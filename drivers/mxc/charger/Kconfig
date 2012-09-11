@@ -1,0 +1,22 @@
+#
+# Battery charger driver
+#
+
+menu "Battery Charger driver"
+
+config MXC_CHARGER
+	tristate "MXC Battery Charger driver"
+	depends on MXC_PMIC_MC13783
+	default m
+	help
+	   This selects the battery charger driver that controls the
+	   Freescale MC13783.
+
+	   Say Y to compile it into the kernel.
+
+	   If unsure, say N.
+
+	   To compile this driver as a module, choose M here:
+	   the module will be called "charger".
+
+endmenu

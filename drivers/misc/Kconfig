@@ -187,5 +187,20 @@ config THINKPAD_ACPI_BAY
 
 	  If you are not sure, say Y here.
 
+config PROC_SERIALNUMBER
+	bool "Device serial number driver"
+	default n
+	---help---
+	  This option enables the creation of the /proc/serialnumber entry,
+	  which returns the unique serial number of the device.
+
+config PROC_BOOTDATA
+	bool "Boot data driver"
+	default n
+	---help---
+	  This option enables the creation of the /proc/bd/ entries,
+	  which provide an interface for accessing various shared boot
+	  global data entries in the common memory space between the
+	  kernel and bootloader.
 
 endmenu

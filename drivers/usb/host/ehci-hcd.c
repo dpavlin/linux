@@ -33,6 +33,7 @@
 #include <linux/usb.h>
 #include <linux/moduleparam.h>
 #include <linux/dma-mapping.h>
+#include <linux/cpufreq.h>
 
 #include "../core/hcd.h"
 
@@ -134,6 +135,9 @@ module_param (ignore_oc, bool, S_IRUGO);
 MODULE_PARM_DESC (ignore_oc, "ignore bogus hardware overcurrent indications");
 
 #define	INTR_MASK (STS_IAA | STS_FATAL | STS_PCD | STS_ERR | STS_INT)
+
+atomic_t ehci_hcd_in_workqueue = ATOMIC_INIT(0);
+atomic_t ehci_hcd_in_scaling = ATOMIC_INIT(0);
 
 /*-------------------------------------------------------------------------*/
 
@@ -262,13 +266,52 @@ static void ehci_quiesce (struct ehci_hcd *ehci)
 	}
 }
 
+#ifdef CONFIG_CPU_FREQ
+static void ehci_work_less(struct ehci_hcd *ehci);
+
+static void ehci_cpufreq_work(struct ehci_hcd *ehci)
+{
+	unsigned long flags;
+
+	if (atomic_read(&ehci_hcd_in_workqueue) == 1) {
+		spin_lock_irqsave(&ehci->lock, flags);
+		ehci_work_less(ehci);
+		spin_unlock_irqrestore(&ehci->lock, flags);
+	}
+}
+
+int ehci_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
+				 void *data)
+{
+	struct ehci_hcd *ehci = container_of(nb, struct ehci_hcd,
+						cpufreq_transition);
+	switch (val) {
+	case CPUFREQ_PRECHANGE:
+		ehci_cpufreq_work(ehci);
+		atomic_set(&ehci_hcd_in_scaling, 1);
+		break;
+	case CPUFREQ_POSTCHANGE:
+		atomic_set(&ehci_hcd_in_scaling, 0);
+		break;
+	}
+
+	return 0;
+}
+
+#endif /* CONFIG_CPU_FREQ */
+
 /*-------------------------------------------------------------------------*/
 
 static void ehci_work(struct ehci_hcd *ehci);
 
 #include "ehci-hub.c"
+#ifdef CONFIG_USB_STATIC_IRAM
+#include "ehci-mem-iram.c"
+#include "ehci-q-iram.c"
+#else
 #include "ehci-mem.c"
 #include "ehci-q.c"
+#endif
 #include "ehci-sched.c"
 
 /*-------------------------------------------------------------------------*/
@@ -296,7 +339,11 @@ static void ehci_watchdog (unsigned long param)
 		start_unlink_async (ehci, ehci->async);
 
 	/* ehci could run by timer, without IRQs ... */
-	ehci_work (ehci);
+	if ( (atomic_read(&ehci_hcd_in_workqueue) == 0) &&
+		(atomic_read(&ehci_hcd_in_scaling) == 0) ) {
+		atomic_set(&ehci_hcd_in_workqueue, 1);
+		schedule_work(&ehci->tq);
+	}
 
 	spin_unlock_irqrestore (&ehci->lock, flags);
 }
@@ -313,18 +360,13 @@ static void ehci_turn_off_all_ports(struct ehci_hcd *ehci)
 		ehci_writel(ehci, PORT_RWC_BITS,
 				&ehci->regs->port_status[port]);
 }
-
-/* ehci_shutdown kick in for silicon on any bus (not just pci, etc).
- * This forcibly disables dma and IRQs, helping kexec and other cases
- * where the next system software may expect clean state.
+/*
+ * Halt HC, turn off all ports, and let the BIOS use the companion controllers.
+ * Should be called with ehci->lock held.
  */
-static void
-ehci_shutdown (struct usb_hcd *hcd)
+static void ehci_silence_controller(struct ehci_hcd *ehci)
 {
-	struct ehci_hcd	*ehci;
-
-	ehci = hcd_to_ehci (hcd);
-	(void) ehci_halt (ehci);
+	ehci_halt(ehci);
 	ehci_turn_off_all_ports(ehci);
 
 	/* make BIOS/etc use companion controller during reboot */
@@ -332,6 +374,20 @@ ehci_shutdown (struct usb_hcd *hcd)
 
 	/* unblock posted writes */
 	ehci_readl(ehci, &ehci->regs->configured_flag);
+}
+
+/* ehci_shutdown kick in for silicon on any bus (not just pci, etc).
+ * This forcibly disables dma and IRQs, helping kexec and other cases
+ * where the next system software may expect clean state.
+ */
+static void ehci_shutdown(struct usb_hcd *hcd)
+{
+	struct ehci_hcd	*ehci = hcd_to_ehci(hcd);
+
+	del_timer_sync(&ehci->watchdog);
+	spin_lock_irq(&ehci->lock);
+	ehci_silence_controller(ehci);
+	spin_unlock_irq(&ehci->lock);
 }
 
 static void ehci_port_power (struct ehci_hcd *ehci, int is_on)
@@ -370,6 +426,7 @@ static void ehci_work (struct ehci_hcd *ehci)
 		return;
 	ehci->scanning = 1;
 	scan_async (ehci);
+
 	if (ehci->next_uframe != -1)
 		scan_periodic (ehci);
 	ehci->scanning = 0;
@@ -384,14 +441,56 @@ static void ehci_work (struct ehci_hcd *ehci)
 		timer_action (ehci, TIMER_IO_WATCHDOG);
 }
 
+static void ehci_work_less(struct ehci_hcd *ehci)
+{
+	atomic_set(&ehci_hcd_in_workqueue, 0);
+
+	timer_action_done (ehci, TIMER_IO_WATCHDOG);
+	if (ehci->reclaim_ready)
+		end_unlink_async (ehci);
+
+	/* another CPU may drop ehci->lock during a schedule scan while
+	 * it reports urb completions.  this flag guards against bogus
+	 * attempts at re-entrant schedule scanning.
+	 */
+
+	if (ehci->scanning)
+		return;
+	ehci->scanning = 1;
+	scan_async (ehci);
+
+	if (ehci->next_uframe != -1)
+		scan_periodic (ehci);
+	ehci->scanning = 0;
+
+	/* the IO watchdog guards against hardware or driver bugs that
+	 * misplace IRQs, and should let us run completely without IRQs.
+	 * such lossage has been observed on both VT6202 and VT8235.
+	 */
+	if (HC_IS_RUNNING (ehci_to_hcd(ehci)->state) &&
+			(ehci->async->qh_next.ptr != NULL ||
+			 ehci->periodic_sched != 0))
+		timer_action (ehci, TIMER_IO_WATCHDOG);
+}
+void ehci_work_tq(struct work_struct *work)
+{
+	struct ehci_hcd	*ehci = container_of(work, struct ehci_hcd, tq);
+	unsigned long flags;
+
+	spin_lock_irqsave(&ehci->lock, flags);
+	ehci_work_less(ehci);
+	spin_unlock_irqrestore(&ehci->lock, flags);
+}
+EXPORT_SYMBOL(ehci_work_tq);
+
+/*
+ * Called when the ehci_hcd module is removed.
+ */
 static void ehci_stop (struct usb_hcd *hcd)
 {
 	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
 
-	ehci_dbg (ehci, "stop\n");
-
-	/* Turn off port power on all root hub ports. */
-	ehci_port_power (ehci, 0);
+	ehci_dbg (ehci, "hcd stop\n");
 
 	/* no more interrupts ... */
 	del_timer_sync (&ehci->watchdog);
@@ -400,12 +499,14 @@ static void ehci_stop (struct usb_hcd *hcd)
 	if (HC_IS_RUNNING (hcd->state))
 		ehci_quiesce (ehci);
 
+	ehci_silence_controller(ehci);
 	ehci_reset (ehci);
-	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
 	spin_unlock_irq(&ehci->lock);
 
-	/* let companion controllers work when we aren't */
-	ehci_writel(ehci, 0, &ehci->regs->configured_flag);
+#ifdef CONFIG_CPU_FREQ
+	cpufreq_unregister_notifier(&ehci->cpufreq_transition,
+				CPUFREQ_TRANSITION_NOTIFIER);
+#endif
 
 	remove_companion_file(ehci);
 	remove_debug_files (ehci);
@@ -415,6 +516,7 @@ static void ehci_stop (struct usb_hcd *hcd)
 	if (ehci->async)
 		ehci_work (ehci);
 	spin_unlock_irq (&ehci->lock);
+	cancel_work_sync(&ehci->tq);
 	ehci_mem_cleanup (ehci);
 
 #ifdef	EHCI_STATS
@@ -509,6 +611,12 @@ static int ehci_init(struct usb_hcd *hcd)
 	}
 	ehci->command = temp;
 
+#ifdef CONFIG_CPU_FREQ
+	ehci->cpufreq_transition.notifier_call = ehci_cpufreq_notifier;
+	cpufreq_register_notifier(&ehci->cpufreq_transition,
+				CPUFREQ_TRANSITION_NOTIFIER);
+#endif
+
 	return 0;
 }
 
@@ -583,7 +691,7 @@ static int ehci_run (struct usb_hcd *hcd)
 	up_write(&ehci_cf_port_reset_rwsem);
 
 	temp = HC_VERSION(ehci_readl(ehci, &ehci->caps->hc_capbase));
-	ehci_info (ehci,
+	ehci_dbg (ehci,
 		"USB %x.%x started, EHCI %x.%02x, driver %s%s\n",
 		((ehci->sbrn & 0xf0)>>4), (ehci->sbrn & 0x0f),
 		temp >> 8, temp & 0xff, DRIVER_VERSION,
@@ -702,9 +810,16 @@ dead:
 		}
 	}
 
-	if (bh)
-		ehci_work (ehci);
+	if (bh) {
+		if ( (atomic_read(&ehci_hcd_in_workqueue) == 0) &&
+			(atomic_read(&ehci_hcd_in_scaling) == 0) ) {
+			atomic_set(&ehci_hcd_in_workqueue, 1);
+			schedule_work(&ehci->tq);
+		}
+	}
+		
 	spin_unlock (&ehci->lock);
+
 	if (pcd_status & STS_PCD)
 		usb_hcd_poll_rh_status(hcd);
 	return IRQ_HANDLED;
@@ -944,6 +1059,11 @@ MODULE_LICENSE ("GPL");
 #ifdef CONFIG_SOC_AU1200
 #include "ehci-au1xxx.c"
 #define	PLATFORM_DRIVER		ehci_hcd_au1xxx_driver
+#endif
+
+#ifdef CONFIG_USB_EHCI_ARC
+#include "ehci-arc.c"
+#define	PLATFORM_DRIVER		ehci_fsl_driver
 #endif
 
 #ifdef CONFIG_PPC_PS3

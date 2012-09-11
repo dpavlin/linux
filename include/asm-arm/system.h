@@ -84,8 +84,13 @@ struct task_struct;
 
 /* information about the system we're running on */
 extern unsigned int system_rev;
+#ifdef CONFIG_MACH_LAB126
+#define BOARD_SERIALNUM_SIZE	32
+extern unsigned char system_serial_data[];
+#else
 extern unsigned int system_serial_low;
 extern unsigned int system_serial_high;
+#endif
 extern unsigned int mem_fclk_21285;
 
 struct pt_regs;

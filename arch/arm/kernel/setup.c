@@ -66,11 +66,16 @@ EXPORT_SYMBOL(__machine_arch_type);
 unsigned int system_rev;
 EXPORT_SYMBOL(system_rev);
 
+#ifdef CONFIG_MACH_LAB126
+unsigned char system_serial_data[BOARD_SERIALNUM_SIZE];
+EXPORT_SYMBOL(system_serial_data);
+#else
 unsigned int system_serial_low;
 EXPORT_SYMBOL(system_serial_low);
 
 unsigned int system_serial_high;
 EXPORT_SYMBOL(system_serial_high);
+#endif
 
 unsigned int elf_hwcap;
 EXPORT_SYMBOL(elf_hwcap);
@@ -684,8 +689,12 @@ __tagtable(ATAG_INITRD2, parse_tag_initrd2);
 
 static int __init parse_tag_serialnr(const struct tag *tag)
 {
+#ifdef CONFIG_MACH_LAB126
+	memcpy(system_serial_data, tag->u.serialnr.data, BOARD_SERIALNUM_SIZE);
+#else
 	system_serial_low = tag->u.serialnr.low;
 	system_serial_high = tag->u.serialnr.high;
+#endif
 	return 0;
 }
 
@@ -884,6 +893,9 @@ c_show_cache(struct seq_file *m, const char *type, unsigned int cache)
 static int c_show(struct seq_file *m, void *v)
 {
 	int i;
+#ifdef CONFIG_MACH_LAB126
+	char serial_num[BOARD_SERIALNUM_SIZE + 1];
+#endif
 
 	seq_printf(m, "Processor\t: %s rev %d (%s)\n",
 		   cpu_name, (int)processor_id & 15, elf_platform);
@@ -959,8 +971,15 @@ static int c_show(struct seq_file *m, void *v)
 
 	seq_printf(m, "Hardware\t: %s\n", machine_name);
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
+	
+#ifdef CONFIG_MACH_LAB126
+	memset(serial_num, '\0', sizeof(serial_num));
+	strncpy(serial_num, system_serial_data, BOARD_SERIALNUM_SIZE);
+	seq_printf(m, "Serial\t\t: \"%s\"\n", serial_num);
+#else
 	seq_printf(m, "Serial\t\t: %08x%08x\n",
 		   system_serial_high, system_serial_low);
+#endif
 
 	return 0;
 }

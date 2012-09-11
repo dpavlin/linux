@@ -126,7 +126,9 @@ int vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd, unsigned lon
 
 			/* Did FASYNC state change ? */
 			if ((flag ^ filp->f_flags) & FASYNC) {
-				if (filp->f_op && filp->f_op->fasync) {
+				if (filp->f_op && filp->f_op->unlocked_fasync)
+					error = filp->f_op->unlocked_fasync(fd,filp, on);
+				else if (filp->f_op && filp->f_op->fasync) {
 					lock_kernel();
 					error = filp->f_op->fasync(fd, filp, on);
 					unlock_kernel();

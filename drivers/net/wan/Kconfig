@@ -494,4 +494,9 @@ config SBNI_MULTILINE
 
 	  If unsure, say N.
 
+config MARIO_WAN
+	tristate "Mario WAN module support"
+	depends on MACH_MARIO_MX
+
 endif # WAN
+

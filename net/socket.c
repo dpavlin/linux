@@ -130,7 +130,7 @@ static const struct file_operations socket_file_ops = {
 	.mmap =		sock_mmap,
 	.open =		sock_no_open,	/* special open code to disallow open via /proc */
 	.release =	sock_close,
-	.fasync =	sock_fasync,
+	.unlocked_fasync =	sock_fasync,
 	.sendpage =	sock_sendpage,
 	.splice_write = generic_splice_sendpage,
 };

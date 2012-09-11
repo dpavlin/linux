@@ -432,7 +432,6 @@ static void noinline __init_refok rest_init(void)
 	numa_default_policy();
 	pid = kernel_thread(kthreadd, NULL, CLONE_FS | CLONE_FILES);
 	kthreadd_task = find_task_by_pid(pid);
-	unlock_kernel();
 
 	/*
 	 * The boot idle thread must execute schedule()
@@ -621,6 +620,7 @@ asmlinkage void __init start_kernel(void)
 	signals_init();
 	/* rootfs populating might need page-writeback */
 	page_writeback_init();
+	unlock_kernel();
 #ifdef CONFIG_PROC_FS
 	proc_root_init();
 #endif
@@ -813,7 +813,11 @@ static int __init kernel_init(void * unused)
 
 	cpuset_init_smp();
 
+	unlock_kernel();
+
 	do_basic_setup();
+
+	lock_kernel();
 
 	/*
 	 * check if there is an early userspace init.  If yes, let it do all

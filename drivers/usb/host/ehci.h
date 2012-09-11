@@ -55,6 +55,10 @@ struct ehci_hcd {			/* one per controller */
 	__u32			hcs_params;	/* cached register copy */
 	spinlock_t		lock;
 
+#ifdef CONFIG_CPU_FREQ
+	struct notifier_block	cpufreq_transition;
+#endif
+
 	/* async schedule support */
 	struct ehci_qh		*async;
 	struct ehci_qh		*reclaim;
@@ -99,6 +103,22 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		big_endian_mmio:1;
 
 	u8			sbrn;		/* packed release number */
+
+	/*
+	 * OTG controllers and transceivers need software interaction;
+	 * other external transceivers should be software-transparent
+	 */
+	struct otg_transceiver   *transceiver;
+#ifdef CONFIG_USB_STATIC_IRAM
+	u32			iram_buffer[2];
+	u32			iram_buffer_v[2];
+	int  			iram_in_use[2];
+	int			usb_address[2];
+#endif
+
+	struct work_struct tq;
+	
+	struct tasklet_struct ehci_tasklet;
 
 	/* irq statistics */
 #ifdef EHCI_STATS
@@ -276,6 +296,10 @@ struct ehci_regs {
 #define PORT_RWC_BITS   (PORT_CSC | PORT_PEC | PORT_OCC)
 } __attribute__ ((packed));
 
+#define USBMODE		0x68		/* USB Device mode */
+#define USBMODE_BE	(1<<2)		/* BE/LE endianness select */
+#define USBMODE_CM_HC	(3<<0)		/* host controller mode */
+
 /* Appendix C, Debug port ... intended for use with special "debug devices"
  * that can help if there's no serial console.  (nonstandard enumeration.)
  */
@@ -339,6 +363,10 @@ struct ehci_qtd {
 	struct list_head	qtd_list;		/* sw qtd list */
 	struct urb		*urb;			/* qtd's urb */
 	size_t			length;			/* length of buffer */
+#ifdef CONFIG_USB_STATIC_IRAM
+	size_t			buffer_offset;
+	int			last_one;
+#endif
 } __attribute__ ((aligned (32)));
 
 /* mask NakCnt+T in qh->hw_alt_next */
@@ -702,6 +730,10 @@ static inline void ehci_writel (const struct ehci_hcd *ehci,
 #define STUB_DEBUG_FILES
 #endif	/* DEBUG */
 
+#ifdef CONFIG_USB_STATIC_IRAM /* IRAM */
+#define IRAM_TD_SIZE	4096		/* size of 1 qTD's buffer */
+#define IRAM_NTD	2		/* number of TDs in IRAM  */
+#endif
 /*-------------------------------------------------------------------------*/
 
 #endif /* __LINUX_EHCI_HCD_H */

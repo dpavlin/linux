@@ -24,6 +24,9 @@ int resume_device(struct device * dev)
 {
 	int error = 0;
 
+	if (dev->no_suspend)
+		return 0;
+
 	TRACE_DEVICE(dev);
 	TRACE_RESUME(0);
 
@@ -62,6 +65,9 @@ int resume_device(struct device * dev)
 static int resume_device_early(struct device * dev)
 {
 	int error = 0;
+
+	if (dev->no_suspend)
+		return 0;
 
 	TRACE_DEVICE(dev);
 	TRACE_RESUME(0);

@@ -85,9 +85,17 @@ struct tag_initrd {
 /* board serial number. "64 bits should be enough for everybody" */
 #define ATAG_SERIAL	0x54410006
 
+#ifdef CONFIG_MACH_LAB126
+#define BOARD_SERIALNUM_SIZE	32
+#endif
+
 struct tag_serialnr {
+#ifdef CONFIG_MACH_LAB126
+	__u8 data[BOARD_SERIALNUM_SIZE];
+#else
 	__u32 low;
 	__u32 high;
+#endif
 };
 
 /* board revision */

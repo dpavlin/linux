@@ -457,7 +457,7 @@ static int __fat_readdir(struct inode *inode, struct file *filp, void *dirent,
 	loff_t cpos;
 	int ret = 0;
 
-	lock_kernel();
+	lock_super(sb);
 
 	cpos = filp->f_pos;
 	/* Fake . and .. for the root directory. */
@@ -637,7 +637,7 @@ FillFailed:
 	if (unicode)
 		free_page((unsigned long)unicode);
 out:
-	unlock_kernel();
+	unlock_super(sb);
 	return ret;
 }
 
@@ -721,11 +721,13 @@ static int fat_ioctl_readdir(struct inode *inode, struct file *filp,
 	return ret;
 }
 
-static int fat_dir_ioctl(struct inode *inode, struct file *filp,
-			 unsigned int cmd, unsigned long arg)
+static long fat_dir_ioctl(struct file *filp, unsigned int cmd,
+						unsigned long arg)
 {
 	struct dirent __user *d1 = (struct dirent __user *)arg;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	int short_only, both;
+	int ret;
 
 	switch (cmd) {
 	case VFAT_IOCTL_READDIR_SHORT:
@@ -737,7 +739,7 @@ static int fat_dir_ioctl(struct inode *inode, struct file *filp,
 		both = 1;
 		break;
 	default:
-		return fat_generic_ioctl(inode, filp, cmd, arg);
+		return fat_generic_ioctl(filp, cmd, arg);
 	}
 
 	if (!access_ok(VERIFY_WRITE, d1, sizeof(struct dirent[2])))
@@ -750,8 +752,12 @@ static int fat_dir_ioctl(struct inode *inode, struct file *filp,
 	if (put_user(0, &d1->d_reclen))
 		return -EFAULT;
 
-	return fat_ioctl_readdir(inode, filp, d1, fat_ioctl_filldir,
-				 short_only, both);
+	lock_kernel();
+	ret = fat_ioctl_readdir(inode, filp, d1, fat_ioctl_filldir,
+				short_only, both);
+
+	unlock_kernel();
+	return ret;
 }
 
 #ifdef CONFIG_COMPAT
@@ -798,7 +804,7 @@ static long fat_compat_dir_ioctl(struct file *filp, unsigned cmd,
 const struct file_operations fat_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= fat_readdir,
-	.ioctl		= fat_dir_ioctl,
+	.unlocked_ioctl		= fat_dir_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= fat_compat_dir_ioctl,
 #endif

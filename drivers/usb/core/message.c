@@ -18,6 +18,9 @@
 #include "hcd.h"	/* for usbcore internals */
 #include "usb.h"
 
+void doze_enable(void);
+void doze_disable(void);
+
 static void usb_api_blocking_completion(struct urb *urb)
 {
 	complete((struct completion *)urb->context);
@@ -36,6 +39,7 @@ static int usb_start_wait_urb(struct urb *urb, int timeout, int *actual_length)
 	unsigned long expire;
 	int status;
 
+	doze_disable();
 	init_completion(&done); 	
 	urb->context = &done;
 	urb->actual_length = 0;
@@ -63,6 +67,7 @@ out:
 		*actual_length = urb->actual_length;
 
 	usb_free_urb(urb);
+	doze_enable();
 	return status;
 }
 

@@ -65,11 +65,24 @@ struct param_struct {
 	    unsigned long initrd_size;		/* 68 */
 	    unsigned long rd_start;		/* 72 */
 	    unsigned long system_rev;		/* 76 */
+#ifdef CONFIG_MACH_LAB126
+	    unsigned long unused1;		/* 80 */
+	    unsigned long unused2;		/* 84 */
+#else
 	    unsigned long system_serial_low;	/* 80 */
 	    unsigned long system_serial_high;	/* 84 */
+#endif
 	    unsigned long mem_fclk_21285;       /* 88 */
+
+#ifdef CONFIG_MACH_LAB126
+	    unsigned char system_serial_data[BOARD_SERIALNUM_SIZE];
+#endif
 	} s;
+#ifdef CONFIG_MACH_LAB126
+	char unused[256-BOARD_SERIALNUM_SIZE];
+#else
 	char unused[256];
+#endif
     } u1;
     union {
 	char paths[8][128];
@@ -144,8 +157,12 @@ static void __init build_tag_list(struct param_struct *params, void *taglist)
 	tag = tag_next(tag);
 	tag->hdr.tag = ATAG_SERIAL;
 	tag->hdr.size = tag_size(tag_serialnr);
+#ifdef CONFIG_MACH_LAB126
+	memcpy(tag->u.serialnr.data, params->u1.s.system_serial_data, BOARD_SERIALNUM_SIZE);
+#else
 	tag->u.serialnr.low = params->u1.s.system_serial_low;
 	tag->u.serialnr.high = params->u1.s.system_serial_high;
+#endif
 
 	tag = tag_next(tag);
 	tag->hdr.tag = ATAG_REVISION;

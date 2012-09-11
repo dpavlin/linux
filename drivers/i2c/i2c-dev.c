@@ -154,8 +154,8 @@ static ssize_t i2cdev_write (struct file *file, const char __user *buf, size_t c
 	return ret;
 }
 
-static int i2cdev_ioctl(struct inode *inode, struct file *file,
-		unsigned int cmd, unsigned long arg)
+static long i2cdev_ioctl(struct file *file, unsigned int cmd,
+						unsigned long arg)
 {
 	struct i2c_client *client = (struct i2c_client *)file->private_data;
 	struct i2c_rdwr_ioctl_data rdwr_arg;
@@ -396,7 +396,7 @@ static const struct file_operations i2cdev_fops = {
 	.llseek		= no_llseek,
 	.read		= i2cdev_read,
 	.write		= i2cdev_write,
-	.ioctl		= i2cdev_ioctl,
+	.unlocked_ioctl		= i2cdev_ioctl,
 	.open		= i2cdev_open,
 	.release	= i2cdev_release,
 };

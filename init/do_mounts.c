@@ -25,6 +25,7 @@ int __initdata rd_doload;	/* 1 = load RAM disk, 0 = don't load */
 int root_mountflags = MS_RDONLY | MS_SILENT;
 char * __initdata root_device_name;
 static char __initdata saved_root_name[64];
+static int __initdata root_wait;
 
 dev_t ROOT_DEV;
 
@@ -216,6 +217,16 @@ static int __init root_dev_setup(char *line)
 
 __setup("root=", root_dev_setup);
 
+static int __init rootwait_setup(char *str)
+{
+	if (*str)
+		return 0;
+	root_wait = 1;
+	return 1;
+}
+
+__setup("rootwait", rootwait_setup);
+
 static char * __initdata root_mount_data;
 static int __init root_data_setup(char *str)
 {
@@ -349,6 +360,16 @@ static int __init mount_nfs_root(void)
 }
 #endif
 
+#ifdef CONFIG_ROOT_CRAMFS_LINEAR
+static int __init mount_cramfs_linear_root(void)
+{
+	create_dev("/dev/root", ROOT_DEV);
+	if (do_mount_root("/dev/root","cramfs",root_mountflags,root_mount_data) == 0)
+		return 1;
+	return 0;
+}
+#endif
+
 #if defined(CONFIG_BLK_DEV_RAM) || defined(CONFIG_BLK_DEV_FD)
 void __init change_floppy(char *fmt, ...)
 {
@@ -381,6 +402,13 @@ void __init change_floppy(char *fmt, ...)
 
 void __init mount_root(void)
 {
+#ifdef CONFIG_ROOT_CRAMFS_LINEAR
+        if (ROOT_DEV == MKDEV(0, 0)) {
+	        if (mount_cramfs_linear_root())
+		        return;
+		printk (KERN_ERR "VFS: Unable to mount linear cramfs root.\n");
+	}
+#endif
 #ifdef CONFIG_ROOT_NFS
 	if (MAJOR(ROOT_DEV) == UNNAMED_MAJOR) {
 		if (mount_nfs_root())
@@ -438,10 +466,19 @@ void __init prepare_namespace(void)
 			root_device_name += 5;
 	}
 
-	is_floppy = MAJOR(ROOT_DEV) == FLOPPY_MAJOR;
-
 	if (initrd_load())
 		goto out;
+
+	/* wait for any asynchronous scanning to complete */
+	if ((ROOT_DEV == 0) && root_wait) {
+		printk(KERN_INFO "Waiting for root device %s...\n",
+			saved_root_name);
+		while (driver_probe_done() != 0 ||
+			(ROOT_DEV = name_to_dev_t(saved_root_name)) == 0)
+			msleep(100);
+	}
+
+	is_floppy = MAJOR(ROOT_DEV) == FLOPPY_MAJOR;
 
 	if (is_floppy && rd_doload && rd_load_disk(0))
 		ROOT_DEV = Root_RAM0;

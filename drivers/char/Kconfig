@@ -686,6 +686,26 @@ config DS1620
 	  It is recommended to be used on a NetWinder, but it is not a
 	  necessity.
 
+config MARIO_POWER_BUTTON
+	tristate "Mario Power Button"
+	depends on MACH_MARIO_MX
+	---help---
+	  If you say Y here and create a character device node /dev/mariobutton
+	  with major and minor numbers 10 and 158 ("man mknod").
+
+	  If this button is held for less than 2 seconds including a momentary
+	  slide, then the device will enter standby mode.
+
+	  If this button is held for 2 or more seconds, the device will enter
+	  shutdown mode.
+
+	  If the device is hung, then the PMIC has been configured by the 
+	  startup code to reset the device if the button is held for 4 or 
+	  more seconds.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called mariobutton. 
+
 config NWBUTTON
 	tristate "NetWinder Button"
 	depends on ARCH_NETWINDER

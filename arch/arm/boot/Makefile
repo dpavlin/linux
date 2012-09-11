@@ -60,9 +60,15 @@ $(obj)/zImage:	$(obj)/compressed/vmlinux FORCE
 endif
 
 quiet_cmd_uimage = UIMAGE  $@
+ifdef VERSION_TAG
+      cmd_uimage = $(CONFIG_SHELL) $(MKIMAGE) -A arm -O linux -T kernel \
+		   -C none -a $(ZRELADDR) -e $(ZRELADDR) \
+		   -n '$(VERSION_TAG)~$(KERNELRELEASE)' -d $< $@
+else
       cmd_uimage = $(CONFIG_SHELL) $(MKIMAGE) -A arm -O linux -T kernel \
 		   -C none -a $(ZRELADDR) -e $(ZRELADDR) \
 		   -n 'Linux-$(KERNELRELEASE)' -d $< $@
+endif
 
 $(obj)/uImage:	$(obj)/zImage FORCE
 	$(call if_changed,uimage)

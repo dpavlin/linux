@@ -1,0 +1,22 @@
+#
+# Codec configuration
+#
+
+menu "Fiona Legacy Keyboard support"
+
+config FIONA_LEGACY_KBD
+	  tristate "Support for Fiona Legacy Keyboard"
+	  depends on KEYBOARD_MXC
+	  default y
+	---help---
+	  The Fiona Legacy Keyboard driver
+
+config FIONA_LEGACY_KBD_DEBUG
+	bool "Fiona Legacy Keyboard Debugging"
+	depends on FIONA_LEGACY_KBD != n
+	help
+	  This is an option for the developers; most people should
+	  say N here.  This enables Fiona Legacy driver debugging.
+
+endmenu
+

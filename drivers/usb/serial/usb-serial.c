@@ -60,6 +60,7 @@ static int debug;
 static struct usb_serial *serial_table[SERIAL_TTY_MINORS];	/* initially all NULL */
 static spinlock_t table_lock;
 static LIST_HEAD(usb_serial_driver_list);
+static ushort maxSize = 0;
 
 struct usb_serial *usb_serial_get_by_index(unsigned index)
 {
@@ -799,7 +800,7 @@ int usb_serial_probe(struct usb_interface *interface,
 #endif
 
 	/* found all that we need */
-	dev_info(&interface->dev, "%s converter detected\n", type->description);
+	dbg("%s converter detected\n", type->description);
 
 #ifdef CONFIG_USB_SERIAL_GENERIC
 	if (type == &usb_serial_generic_device) {
@@ -864,7 +865,7 @@ int usb_serial_probe(struct usb_interface *interface,
 			dev_err(&interface->dev, "No free urbs available\n");
 			goto probe_error;
 		}
-		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 		port->bulk_in_size = buffer_size;
 		port->bulk_in_endpointAddress = endpoint->bEndpointAddress;
 		port->bulk_in_buffer = kmalloc (buffer_size, GFP_KERNEL);
@@ -888,7 +889,7 @@ int usb_serial_probe(struct usb_interface *interface,
 			dev_err(&interface->dev, "No free urbs available\n");
 			goto probe_error;
 		}
-		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 		port->bulk_out_size = buffer_size;
 		port->bulk_out_endpointAddress = endpoint->bEndpointAddress;
 		port->bulk_out_buffer = kmalloc (buffer_size, GFP_KERNEL);
@@ -913,7 +914,7 @@ int usb_serial_probe(struct usb_interface *interface,
 				dev_err(&interface->dev, "No free urbs available\n");
 				goto probe_error;
 			}
-			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 			port->interrupt_in_endpointAddress = endpoint->bEndpointAddress;
 			port->interrupt_in_buffer = kmalloc (buffer_size, GFP_KERNEL);
 			if (!port->interrupt_in_buffer) {
@@ -940,7 +941,7 @@ int usb_serial_probe(struct usb_interface *interface,
 				dev_err(&interface->dev, "No free urbs available\n");
 				goto probe_error;
 			}
-			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 			port->interrupt_out_size = buffer_size;
 			port->interrupt_out_endpointAddress = endpoint->bEndpointAddress;
 			port->interrupt_out_buffer = kmalloc (buffer_size, GFP_KERNEL);
@@ -1066,7 +1067,7 @@ void usb_serial_disconnect(struct usb_interface *interface)
 		 * cause it to be cleaned up */
 		usb_serial_put(serial);
 	}
-	dev_info(dev, "device disconnected\n");
+	dev_dbg(dev, "device disconnected\n");
 }
 
 static const struct tty_operations serial_ops = {
@@ -1139,7 +1140,7 @@ static int __init usb_serial_init(void)
 		goto exit_generic;
 	}
 
-	info(DRIVER_DESC);
+	dbg(DRIVER_DESC);
 
 	return result;
 
@@ -1214,7 +1215,7 @@ int usb_serial_register(struct usb_serial_driver *driver) /* must be called with
 		list_del(&driver->driver_list);
 	}
 	else
-		info("USB Serial support registered for %s", driver->description);
+		dbg("USB Serial support registered for %s", driver->description);
 
 	return retval;
 }
@@ -1222,7 +1223,7 @@ int usb_serial_register(struct usb_serial_driver *driver) /* must be called with
 
 void usb_serial_deregister(struct usb_serial_driver *device) /* must be called with BKL held */
 {
-	info("USB Serial deregistering driver %s", device->description);
+	dbg("USB Serial deregistering driver %s", device->description);
 	list_del(&device->driver_list);
 	usb_serial_bus_deregister(device);
 }
@@ -1245,3 +1246,6 @@ MODULE_LICENSE("GPL");
 
 module_param(debug, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Debug enabled or not");
+module_param(maxSize, ushort, 0);
+MODULE_PARM_DESC(maxSize, "User specified USB endpoint size");
+

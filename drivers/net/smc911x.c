@@ -71,6 +71,7 @@ static const char version[] =
 #include <linux/ethtool.h>
 #include <linux/mii.h>
 #include <linux/workqueue.h>
+#include <linux/irq.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -298,7 +299,11 @@ static void smc911x_reset(struct net_device *dev)
 	/* Reset the FIFO level and flow control settings */
 	SMC_SET_HW_CFG((lp->tx_fifo_kb & 0xF) << 16);
 //TODO: Figure out what appropriate pause time is
+#if   defined(CONFIG_MACH_MARIO_MX)
+	SMC_SET_FLOW(FLOW_FCPT_ALT_ | FLOW_FCEN_);
+#else
 	SMC_SET_FLOW(FLOW_FCPT_ | FLOW_FCEN_);
+#endif
 	SMC_SET_AFC_CFG(lp->afc_cfg);
 
 
@@ -309,8 +314,13 @@ static void smc911x_reset(struct net_device *dev)
 	 * Deassert IRQ for 1*10us for edge type interrupts
 	 * and drive IRQ pin push-pull
 	 */
-	SMC_SET_IRQ_CFG( (1 << 24) | INT_CFG_IRQ_EN_ | INT_CFG_IRQ_TYPE_ );
 
+#if defined(CONFIG_MACH_MARIO_MX)
+	/* Mario needs open-drain */
+	SMC_SET_IRQ_CFG( ((1 << 24) | INT_CFG_IRQ_EN_ ) & ~INT_CFG_IRQ_TYPE_ );
+#else
+	SMC_SET_IRQ_CFG( (1 << 24) | INT_CFG_IRQ_EN_ | INT_CFG_IRQ_TYPE_ );
+#endif
 	/* clear anything saved */
 	if (lp->pending_tx_skb != NULL) {
 		dev_kfree_skb (lp->pending_tx_skb);
@@ -1921,7 +1931,7 @@ static int __init smc911x_probe(struct net_device *dev, unsigned long ioaddr)
 	val = SMC_GET_BYTE_TEST();
 	DBG(SMC_DEBUG_MISC, "%s: endian probe returned 0x%04x\n", CARDNAME, val);
 	if (val != 0x87654321) {
-		printk(KERN_ERR "Invalid chip endian 0x08%x\n",val);
+		DBG(SMC_DEBUG_MISC, "Invalid chip endian 0x08%x\n",val);
 		retval = -ENODEV;
 		goto err_out;
 	}
@@ -2021,6 +2031,9 @@ static int __init smc911x_probe(struct net_device *dev, unsigned long ioaddr)
 	/* now, reset the chip, and put it into a known state */
 	smc911x_reset(dev);
 
+#if defined(CONFIG_MACH_MARIO_MX)
+	random_ether_addr(dev->dev_addr);
+#endif
 	/*
 	 * If dev->irq is 0, then the device has to be banged on to see
 	 * what the IRQ is.
@@ -2083,6 +2096,8 @@ static int __init smc911x_probe(struct net_device *dev, unsigned long ioaddr)
 	lp->ctl_rspeed = 100;
 
 	/* Grab the IRQ */
+	set_irq_type(dev->irq, IRQT_FALLING);
+
 	retval = request_irq(dev->irq, &smc911x_interrupt,
 			IRQF_SHARED | IRQF_TRIGGER_FALLING, dev->name, dev);
 	if (retval)

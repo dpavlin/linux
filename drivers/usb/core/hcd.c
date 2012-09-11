@@ -748,7 +748,7 @@ static int usb_register_bus(struct usb_bus *bus)
 
 	usb_notify_add_bus(bus);
 
-	dev_info (bus->controller, "new USB bus registered, assigned bus number %d\n", bus->busnum);
+	dev_dbg (bus->controller, "new USB bus registered, assigned bus number %d\n", bus->busnum);
 	return 0;
 }
 
@@ -762,7 +762,7 @@ static int usb_register_bus(struct usb_bus *bus)
  */
 static void usb_deregister_bus (struct usb_bus *bus)
 {
-	dev_info (bus->controller, "USB bus %d deregistered\n", bus->busnum);
+	dev_dbg (bus->controller, "USB bus %d deregistered\n", bus->busnum);
 
 	/*
 	 * NOTE: make sure that all the devices are removed by the
@@ -1561,7 +1561,7 @@ int usb_add_hcd(struct usb_hcd *hcd,
 	int retval;
 	struct usb_device *rhdev;
 
-	dev_info(hcd->self.controller, "%s\n", hcd->product_desc);
+	dev_dbg(hcd->self.controller, "%s\n", hcd->product_desc);
 
 	set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
 
@@ -1616,14 +1616,14 @@ int usb_add_hcd(struct usb_hcd *hcd,
 			goto err_request_irq;
 		}
 		hcd->irq = irqnum;
-		dev_info(hcd->self.controller, "irq %d, %s 0x%08llx\n", irqnum,
+		dev_dbg(hcd->self.controller, "irq %d, %s 0x%08llx\n", irqnum,
 				(hcd->driver->flags & HCD_MEMORY) ?
 					"io mem" : "io base",
 					(unsigned long long)hcd->rsrc_start);
 	} else {
 		hcd->irq = -1;
 		if (hcd->rsrc_start)
-			dev_info(hcd->self.controller, "%s 0x%08llx\n",
+			dev_dbg(hcd->self.controller, "%s 0x%08llx\n",
 					(hcd->driver->flags & HCD_MEMORY) ?
 					"io mem" : "io base",
 					(unsigned long long)hcd->rsrc_start);
@@ -1670,7 +1670,7 @@ EXPORT_SYMBOL (usb_add_hcd);
  */
 void usb_remove_hcd(struct usb_hcd *hcd)
 {
-	dev_info(hcd->self.controller, "remove, state %x\n", hcd->state);
+	dev_dbg(hcd->self.controller, "remove, state %x\n", hcd->state);
 
 	if (HC_IS_RUNNING (hcd->state))
 		hcd->state = HC_STATE_QUIESCING;

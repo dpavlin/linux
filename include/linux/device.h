@@ -418,6 +418,7 @@ struct device {
 	char	bus_id[BUS_ID_SIZE];	/* position on parent bus */
 	struct device_type	*type;
 	unsigned		is_registered:1;
+	unsigned		no_suspend:1;
 	unsigned		uevent_suppress:1;
 	struct device_attribute uevent_attr;
 	struct device_attribute *devt_attr;

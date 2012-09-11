@@ -63,6 +63,189 @@ static char *action_to_string(enum kobject_action action)
  * Returns 0 if kobject_uevent() is completed with success or the
  * corresponding error when it fails.
  */
+int kobject_uevent_env_atomic(struct kobject *kobj, enum kobject_action action,
+			char *envp_ext[])
+{
+	char **envp;
+	char *buffer;
+	char *scratch;
+	const char *action_string;
+	const char *devpath = NULL;
+	const char *subsystem;
+	struct kobject *top_kobj;
+	struct kset *kset;
+	struct kset_uevent_ops *uevent_ops;
+	u64 seq;
+	char *seq_buff;
+	int i = 0;
+	int retval = 0;
+	int j;
+
+	pr_debug("%s\n", __FUNCTION__);
+
+	action_string = action_to_string(action);
+	if (!action_string) {
+		pr_debug("kobject attempted to send uevent without action_string!\n");
+		return -EINVAL;
+	}
+
+	/* search the kset we belong to */
+	top_kobj = kobj;
+	while (!top_kobj->kset && top_kobj->parent) {
+		top_kobj = top_kobj->parent;
+	}
+	if (!top_kobj->kset) {
+		pr_debug("kobject attempted to send uevent without kset!\n");
+		return -EINVAL;
+	}
+
+	kset = top_kobj->kset;
+	uevent_ops = kset->uevent_ops;
+
+	/*  skip the event, if the filter returns zero. */
+	if (uevent_ops && uevent_ops->filter)
+		if (!uevent_ops->filter(kset, kobj)) {
+			pr_debug("kobject filter function caused the event to drop!\n");
+			return 0;
+		}
+
+	/* originating subsystem */
+	if (uevent_ops && uevent_ops->name)
+		subsystem = uevent_ops->name(kset, kobj);
+	else
+		subsystem = kobject_name(&kset->kobj);
+	if (!subsystem) {
+		pr_debug("unset subsytem caused the event to drop!\n");
+		return 0;
+	}
+
+	/* environment index */
+	envp = kzalloc(NUM_ENVP * sizeof (char *), GFP_ATOMIC);
+	if (!envp)
+		return -ENOMEM;
+
+	/* environment values */
+	buffer = kmalloc(BUFFER_SIZE, GFP_ATOMIC);
+	if (!buffer) {
+		retval = -ENOMEM;
+		goto exit;
+	}
+
+	/* complete object path */
+	devpath = kobject_get_path(kobj, GFP_ATOMIC);
+	if (!devpath) {
+		retval = -ENOENT;
+		goto exit;
+	}
+
+	/* event environemnt for helper process only */
+	envp[i++] = "HOME=/";
+	envp[i++] = "PATH=/sbin:/bin:/usr/sbin:/usr/bin";
+
+	/* default keys */
+	scratch = buffer;
+	envp [i++] = scratch;
+	scratch += sprintf(scratch, "ACTION=%s", action_string) + 1;
+	envp [i++] = scratch;
+	scratch += sprintf (scratch, "DEVPATH=%s", devpath) + 1;
+	envp [i++] = scratch;
+	scratch += sprintf(scratch, "SUBSYSTEM=%s", subsystem) + 1;
+	for (j = 0; envp_ext && envp_ext[j]; j++)
+		envp[i++] = envp_ext[j];
+	/* just reserve the space, overwrite it after kset call has returned */
+	envp[i++] = seq_buff = scratch;
+	scratch += strlen("SEQNUM=18446744073709551616") + 1;
+
+	/* let the kset specific function add its stuff */
+	if (uevent_ops && uevent_ops->uevent) {
+		retval = uevent_ops->uevent(kset, kobj,
+				  &envp[i], NUM_ENVP - i, scratch,
+				  BUFFER_SIZE - (scratch - buffer));
+		if (retval) {
+			pr_debug ("%s - uevent() returned %d\n",
+				  __FUNCTION__, retval);
+			goto exit;
+		}
+	}
+
+	/* we will send an event, request a new sequence number */
+	spin_lock(&sequence_lock);
+	seq = ++uevent_seqnum;
+	spin_unlock(&sequence_lock);
+	sprintf(seq_buff, "SEQNUM=%llu", (unsigned long long)seq);
+
+#if defined(CONFIG_NET)
+	/* send netlink message */
+	if (uevent_sock) {
+		struct sk_buff *skb;
+		size_t len;
+
+		/* allocate message with the maximum possible size */
+		len = strlen(action_string) + strlen(devpath) + 2;
+		skb = alloc_skb(len + BUFFER_SIZE, GFP_ATOMIC);
+		if (skb) {
+			/* add header */
+			scratch = skb_put(skb, len);
+			sprintf(scratch, "%s@%s", action_string, devpath);
+
+			/* copy keys to our continuous event payload buffer */
+			for (i = 2; envp[i]; i++) {
+				len = strlen(envp[i]) + 1;
+				scratch = skb_put(skb, len);
+				strcpy(scratch, envp[i]);
+			}
+
+			NETLINK_CB(skb).dst_group = 1;
+			netlink_broadcast(uevent_sock, skb, 0, 1, GFP_ATOMIC);
+		}
+	}
+#endif
+
+	/* call uevent_helper, usually only enabled during early boot */
+	if (uevent_helper[0]) {
+		char *argv [3];
+
+		argv [0] = uevent_helper;
+		argv [1] = (char *)subsystem;
+		argv [2] = NULL;
+		call_usermodehelper (argv[0], argv, envp, 0);
+	}
+
+exit:
+	kfree(devpath);
+	kfree(buffer);
+	kfree(envp);
+	return retval;
+}
+
+EXPORT_SYMBOL_GPL(kobject_uevent_env_atomic);
+
+/**
+ * kobject_uevent - notify userspace by ending an uevent
+ *
+ * @action: action that is happening (usually KOBJ_ADD and KOBJ_REMOVE)
+ * @kobj: struct kobject that the action is happening to
+ *
+ * Returns 0 if kobject_uevent() is completed with success or the
+ * corresponding error when it fails.
+ */
+int kobject_uevent_atomic(struct kobject *kobj, enum kobject_action action)
+{
+	return kobject_uevent_env_atomic(kobj, action, NULL);
+}
+
+EXPORT_SYMBOL_GPL(kobject_uevent_atomic);
+
+/**
+ * kobject_uevent_env - send an uevent with environmental data
+ *
+ * @action: action that is happening (usually KOBJ_MOVE)
+ * @kobj: struct kobject that the action is happening to
+ * @envp_ext: pointer to environmental data
+ *
+ * Returns 0 if kobject_uevent() is completed with success or the
+ * corresponding error when it fails.
+ */
 int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 			char *envp_ext[])
 {

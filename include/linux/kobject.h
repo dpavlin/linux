@@ -262,6 +262,9 @@ extern int __must_check subsys_create_file(struct kset *,
 int kobject_uevent(struct kobject *kobj, enum kobject_action action);
 int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 			char *envp[]);
+int kobject_uevent_atomic(struct kobject *kobj, enum kobject_action action);
+int kobject_uevent_env_atomic(struct kobject *kobj, enum kobject_action action,
+			char *envp[]);
 
 int add_uevent_var(char **envp, int num_envp, int *cur_index,
 			char *buffer, int buffer_size, int *cur_len,

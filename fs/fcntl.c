@@ -236,7 +236,9 @@ static int setfl(int fd, struct file * filp, unsigned long arg)
 
 	lock_kernel();
 	if ((arg ^ filp->f_flags) & FASYNC) {
-		if (filp->f_op && filp->f_op->fasync) {
+		if (filp->f_op && filp->f_op->unlocked_fasync)
+			error = filp->f_op->unlocked_fasync(fd, filp,!!(arg & FASYNC));
+		else if (filp->f_op && filp->f_op->fasync) {
 			error = filp->f_op->fasync(fd, filp, (arg & FASYNC) != 0);
 			if (error < 0)
 				goto out;

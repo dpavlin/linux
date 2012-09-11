@@ -173,6 +173,14 @@ source "drivers/input/touchscreen/Kconfig"
 
 source "drivers/input/misc/Kconfig"
 
+source "drivers/input/trackball/Kconfig"
+
+source "drivers/input/fiveway/Kconfig"
+
+source "drivers/input/haptic/Kconfig"
+
+source "drivers/input/mag_sensor/Kconfig"
+
 endif
 
 menu "Hardware I/O ports"

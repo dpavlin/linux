@@ -337,7 +337,7 @@ static const struct file_operations rtc_fops = {
 	.ioctl		= rtc_ioctl,
 	.open		= rtc_open,
 	.release	= rtc_release,
-	.fasync		= rtc_fasync,
+	.unlocked_fasync		= rtc_fasync,
 };
 
 static struct miscdevice rtc_miscdev = {

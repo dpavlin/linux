@@ -474,7 +474,7 @@ static const struct file_operations joydev_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl =	joydev_compat_ioctl,
 #endif
-	.fasync =	joydev_fasync,
+	.unlocked_fasync =	joydev_fasync,
 };
 
 static int joydev_connect(struct input_handler *handler, struct input_dev *dev,
