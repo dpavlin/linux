@@ -3177,8 +3177,12 @@ static void get_usb_connection_status(struct arcotg_udc *udc)
 
 	suspended = udc->suspended;
 
+	spin_unlock_irqrestore(&udc->lock, flags);
+
 	if (suspended)
 		fsl_udc_low_power_resume(udc);
+
+	spin_lock_irqsave(&udc->lock, flags);
 
 	portsc = le32_to_cpu(usb_slave_regs->portsc1);
 	usbcmd = le32_to_cpu(usb_slave_regs->usbcmd);

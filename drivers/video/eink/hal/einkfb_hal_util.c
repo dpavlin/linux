@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_util.c -- eInk frame buffer device HAL utilities
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -403,7 +403,7 @@ int einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_read
         while ( !(*hardware_ready)(data) && time_before_eq(jiffies, stop_time) )
             schedule_timeout_interruptible(min(timeout++, EINKFB_TIMEOUT_MAX));
 
-        if ( time_after(jiffies, stop_time) )
+        if ( !(*hardware_ready)(data) && time_after(jiffies, stop_time) )
         {
            einkfb_print_crit("Timed out waiting for the hardware to become ready!\n");
            result = EINKFB_FAILURE;

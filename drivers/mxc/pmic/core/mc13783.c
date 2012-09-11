@@ -65,7 +65,7 @@ int pmic_read(unsigned int reg_num, unsigned int *reg_val)
 {
 	unsigned int frame = 0;
 	int ret = 0;
-	int retry_count = 5;
+	int retry_count = 100;
 
 	if (reg_num > MXC_PMIC_MAX_REG_NUM)
 		return PMIC_ERROR;
@@ -80,14 +80,13 @@ int pmic_read(unsigned int reg_num, unsigned int *reg_val)
 	while ( (ret < 0) && (retry_count != 0)) {
 		retry_count--;
 		ret = spi_rw(pmic_drv_data.spi, (u8 *) & frame, 1);
-		udelay(100);
+		udelay(10);
 	}
 
 	if (retry_count == 0) {
 		printk(KERN_ERR "pmic_read: request timed out");
 		if (irqs_disabled())
 			printk(KERN_ERR " IRQs also disabled");
-
 		printk(KERN_ERR "\n");
 		dump_stack();
 	}
@@ -109,7 +108,7 @@ int pmic_write(int reg_num, const unsigned int reg_val)
 {
 	unsigned int frame = 0;
 	int ret = 0;
-	int retry_count = 5;
+	int retry_count = 100;
 
 	if (reg_num > MXC_PMIC_MAX_REG_NUM)
 		return PMIC_ERROR;
@@ -121,21 +120,20 @@ int pmic_write(int reg_num, const unsigned int reg_val)
 	frame |= reg_val & MXC_PMIC_FRAME_MASK;
 
 	ret = spi_rw(pmic_drv_data.spi, (u8 *) & frame, 1);
-
-	/* 
+	
+	/*
 	 * It's possible that spi_rw may have timed out. So, retry
-	 */	
+	 */
 	while ( (ret < 0) && (retry_count != 0)) {
 		retry_count--;
 		ret = spi_rw(pmic_drv_data.spi, (u8 *) & frame, 1);
-		udelay(100);
+		udelay(10);
 	}
 
 	if (retry_count == 0) {
 		printk(KERN_ERR "pmic_write: request timed out");
 		if (irqs_disabled())
 			printk(KERN_ERR " IRQs also disabled");
-
 		printk(KERN_ERR "\n");
 		dump_stack();
 	}

@@ -166,8 +166,13 @@ static int mx31_pm_finish(suspend_state_t state)
 	pmic_power_regulator_on(REGU_VVIB);
 	pmic_power_regulator_on(REGU_VAUDIO);
 
-	/* Make GPO4 Enable depend on STBY */
-	pmic_write_reg(REG_POWER_MISCELLANEOUS, (1 << 13), (1 << 13));
+	mdelay(10);
+	/* Turn off GPO4 */
+	pmic_write_reg(REG_POWER_MISCELLANEOUS, (0 << 12), (1 << 12));
+	mdelay(10);
+	/* Turn on GPO4 */
+	pmic_write_reg(REG_POWER_MISCELLANEOUS, (1 << 12), (1 << 12));
+	mdelay(100);
 
 	return 0;
 }

@@ -498,7 +498,6 @@ int mxc_spi_setup(struct spi_device *spi)
 int mxc_spi_transfer(struct spi_device *spi, struct spi_transfer *t)
 {
 	struct mxc_spi *master_drv_data = NULL;
-	int time_left;
 
 	/* Get the master controller driver data from spi device's master */
 
@@ -521,19 +520,12 @@ int mxc_spi_transfer(struct spi_device *spi, struct spi_transfer *t)
 			master_drv_data->transfer.tx_get(master_drv_data));
 
 	/* Wait for transfer completion */
-
-	time_left = wait_for_completion_timeout(&master_drv_data->xfer_done, HZ * 5);
+	wait_for_completion(&master_drv_data->xfer_done);
 
 	/* Disable the Rx Interrupts */
-
 	spi_disable_interrupt(master_drv_data, MXC_CSPIINT_RREN);
 
 	/* Did we transfer any data at all? */
-	if (!time_left && master_drv_data->transfer.count == t->len) {
-		return -ETIMEDOUT;
-	}
-
-	/* Return how much was actually transferred */
 	return (t->len - master_drv_data->transfer.count);
 }
 

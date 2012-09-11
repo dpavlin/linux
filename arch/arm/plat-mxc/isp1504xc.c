@@ -78,7 +78,7 @@ static u8 isp1504_read(int reg, volatile u32 * view)
 	} while ( (data & ULPIVW_RUN) && (ulpi_count != 0) );
 
 	if (ulpi_count == 0) {
-		printk(KERN_ERR"PHY did not respond\n");
+		printk(KERN_CRIT "isp1504: C def:rdf::PHY did not respond\n");
 		return 0;
 	}
 	else 
@@ -124,7 +124,7 @@ static void isp1504_set(u8 bits, int reg, volatile u32 * view)
 	} while ( (data & ULPIVW_RUN) && (ulpi_count != 0) );
 
 	if (ulpi_count == 0)
-		printk(KERN_ERR"PHY did not respond\n");
+		printk(KERN_CRIT "isp1504: C def:wrf::PHY did not respond\n");
 }
 #ifdef CONFIG_MACH_LAB126
 EXPORT_SYMBOL(isp1504_set);

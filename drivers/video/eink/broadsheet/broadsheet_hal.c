@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_hal.c
  *  -- eInk frame buffer device HAL broadsheet
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -817,20 +817,19 @@ void broadsheet_prime_watchdog_timer(bool delay_timer)
 {
 	if ( broadsheet_watchdog_timer_active )
 	{
-		bool minimize_delay = false;
 		unsigned long timer_delay;
 		
-		// If Broadsheet isn't still in its ready state, say that
-		// we want to get it thay way ASAP.
+		// If Broadsheet isn't still in its ready state, ensure
+		// that we don't expire the timer.
 		//
 		if ( !BS_STILL_READY() )
-		    minimize_delay = delay_timer = true;
+		    delay_timer = true;
 		
 		// If requested, delay the timer.
 		//
 		if ( delay_timer )
 		{
-		    timer_delay = minimize_delay ? MIN_SCHEDULE_TIMEOUT : BROADSHEET_WATCHDOG_TIMER_DELAY;
+		    timer_delay = BROADSHEET_WATCHDOG_TIMER_DELAY;
 		    broadsheet_watchdog_timer_primed = true;
 		}
 		else

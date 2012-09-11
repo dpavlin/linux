@@ -55,7 +55,9 @@ static int charger_remove(struct platform_device *pdev);
 static void charger_device_release(struct device *dev);
 
 static void charger_usb4v4(struct work_struct *not_used);
+static void charger_arcotg_wakeup(struct work_struct *not_used);
 static DECLARE_DELAYED_WORK(charger_usb4v4_work, charger_usb4v4);
+static DECLARE_DELAYED_WORK(charger_arcotg_work, charger_arcotg_wakeup);
 
 /* ICHRG settings
  *
@@ -854,6 +856,10 @@ static void post_critical_battery_event(void)
 	}
 }
 
+static void charger_arcotg_wakeup(struct work_struct *not_used)
+{
+	queue_work(charger->charger_wq, &charger->charger_work);
+}
 
 static void charger_work_fn(struct work_struct *work)
 {
@@ -909,14 +915,6 @@ static void charger_work_fn(struct work_struct *work)
 		enable_lobathi_lobatli_interrupts(false, false);
 	}
 
-	/*
-	 * We're going to need the latest readings for all our calculations
-	 * Make sure the arcotg is not in a misdetect retry else it's
-	 * timers will fire will we read the ADC
-	 */
-	if (charger_misdetect_retry == 0)
-		valid = get_latest_readings(&chrgraw, &bp, &batt);
-
 	/* Next, handle the USB plug-in event, if necessary.  */
 	if (test_bit(OP_PLUG_INSERTION, &ops)) {
 		if (charger->arcotg_callback) {
@@ -932,10 +930,20 @@ static void charger_work_fn(struct work_struct *work)
 				 * since it will be faster.
 				 */
 				set_bit(OP_PLUG_INSERTION, &charger->operations);
-				queue_work(charger->charger_wq, &charger->charger_work);
+				schedule_delayed_work(&charger_arcotg_work, msecs_to_jiffies(5000));	
+				set_led(LED_YELLOW);	
+				goto exit;
 			}
 		}
 	}
+
+	/*
+	 * We're going to need the latest readings for all our calculations
+	 * Make sure the arcotg is not in a misdetect retry else it's
+	 * timers will fire will we read the ADC
+	 */
+	if (charger_misdetect_retry == 0)
+		valid = get_latest_readings(&chrgraw, &bp, &batt);
 
 	spin_lock_irqsave(&charger->lock, flags);
 
