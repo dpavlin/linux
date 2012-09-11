@@ -79,7 +79,6 @@
 
 struct clk *sdma_ahb_clk;
 static int sdma_dma_disable = 0;
-
 extern int audio_playing_flag;
 
 #define RSP_TYPE(x)	((x) & ~(MMC_RSP_BUSY|MMC_RSP_OPCODE))
@@ -473,7 +472,8 @@ static void mxcmci_softreset(struct mxcmci_host *host)
  * @param host  Pointer to MMC/SD host structure
  * @param data  Pointer to MMC/SD data structure
  */
-static void mxcmci_setup_data(struct mxcmci_host *host, struct mmc_data *data)
+static void mxcmci_setup_data(struct mxcmci_host *host, struct mmc_data *data,
+				struct mmc_host *mmc)
 {
 	unsigned int nob = data->blocks;
 
@@ -485,9 +485,6 @@ static void mxcmci_setup_data(struct mxcmci_host *host, struct mmc_data *data)
 
 	__raw_writel(nob, host->base + MMC_NOB);
 	__raw_writel(data->blksz, host->base + MMC_BLK_LEN);
-
-	__raw_writel(0x17, host->base + MMC_CMD);
-	__raw_writel(nob, host->base + MMC_ARG);
 
 	host->dma_size = data->blocks * data->blksz;
 	pr_debug("%s:Request bytes to transfer:%d\n", DRIVER_NAME,
@@ -1212,7 +1209,7 @@ static void mxcmci_request(struct mmc_host *mmc, struct mmc_request *req)
 
 	cmdat = 0;
 	if (req->data) {
-		mxcmci_setup_data(host, req->data);
+		mxcmci_setup_data(host, req->data, mmc);
 
 		cmdat |= CMD_DAT_CONT_DATA_ENABLE;
 
@@ -1448,7 +1445,6 @@ static void mxcmci_dma_irq(void *devid, int error, unsigned int cnt)
 static void mxcmci_dma_tq(struct work_struct *work)
 {
 	struct mxcmci_host *host = container_of(work, struct mxcmci_host, dma_tq);
-	u32 status;
 	ulong nob, blk_size, blk_len;
 
 	nob = __raw_readl(host->base + MMC_REM_NOB);
@@ -1464,9 +1460,7 @@ static void mxcmci_dma_tq(struct work_struct *work)
 
 static void mxcmci_dma_notq(struct mxcmci_host *host)
 {
-	struct mmc_data *data = host->data;
-	u32 status;
-	ulong nob, blk_size, i, blk_len;
+	ulong nob, blk_size, blk_len;
 
 	nob = __raw_readl(host->base + MMC_REM_NOB);
 	blk_size = __raw_readl(host->base + MMC_REM_BLK_SIZE);

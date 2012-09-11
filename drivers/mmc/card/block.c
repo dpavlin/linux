@@ -253,6 +253,36 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 			writecmd = MMC_WRITE_BLOCK;
 		}
 
+#ifdef CONFIG_MACH_LAB126
+		/*
+		 * Samsung moviNAND devices cannot work in 
+		 * open-ended mode. They can only work in
+		 * predefined mode. However, all versions of the
+		 * Samsung moviNAND firmware do not support
+		 * predefined mode. Look at drivers/mmc/core/mmc.c
+		 * for the mechanism to detect predefined mode. 
+		 *
+		 * If predefined mode is set for the card, then
+		 * Samsung moviNAND show failure if STOP_TRANSMISSION
+		 * command is sent to the card. So, we have to prevent
+		 * the STOP_TRANSMISSION command as well in predefined mode.
+		 *
+		 * Finally, Freescale MX31 MMC controller needs clock
+		 * for setting the predefined mode using CMD23. This 
+		 * takes care of the clock as well.
+		 *
+		 *	- Manish Lachwani (06/15/2009
+		 */
+		if ( (brq.data.blocks > 1) &&
+			(card->host->predefined == 1)) {
+			struct mmc_command cmd1;
+			cmd1.opcode = MMC_SET_BLOCK_COUNT;
+			cmd1.arg = brq.data.blocks;
+			cmd1.flags = MMC_RSP_R1 | MMC_CMD_AC;
+			mmc_wait_for_cmd(card->host, &cmd1, 5);
+			brq.mrq.stop = NULL;
+		}
+#endif
 		if (rq_data_dir(req) == READ) {
 			brq.cmd.opcode = readcmd;
 			brq.data.flags |= MMC_DATA_READ;

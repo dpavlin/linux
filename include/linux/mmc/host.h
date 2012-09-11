@@ -122,6 +122,8 @@ struct mmc_host {
 	unsigned int		removed:1;	/* host is being removed */
 #endif
 
+	unsigned int		predefined;	/* Use predefined mode or not */
+
 	const struct mmc_bus_ops *bus_ops;	/* current bus driver */
 	unsigned int		bus_refs;	/* reference counter */
 	unsigned int		bus_dead:1;	/* bus has been released */

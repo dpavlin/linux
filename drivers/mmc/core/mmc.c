@@ -54,6 +54,11 @@ static const unsigned int tacc_mant[] = {
 		__res & __mask;						\
 	})
 
+#define SAMSUNG_PATCH_V05  0x05		/* Check for Samsung Patch version 05 */
+#define SAMSUNG_MANF_ID    0x15		/* Samsung manufacturer ID */
+#define SAMSUNG_PATCH_V0   0x00		/* PRV is 0 on re-flashing */
+#define SAMSUNG_PATCH_V03  0x03		/* Patch version if 03 */
+
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
  */
@@ -251,6 +256,8 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	int err;
 	u32 cid[4];
 	unsigned int max_dtr;
+	char product_revision;
+	unsigned long manufacturer_id;
 
 	BUG_ON(!host);
 	WARN_ON(!host->claimed);
@@ -295,6 +302,46 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		card->type = MMC_TYPE_MMC;
 		card->rca = 1;
 		memcpy(card->raw_cid, cid, sizeof(card->raw_cid));
+
+		/*
+		 * Manufacturer ID: 127-120
+		 */
+		manufacturer_id = UNSTUFF_BITS(card->raw_cid, 104, 24);
+		manufacturer_id = (manufacturer_id >> 16);
+
+		/*
+		 * Product revision: 55-48
+		 */
+		product_revision = UNSTUFF_BITS(card->raw_cid, 48, 8);
+
+		printk(KERN_INFO "%s: Product Revision %d\n", mmc_hostname(host),
+				(product_revision & 0x0f));
+
+#ifdef CONFIG_MACH_LAB126	
+		/*
+		 * Samsung moviNAND running PRV 0.5 should be predefined mode
+		 * The PRV can be flashed only once. PRV is part of CID. Once,
+		 * the firmware has been upgraded, the PRV will be 0x0. Samsung
+		 * plans to upgrade their moviNAND parts running Patch version
+		 * 0x3 with Patch version 0x5. Once they do this, the PRV
+		 * will be 0x0. Hence, we need to do predefined mode for 
+		 * PRV 0x0 as well since this just means that Samsung upgraded
+		 * the firmware.
+		 *		-Manish Lachwani (06/15/2009)
+		 */	
+		if ( (manufacturer_id == SAMSUNG_MANF_ID) &&
+			(((product_revision & 0x0f) == SAMSUNG_PATCH_V05) ||
+			((product_revision & 0x0f) == 0x0)) ) {
+				host->predefined = 1;
+				printk(KERN_INFO "%s: Using predefined mode\n", mmc_hostname(host));
+		}
+		else {
+			if ( (manufacturer_id == SAMSUNG_MANF_ID) &&
+				((product_revision & 0x0f) == SAMSUNG_PATCH_V03) ) {
+					printk(KERN_INFO "%s: open-ended mode\n", mmc_hostname(host));
+			}
+		}
+#endif
 	}
 
 	/*
