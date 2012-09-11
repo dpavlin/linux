@@ -1,5 +1,9 @@
 /*
  * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
+ *
+ * Support charger mode and gadget mode fixups
+ * Copyright 2009 Lab126.com
+ * Manish Lachwani (lachwani@lab126.com)
  */
 
 /*
@@ -51,7 +55,7 @@
 #include <linux/usb/otg.h>
 #include <linux/clk.h>
 #include <linux/reboot.h>
-
+#include <linux/delay.h>
 #include <asm/byteorder.h>
 #include <asm/io.h>
 #include <asm/irq.h>
@@ -68,6 +72,7 @@
 #define pr_debug(fmt, ...) LLOGS_DEBUG9("", fmt, ##__VA_ARGS__)
 #define UDC_LOG(lvl, desc, fmt, ...) LLOG_##lvl(desc, "", "%s - " fmt, __func__, ##__VA_ARGS__)
 #define LOG_DPDM(lvl, desc, fmt, dp, dm, ...) LLOG_##lvl(desc, "D+=%d,D-=%d", "%s - " fmt, dp, dm, __func__, ##__VA_ARGS__)
+#define LOG_PHY(lvl, desc, fmt, phyid, ...) LLOG_##lvl(desc, "phyid=%#04x", "%s - " fmt, phyid, __func__, ##__VA_ARGS__)
 
 extern int gpio_usbotg_hs_active(void);
 extern int gpio_usbotg_fs_active(void);
@@ -78,6 +83,7 @@ extern int charger_set_current_limit(int new_limit);
 extern int charger_handle_charging(void);
 extern void charger_set_arcotg_callback(int (*callback)(void *, int), void *arg);
 extern int charger_misdetect_retry;
+extern int charger_probed;
 #endif
 
 static void ep0stall(struct arcotg_udc *);
@@ -85,6 +91,7 @@ static int ep0_prime_status(struct arcotg_udc *, int);
 
 static int timeout;
 static struct clk *usb_ahb_clk;
+static void chgdisc_event(struct arcotg_udc *udc);
 
 #undef	USB_TRACE
 
@@ -112,6 +119,9 @@ volatile static struct usb_dr_device *usb_slave_regs;
 
 /* it is initialized in probe()  */
 static struct arcotg_udc *udc_controller;
+atomic_t arcotg_busy = ATOMIC_INIT(0);
+
+static void do_charger_detect_work(struct work_struct *work);
 
 /*ep name is important in gadget, it should obey the convention of ep_match()*/
 /* even numbered EPs are OUT or setup, odd are IN/INTERRUPT */
@@ -157,13 +167,37 @@ static void wakeup_work(struct work_struct *work);
 static ssize_t
 show_connected(struct device *dev, struct device_attribute *attr, char *buf);
 static DEVICE_ATTR(connected, 0444, show_connected, NULL);
-
+static ssize_t
+show_phy_manufacturer(struct device *dev, struct device_attribute *attr, char *buf);
+static DEVICE_ATTR(manufacturer, 0444, show_phy_manufacturer, NULL);
+atomic_t port_reset_counter = ATOMIC_INIT(0);
 extern void isp1504_set(u8 bits, int reg, volatile u32 * view);
 extern u8 isp1504_read(int reg, volatile u32 * view);
+
 #define NXP_ID	0x04CC
+static void reset_nxp_phy(void);
 #define SMSC_ID	0x0424
-static u16 phy_id;
-static void (*reset_phy)(void) = NULL;
+static void reset_smsc_phy(void);
+
+static struct phy_ops {
+	u16 id;
+	void (*reset)(void);
+	char name[8];
+} phy_list[] = {
+	{
+		.id = NXP_ID,
+		.reset = reset_nxp_phy,
+		.name = "NXP",
+	},
+	{
+		.id = SMSC_ID,
+		.reset = reset_smsc_phy,
+		.name = "SMSC",
+	},
+};
+
+static struct phy_ops *local_phy_ops = NULL;
+
 #endif
 
 /********************************************************************
@@ -427,13 +461,6 @@ static void dr_controller_run(struct arcotg_udc *udc)
 
 	/* Clear stopped bit */
 	udc->stopped = 0;
-
-#if 0 // DDD only do this  after reset, already done in dr_controller_setup
-	/* Set the controller as device mode */
-	tmp = le32_to_cpu(usb_slave_regs->usbmode);
-	tmp |= USB_MODE_CTRL_MODE_DEVICE;
-	usb_slave_regs->usbmode = cpu_to_le32(tmp);
-#endif
 
 	/* Set controller to Run */
 	tmp = le32_to_cpu(usb_slave_regs->usbcmd);
@@ -1493,21 +1520,33 @@ static int arcotg_vbus_session(struct usb_gadget *gadget, int is_active)
 
 	udc = container_of(gadget, struct arcotg_udc, gadget);
 	spin_lock_irqsave(&udc->lock, flags);
-
 	pr_debug("udc VBUS %s\n", is_active ? "on" : "off");
 	udc->vbus_active = (is_active != 0);
-
-#if 0				/* FIXME manipulate pullups?? check other platforms. */
-	if (can_pullup(udc))
-		usb_slave_regs->usbcmd |= USB_CMD_RUN_STOP;
-	else
-		usb_slave_regs->usbcmd &= ~USB_CMD_RUN_STOP;
-#endif
 
 	spin_unlock_irqrestore(&udc->lock, flags);
 	return 0;
 }
 
+static void do_charger_detect_work(struct work_struct *work)
+{
+	struct arcotg_udc *udc = 
+		container_of(work, struct arcotg_udc, charger_detect_work.work);
+	t_sensor_bits   sensors;
+
+	pmic_get_sensors(&sensors);
+	if (sensors.sense_usb4v4s ||
+		(sensors.sense_chgcurrs && sensors.sense_chgdets)) {
+			/* Do nothing */
+	}
+	else {
+		UDC_LOG(ERROR, "ncf", "No charger found!\n");
+		atomic_set(&udc->mA, 0);
+		udc->driver->disconnect(&udc->gadget);
+	}
+
+	return;
+}
+ 
 /*! 
  * constrain controller's VBUS power usage
  * This call is used by gadget drivers during SET_CONFIGURATION calls,
@@ -1528,10 +1567,12 @@ UDC_LOG(INFO, "mA", "(mA=%d)\n", mA);
 	udc = container_of(gadget, struct arcotg_udc, gadget);
 
 #ifdef CONFIG_MACH_LAB126
+	atomic_set(&udc->mA, mA);
 	atomic_set(&udc->run_workqueue, 0);
 	udc->conn_sts = USB_CONN_HOST;
-	atomic_set(&udc->mA, mA);
-	charger_set_current_limit((int) mA);
+	charger_set_current_limit((int) atomic_read(&udc->mA));
+	schedule_delayed_work(&udc->charger_detect_work, msecs_to_jiffies(1000));
+
 	return 0;
 #else
 	if (udc->transceiver)
@@ -2219,6 +2260,15 @@ static void resume_irq(struct arcotg_udc *udc)
 
 }
 
+static void arcotg_udc_device_reset(struct work_struct *unused);
+static DECLARE_DELAYED_WORK(arcotg_device_reset_work, arcotg_udc_device_reset);
+
+static void arcotg_udc_device_reset(struct work_struct *unused)
+{
+	if (atomic_read(&port_reset_counter) == 3)
+		kernel_restart(NULL);
+}
+
 static inline void reset_queues(struct arcotg_udc *udc)
 {
 	u8 pipe;
@@ -2227,14 +2277,23 @@ static inline void reset_queues(struct arcotg_udc *udc)
 	for (pipe = 0; pipe < udc->max_pipes; pipe++)
 		udc_reset_ep_queue(udc, pipe);
 
+	atomic_inc(&port_reset_counter);
+
 	/* report disconnect; the driver is already quiesced */
-	if (udc->driver->disconnect) 
+	if (udc->driver)
 		udc->driver->disconnect(&udc->gadget);
+
+	if (atomic_read(&port_reset_counter) == 3) {
+		UDC_LOG(CRIT, "hmf", "USB Host mode failed to work ... PHY issue\n");
+		schedule_delayed_work(&arcotg_device_reset_work, msecs_to_jiffies(500));
+	}
 }
 
 static void reset_irq(struct arcotg_udc *udc)
 {
 	u32 temp;
+
+	fsl_udc_low_power_resume(udc);
 
 	/* Clear the device address */
 	temp = le32_to_cpu(usb_slave_regs->deviceaddr);
@@ -2304,6 +2363,7 @@ static void delete_charger_timer(struct arcotg_udc *udc)
 	del_timer_sync(&udc->charger_timer);
 	atomic_set(&udc->timer_scheduled, 0);
 	charger_misdetect_retry = 0;	// allow charger readings to continue
+	atomic_set(&arcotg_busy, 0);
 }
 #endif
 
@@ -2319,10 +2379,10 @@ static irqreturn_t arcotg_udc_irq(int irq, void *_udc)
 
 	spin_lock_irqsave(&udc->lock, flags);
 	irq_src = usb_slave_regs->usbsts & usb_slave_regs->usbintr;
+	pr_debug("udc irq_src [0x%08x]\n", irq_src);
 	/* Clear notification bits */
 	usb_slave_regs->usbsts &= irq_src;
 	irq_src = le32_to_cpu(irq_src);
-	pr_debug("udc irq_src [0x%08x]\n", irq_src);
 
 	/* USB Interrupt */
 	if (irq_src & USB_STS_INT) {
@@ -2330,6 +2390,7 @@ static irqreturn_t arcotg_udc_irq(int irq, void *_udc)
 		pr_debug("udc endptsetupstat=0x%x  endptcomplete=0x%x\n",
 			 usb_slave_regs->endptsetupstat,
 			 usb_slave_regs->endptcomplete);
+		atomic_set(&port_reset_counter, 0);
 		if (usb_slave_regs->
 		    endptsetupstat & cpu_to_le32(EP_SETUP_STATUS_EP0)) {
 			tripwire_handler(udc, 0,
@@ -2362,14 +2423,6 @@ static irqreturn_t arcotg_udc_irq(int irq, void *_udc)
 
 	/* Reset Received */
 	if (irq_src & USB_STS_RESET) {
-#ifdef CONFIG_MACH_LAB126
-#if 0 // FIXME
-UDC_LOG(INFO, "rsi", "reset intr\n");
-		/* Return to the default 100mA current draw. */
-		atomic_set(&udc->mA, 100);
-		charger_set_current_limit(100);
-#endif
-#endif
 		reset_irq(udc);
 		status = IRQ_HANDLED;
 		delete_charger_timer(udc);
@@ -2377,27 +2430,9 @@ UDC_LOG(INFO, "rsi", "reset intr\n");
 
 	/* Sleep Enable (Suspend) */
 	if (irq_src & USB_STS_SUSPEND) {
-#ifdef CONFIG_MACH_LAB126
-#if 0 // FIXME
-UDC_LOG(INFO, "spi", "suspend intr\n");
-		/* Reduce current draw to 2.5mA or less, but don't change
-		 * udc->mA so we remember what the appropriate current draw
-		 * value should be when the bus resumes.
-		 */
-		charger_set_current_limit(1);
-#endif
-#endif
 		suspend_irq(udc);
 		status = IRQ_HANDLED;
 	} else if (udc->resume_state) {
-#ifdef CONFIG_MACH_LAB126
-#if 0 // FIXME
-UDC_LOG(INFO, "rsh", "resume state handling\n");
-		/* Return to whatever current draw we previously had set
-		 * before we were suspended. */
-		charger_set_current_limit(atomic_read(&udc->mA));
-#endif
-#endif
 		resume_irq(udc);
 		status = IRQ_HANDLED;
 		delete_charger_timer(udc);
@@ -2405,6 +2440,10 @@ UDC_LOG(INFO, "rsh", "resume state handling\n");
 
 	if (irq_src & (USB_STS_ERR | USB_STS_SYS_ERR)) {
 		pr_debug("udc Error IRQ %x\n", irq_src);
+		/*
+		 * Error IRQ - reset the port
+		 */
+		reset_irq(udc);
 		status = IRQ_HANDLED;
 	}
 
@@ -2793,14 +2832,6 @@ static int fsl_proc_read(char *page, char **start, off_t off, int count,
 				}
 			}
 		}
-#if 0				/* DDD debug */
-		else {
-			t = scnprintf(next, size, "\nno desc for %s\n",
-				      ep->ep.name);
-			size -= t;
-			next += t;
-		}
-#endif
 	}
 
 	spin_unlock_irqrestore(&udc->lock, flags);
@@ -2851,6 +2882,12 @@ static ssize_t
 show_connected(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	return sprintf(buf, "0\n");
+}
+
+static ssize_t
+show_phy_manufacturer(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%s\n", local_phy_ops->name);
 }
 
 static ssize_t
@@ -3045,7 +3082,7 @@ static inline void suspend_ctrl(void)
 
 static inline void resume_port(void)
 {
-	if (phy_id == NXP_ID) {
+	if (NXP_ID == local_phy_ops->id) {
 		//Enable phy ULPI interface
 		mxc_set_gpio_dataout(MX31_PIN_GPIO1_6, 0);
 		mdelay(2);
@@ -3067,8 +3104,9 @@ static void fsl_udc_low_power_suspend(struct arcotg_udc *udc)
 	if (recovery_mode)
 		return;
 
-	if (udc->suspended)
+	if (udc->suspended) {	
 		return;
+	}
 
 	udc->suspended = 1;
 
@@ -3113,15 +3151,15 @@ static void fsl_udc_low_power_resume(struct arcotg_udc *udc)
 	if (recovery_mode)
 		return;
 
-	if (!udc->suspended)
+	if (!udc->suspended) {
 		return;
+	}
 
 	udc->suspended = 0;
 
 	clk_enable(usb_ahb_clk);
 
 	resume_port();
-	reset_phy();
 	resume_ctrl();
 }
 
@@ -3151,6 +3189,7 @@ static void udc_charger_timer_func(unsigned long arg)
 		charger_handle_charging();
 		fsl_udc_low_power_suspend(udc);
 		charger_misdetect_retry = 0;
+		atomic_set(&arcotg_busy, 0);
 		return;
 	}
 
@@ -3160,6 +3199,9 @@ static void udc_charger_timer_func(unsigned long arg)
 		charger_misdetect_retry = 0;
 		LOG_DPDM(INFO, "uc", "USB connected to a non-configuring host 3rd party charger?\n", (portsc & PORTSCX_LINE_STATUS_KSTATE) != 0, (portsc & PORTSCX_LINE_STATUS_JSTATE) != 0);
 		atomic_set(&udc->timer_scheduled, 0);
+		udc->conn_sts = USB_CONN_DISCONNECTED;
+		atomic_set(&arcotg_busy, 0);
+		chgdisc_event(udc);
 	}
 }
 
@@ -3223,7 +3265,6 @@ static void get_usb_connection_status(struct arcotg_udc *udc)
 	udc->charger_retries = 3;
 	atomic_set(&udc->timer_scheduled, 1);
 	mod_timer(&udc->charger_timer, jiffies + msecs_to_jiffies(1000));
-
 exit:
 	if (!suspended) {
 		/* Restore the port and controller to their previous states so as to
@@ -3247,8 +3288,10 @@ static void chgconn_event(struct arcotg_udc *udc)
 {
 	int junk;
 
-	get_usb_connection_status(udc);
+	atomic_set(&arcotg_busy, 1);
 
+	get_usb_connection_status(udc);
+	
 	switch (udc->conn_sts) {
 		case USB_CONN_HOST:
 UDC_LOG(INFO, "hsd", "Host detected\n");
@@ -3277,20 +3320,37 @@ UDC_LOG(INFO, "chd", "Charger detected\n");
 			UDC_LOG(ERROR, "unkc", "Unknown USB connection state %d\n", udc->conn_sts);
 			break;
 	}
+
+	if (atomic_read(&udc->timer_scheduled) == 0)
+		atomic_set(&arcotg_busy, 0);
 }
 
 static void chgdisc_event(struct arcotg_udc *udc)
 {
+	atomic_set(&arcotg_busy, 1);
+
 	udc->conn_sts = USB_CONN_DISCONNECTED;
-
-	UDC_LOG(INFO, "udsc", "USB disconnected\n");
-
 	atomic_set(&udc->mA, 0);
 	charger_set_current_limit(0);
-	fsl_udc_low_power_suspend(udc);
-
 	(void)kobject_uevent(&udc->gadget.dev.parent->kobj, KOBJ_REMOVE);
+	delete_charger_timer(udc);
+
+	if (udc->driver)
+		if (udc->driver->disconnect)
+			udc->driver->disconnect(&udc->gadget);
+
+	mdelay(100);
+	UDC_LOG(INFO, "udsc", "USB disconnected\n");
 	device_remove_file(udc->gadget.dev.parent, &dev_attr_connected);
+	fsl_udc_low_power_suspend(udc);
+	cancel_rearming_delayed_work(&udc->charger_detect_work);
+	atomic_set(&port_reset_counter, 0);
+
+	/* No need to run the workqueue as this one is disconnected */
+	atomic_set(&udc->run_workqueue, 0);
+	/* 30 second work is no longer scheduled */
+	udc->work_scheduled = 0;
+	atomic_set(&arcotg_busy, 0);
 }
 
 static int chg_event(void *param, int connected)
@@ -3302,7 +3362,11 @@ static int chg_event(void *param, int connected)
 
 	atomic_set(&udc->run_workqueue, 0);
 
+	if (atomic_read(&arcotg_busy))
+		return -EBUSY;
+
 	if (connected) {
+		fsl_udc_low_power_resume(udc);
 		if (udc->conn_sts != USB_CONN_HOST) {
 			chgconn_event(udc);
 		}
@@ -3355,6 +3419,9 @@ static int __devinit fsl_udc_probe(struct platform_device *pdev)
 	u32 id;
 	u64 rsrc_start, rsrc_len;
 	int junk;
+#ifdef CONFIG_MACH_LAB126
+	u16 phy_id;
+#endif
 
 	if (strcmp(pdev->name, "arc_udc")) {
 		pr_debug("udc Wrong device\n");
@@ -3397,14 +3464,6 @@ static int __devinit fsl_udc_probe(struct platform_device *pdev)
 		 (unsigned long)pdev->resource[0].end);
 	pr_debug("rsrc_start=0x%llx  rsrc_len=0x%llx\n", rsrc_start, rsrc_len);
 
-#if 0				/* DDD */
-	pr_debug("doing request_mem_region(start=0x%llx, len=0x%llx)\n",
-		 rsrc_start, rsrc_len);
-	if (!request_mem_region(rsrc_start, rsrc_len, driver_name)) {
-		UDC_LOG(ERROR, "rmr", "request_mem_region failed\n");
-		return -EBUSY;
-	}
-#endif
 	usb_slave_regs = (struct usb_dr_device *)(int)IO_ADDRESS(rsrc_start);
 
 	pr_debug("udc usb_slave_regs = 0x%p\n", usb_slave_regs);
@@ -3432,6 +3491,7 @@ static int __devinit fsl_udc_probe(struct platform_device *pdev)
 #ifdef CONFIG_MACH_LAB126
 	INIT_DELAYED_WORK(&udc->phy_locked_work, udc_phy_locked_work);
 	schedule_delayed_work(&udc->phy_locked_work, msecs_to_jiffies(6000));
+	INIT_DELAYED_WORK(&udc->charger_detect_work, do_charger_detect_work);
 #endif
 
 	if (!udc->transceiver) {
@@ -3444,18 +3504,23 @@ static int __devinit fsl_udc_probe(struct platform_device *pdev)
 	mdelay(3);
 	phy_id = isp1504_read(0x1, &(usb_slave_regs->ulpiview)) << 8 |
 		isp1504_read(0x0, &(usb_slave_regs->ulpiview));
-	UDC_LOG(INFO, "phyid", "USB Phy manufacturer ID %#04x\n", phy_id);
-	switch (phy_id) {
+	LOG_PHY(INFO, "phyid", "Phy manufacturer ID\n", phy_id);
+
+	for (i = 0; i < ARRAY_SIZE(phy_list); i++) {
+		if (phy_list[i].id == phy_id) {
+			local_phy_ops = phy_list + i;
 			break;
-		case SMSC_ID:
-			reset_phy = reset_smsc_phy;
-			reset_phy();
-			break;
-		default:			//assume NXP Phy by default
-			phy_id = NXP_ID;	//Fallthrough
-		case NXP_ID:
-			reset_phy = reset_nxp_phy;
-			break;
+		}
+	}
+
+	//NXP by default
+	if (NULL == local_phy_ops) {
+		LOG_PHY(ERROR, "unkphy", "Unknown Phy manufacturer defaulting to NXP\n", phy_id);
+		local_phy_ops = phy_list;
+	}
+
+	if (SMSC_ID == local_phy_ops->id) {
+		local_phy_ops->reset();
 	}
 #endif
 
@@ -3539,6 +3604,9 @@ static int __devinit fsl_udc_probe(struct platform_device *pdev)
 	pr_debug("udc back from device_add ");
 
 	junk = device_create_file(udc->gadget.dev.parent, &dev_attr_log_mask);
+#ifdef CONFIG_MACH_LAB126
+	junk = device_create_file(udc->gadget.dev.parent, &dev_attr_manufacturer);
+#endif
 
 	return tmp_status;
 }
@@ -3564,11 +3632,14 @@ static int __devexit fsl_udc_remove(struct platform_device *pdev)
 	device_remove_file(udc->gadget.dev.parent, &dev_attr_log_mask);
 
 #ifdef CONFIG_MACH_LAB126
+	device_remove_file(udc->gadget.dev.parent, &dev_attr_manufacturer);
 	atomic_set(&udc->run_workqueue, 0);
 	cancel_rearming_delayed_work(&udc->work);
 	udc->work_scheduled = 0;
 	cancel_rearming_delayed_work(&udc->wakeup);
 	cancel_rearming_delayed_work(&udc->phy_locked_work);
+	cancel_rearming_delayed_work(&udc->charger_detect_work);
+
 	delete_charger_timer(udc);	
 
 	(void)kobject_uevent(&udc->gadget.dev.parent->kobj, KOBJ_REMOVE);
@@ -3617,11 +3688,6 @@ static int __devexit fsl_udc_remove(struct platform_device *pdev)
 	device_unregister(&udc->gadget.dev);
 	/* free udc --wait for the release() finished */
 	wait_for_completion(&done);
-
-#if 0				/* DDD */
-	release_mem_region(pdev->resource[0].start,
-			   pdev->resource[0].end - pdev->resource[0].start + 1);
-#endif
 
 	/*
 	 * do platform specific un-initialization:
@@ -3742,8 +3808,8 @@ static void wakeup_work(struct work_struct *work)
 		enable_irq(udc->irq);
 
 		mdelay(1);
-		if (SMSC_ID == phy_id) {
-			reset_phy();
+		if (SMSC_ID == local_phy_ops->id) {
+			local_phy_ops->reset();
 		}
 		init_detect_work((struct work_struct *)&udc->work);
 	}

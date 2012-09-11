@@ -571,6 +571,7 @@ struct arcotg_udc {
 	int charger_retries;
 	atomic_t timer_scheduled;
 	struct delayed_work phy_locked_work;
+	struct delayed_work charger_detect_work;
 };
 
 #if 0

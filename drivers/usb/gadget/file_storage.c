@@ -3808,6 +3808,13 @@ static void /* __init_or_exit */ fsg_unbind(struct usb_gadget *gadget)
 			curlun->registered = 0;
 		}
 	}
+	
+	if (fsg->curlun != NULL) {
+		fsg->curlun->prevent_medium_removal = 0;
+		if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
+			kobject_uevent_atomic(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE))
+				printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+	}
 
 	/* If the thread isn't already dead, tell it to exit now */
 	if (fsg->state != FSG_STATE_TERMINATED) {

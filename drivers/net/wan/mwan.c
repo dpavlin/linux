@@ -1,7 +1,7 @@
 /*
  * mwan.c  --  Mario WAN hardware control driver
  *
- * Copyright 2005-2008 Lab126, Inc.  All rights reserved.
+ * Copyright 2005-2009 Lab126, Inc.  All rights reserved.
  *
  */
 
@@ -22,10 +22,18 @@ extern void gpio_wan_power(int enable);
 extern void gpio_wan_usbhc1_pwr(int enable);
 
 
+#undef DEBUG
+
+#ifdef DEBUG
+#define log_debug(format, arg...) printk("mwan: D %s:" format, __func__, ## arg)
+#else
+#define log_debug(format, arg...)
+#endif
+
 #define log_info(format, arg...) printk("mwan: I %s:" format, __func__, ## arg)
 #define log_err(format, arg...) printk("mwan: E %s:" format, __func__, ## arg)
 
-#define VERSION			"0.8.4"
+#define VERSION			"0.8.5"
 
 #define PROC_WAN		"wan"
 #define PROC_WAN_POWER		"power"
@@ -73,7 +81,7 @@ set_wan_rf_enable(
 	extern void gpio_wan_rf_enable(int);
 
 	if (enable != wan_enable) {
-		log_info("swe:enable=%d:setting WAN RF enable state\n", enable);
+		log_debug("swe:enable=%d:setting WAN RF enable state\n", enable);
 
 		gpio_wan_rf_enable(enable);
 
@@ -106,7 +114,7 @@ set_wan_power(
 	switch (new_status) {
 
 		case WAN_ON :
-			log_info("pow:status=%d:powering on WAN module\n", new_status);
+			log_debug("pow:status=%d:powering on WAN module\n", new_status);
 
 			// power up the WAN
 			gpio_wan_power(1);
@@ -130,7 +138,7 @@ set_wan_power(
 				msleep(NETWORK_DEREG_TIME);
 			}
 
-			log_info("pow:status=%d:powering off WAN module\n", new_status);
+			log_debug("pow:status=%d:powering off WAN module\n", new_status);
 
 			// power off the WAN
 			gpio_wan_power(0);
@@ -247,8 +255,6 @@ wan_tph_event_handler(
 {
 	unsigned long tph_cur_seconds, tph_delta;
 
-	log_info("tph:tph event occurred; ");
-
 	// the module may generate extraneous TPH events; filter out these extra events
 	tph_cur_seconds = get_seconds();
 
@@ -259,13 +265,9 @@ wan_tph_event_handler(
 	if (tph_delta > WAKE_EVENT_INTERVAL) {
 		tph_last_seconds = tph_cur_seconds;
 
-		printk("notifying system of TPH\n");
+		log_info("tph::tph event occurred; notifying system of TPH\n");
 
 		wan_tph_notify();
-
-	} else {
-		printk("ignoring (time delta %lds)\n", tph_delta);
-
 	}
 }
 

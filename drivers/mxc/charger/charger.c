@@ -1,14 +1,17 @@
 /*
- * Battery charger driver
+ * The code contained herein is licensed under the GNU General Public
+ * License. You may obtain a copy of the GNU General Public License
+ * Version 2 or later at the following locations:
  *
- * Copyright 2008 Lab126, Inc.
+ * http://www.opensource.org/licenses/gpl-license.html
+ * http://www.gnu.org/copyleft/gpl.html
  */
 
 /*
- * FIXME - Similar issues while shutting down.  Not clear if remove code is
- *	   getting called, and we keep handling charger events up until the
- *	   very end.  Not clear if this is a problem, or if more coordination
- *	   is needed.
+ * Charger driver
+ *
+ * Copyright 2008-2009 Lab126, Inc.
+ * Manish Lachwani (lachwani@lab126.com)
  */
 
 #include <linux/kernel.h>
@@ -18,6 +21,7 @@
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
+#include <linux/cpufreq.h>
 #include <asm/arch/pmic_external.h>
 #include <asm/arch/pmic_battery.h>
 #include <asm/arch/pmic_adc.h>
@@ -30,8 +34,6 @@
 
 #include <llog.h>
 
-
-
 #define DRIVER_NAME "charger"
 
 
@@ -42,11 +44,16 @@
 #define LOW_VOLTAGE_THRESHOLD		3400	/* mV */
 #define CRITICAL_VOLTAGE_THRESHOLD	3100	/* mV */
 
-#define ARCOTG_IRQ			37 	/* Gadget driver IRQ */
+#define PMIC_IRQ			67	/* PMIC IRQ */
 static DEFINE_MUTEX(charger_wq_mutex);		/* Charger driver mutex */	
 int charger_misdetect_retry = 0;		/* Track the arcotg misdetects */
 EXPORT_SYMBOL(charger_misdetect_retry);
 
+int charger_probed = 0;				/* Has the charger module been probed */
+EXPORT_SYMBOL(charger_probed);
+
+static int charger_turn_off_curri = 0;		/* Keep track of CURRI */
+static int curri_test = 0;			/* Did we unsubscribe CHGCURRI? */
 static int charger_suspend(struct platform_device *pdev, pm_message_t state);
 static int charger_resume(struct platform_device *pdev);
 static int charger_probe(struct platform_device *pdev);
@@ -58,6 +65,10 @@ static void charger_usb4v4(struct work_struct *not_used);
 static void charger_arcotg_wakeup(struct work_struct *not_used);
 static DECLARE_DELAYED_WORK(charger_usb4v4_work, charger_usb4v4);
 static DECLARE_DELAYED_WORK(charger_arcotg_work, charger_arcotg_wakeup);
+static void charger_queue_plug_event(int state);
+static int host_charging = 0;
+
+atomic_t arcotg_callback_done = ATOMIC_INIT(0);
 
 /* ICHRG settings
  *
@@ -138,115 +149,41 @@ struct charger {
 	spinlock_t		lock;
 	struct platform_driver	drvr;
 	struct platform_device	dev;
-
-	/* We talk to the pmic driver to set current limits and register
-	 * for interrupts.  Since the pmic driver uses the main system work
-	 * queue to talk over spi to the MC13783, we need to create our own
-	 * work queue for our work that needs to be deferred and may sleep.
-	 * This avoids deadlocks when reading the A/D converters, etc.
-	 */
-
 	struct workqueue_struct	*charger_wq;
-
-	/* Work queue element that handles charging-related work: reads A/D
-	 * converters, monitors charger and battery voltages, controls charge
-	 * current regulator, etc.
-	 */
-
 	struct work_struct	charger_work;
 	int			charger_work_queued;
-
-	/* Bitmap of operations that the work queue element should do.
-	 * Snippets of code that need something done on the work queue set
-	 * the appropriate bit, and queue the work queue element.
-	 */
-
 	unsigned long		operations;
-
-	/* This timer task queues the driver's work queue element to
-	 * handle the periodic charger-management work.
-	 */
 
 	struct timer_list	timer;
 	int			timer_delay;	/* in seconds */
-
-	/* Callback structures for handling interrupts from the MC13783. */
 
 	pmic_event_callback_t	chgdeti_callback;
 	pmic_event_callback_t	chrgcurri_callback;
 	pmic_event_callback_t	lobathi_callback;
 	pmic_event_callback_t	lobatli_callback;
 	
-	/* Shadow values to track which callbacks are subscribed/enabled */
-
 	int			lobathi_callback_subscribed;
 	int			lobatli_callback_subscribed;
-
-	/* Suspend/resume control - Don't try to talk to the pmic adc
-	 * driver until we've been resumed.  Set when we're suspended,
-	 * and cleared when we're resumed.
-	 */
-
 	int			suspended;
-
-	/* Current charger state information */
-
-	/* The "current_limit" is a bit complicated.  The USB gadget driver
-	 * can request four different current limits: 0, 2.5, 100, and 500mA.
-	 * The charger can supply current in a continuous range up to about
-	 * 1000mA - although it will typically limit at about 880mA.
-	 *
-	 * Atlas's current limiting circuitry supports 15 discrete levels,
-	 * from 0-1755 mA, although we only take advantage of the range from
-	 * 0 up to 975 or 1073mA.
-	 *
-	 * So current_current_limit's job is to help determine if the charger
-	 * setting needs to change from its "current" value.  In order to do
-	 * this, it will either reflect the last requested USB-related limit,
-	 * or else it will reflect the last calculated charger limit,
-	 * expressed in terms of ICHRG settings.  (0, 85, 195, 293,..., 1073)
-	 */
-
 	int			current_current_limit;
 	int			current_ichrg;
 	int			current_vchrg;
 	int			current_led;
-	
-	/* Are we connected to anything interesting, or not. */
-
 	int			vbus_present;
-
-	/* Flag that indicates that we're connected to a USB charger, which
-	 * means that the current limit should be calculated dynamically.
-	 * This field is mutually exclusive to "usb_current_limit".
-	 */
-
 	int			charger_present;
-
-	/* When connected to a PC, the current limit requirements are dictated
-	 * by the USB standard, and driven by the USB gadget driver.  The USB
-	 * gadget driver uses this field to dynamically control the device's
-	 * current draw over the USB bus, depending on the USB bus state.
-	 * This field is mutually exclusive to "charger_present".
-	 */
-
 	int			usb_current_limit;
-
 	int			max_current_limit;
 	int			max_power_dissipation;
-
-	/* powerd- and diagnostic-related fields */
-
 	int			voltage;	/* Last BP reading */
 	int			vbatt;		/* Last VBATT reading */
 	int			temp_ok;	/* Charging allowed */
 	int			battery_full;	/* Green LED control */
-
-	/* USB driver callback mechanism to handle host/charger detection */
-
 	int			(*arcotg_callback)(void *arcotg_arg, int state);
 	void			*arcotg_arg;
 	int			arcotg_state;
+#ifdef CONFIG_CPU_FREQ
+	struct notifier_block	cpufreq_transition;
+#endif
 };
 
 static struct charger charger_globals = {
@@ -285,16 +222,13 @@ static struct charger charger_globals = {
 	.arcotg_state		= 0,
 };
 
+atomic_t charger_in_scaling = ATOMIC_INIT(0);
 static struct charger *charger = &charger_globals;
 
 unsigned int	chrg_log_mask;
-
 char	*envp_low[] = { "BATTERY=low", NULL };
-
 char	*envp_critical[] = { "BATTERY=critical", NULL };
-
 char	*charge_led_string[] = { "off", "yellow", "green" };
-
 int	vchrg_table[] = { 4050, 4375, 4150, 4200, 4250, 4300, 3800, 4500 };
 
 #define VCHRG_4200	3	// Index of 4200 mV VCHRG value
@@ -334,6 +268,23 @@ struct chrg_tbl_el  charging_table[] = { /* max mV, max current, vchrg */
 static int determine_current_limit(int chrgraw, int bp, int power_max);
 static void enable_lobathi_lobatli_interrupts(int enable_lobathi, int enable_lobatli);
 
+#ifdef CONFIG_CPU_FREQ
+int charger_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
+				void *data)
+{
+	switch (val) {
+	case CPUFREQ_PRECHANGE:
+		atomic_set(&charger_in_scaling, 1);
+		break;
+	case CPUFREQ_POSTCHANGE:
+		atomic_set(&charger_in_scaling, 0);
+		queue_work(charger->charger_wq, &charger->charger_work);
+		break;
+	}
+	
+	return 0;
+}
+#endif /* CONFIG_CPU_FREQ */
 
 /* These are the external API's that are available to the arcotg_udc driver to
  * control current draw over the USB bus.
@@ -341,14 +292,9 @@ static void enable_lobathi_lobatli_interrupts(int enable_lobathi, int enable_lob
 
 int charger_get_current_limit(void)
 {
-	unsigned long	flags;
 	int		retval;
 
-	spin_lock_irqsave(&charger->lock, flags);
-
 	retval = charger->current_current_limit;
-
-	spin_unlock_irqrestore(&charger->lock, flags);
 
 	return retval;
 }
@@ -358,15 +304,12 @@ int charger_get_current_limit(void)
  */
 int charger_set_current_limit_pm(int new_limit)
 {
-	unsigned long flags;
 	log_chrg_api_calls(CHRG_MSG_DBG_SET_CURRENT_LIMIT, new_limit);
 
-	spin_lock_irqsave(&charger->lock, flags);
 	charger->charger_present = false;
 	charger->usb_current_limit = new_limit;
 	set_bit(OP_SET_CHARGER, &charger->operations);
 	queue_work(charger->charger_wq, &charger->charger_work);
-	spin_unlock_irqrestore(&charger->lock, flags);
 
 	return 0;
 }
@@ -376,34 +319,27 @@ int charger_set_current_limit_pm(int new_limit)
  */
 int charger_set_current_limit(int new_limit)
 {
-	unsigned long flags;
 	log_chrg_api_calls(CHRG_MSG_DBG_SET_CURRENT_LIMIT, new_limit);
 
-	spin_lock_irqsave(&charger->lock, flags);
 	charger->charger_present = false;
 	charger->usb_current_limit = new_limit;
 	set_bit(OP_SET_CHARGER, &charger->operations);
 	queue_work(charger->charger_wq, &charger->charger_work);
-	spin_unlock_irqrestore(&charger->lock, flags);
+	if (new_limit > 100)
+		host_charging = 1;
+	else
+		host_charging = 0;
 
 	return 0;
 }
 
 int charger_handle_charging(void)
 {
-	unsigned long	flags;
-
 	log_chrg_api_calls(CHRG_MSG_DBG_HANDLE_CHARGING);
 
-	mutex_lock(&charger_wq_mutex);
-	spin_lock_irqsave(&charger->lock, flags);
-
 	charger->charger_present = true;
-
 	queue_work(charger->charger_wq, &charger->charger_work);
-
-	spin_unlock_irqrestore(&charger->lock, flags);
-	mutex_unlock(&charger_wq_mutex);
+	host_charging = 0;
 	
 	return 0;
 }
@@ -432,10 +368,6 @@ EXPORT_SYMBOL(charger_get_current_limit);
 EXPORT_SYMBOL(charger_set_current_limit);
 EXPORT_SYMBOL(charger_handle_charging);
 EXPORT_SYMBOL(charger_set_arcotg_callback);
-
-/*
- * Charging logic
- */
 
 static int lookup_max_current_limit(int bp_voltage)
 {
@@ -479,6 +411,7 @@ static int determine_current_limit(int chrgraw, int bp, int power_max)
 
 	if (max_current != 0) {
 		log_chrg_calcs(CHRG_MSG_DBG_MAX_CURRENT_LIMITED, max_current);
+
 		return max_current;
 	}
 
@@ -539,17 +472,13 @@ static void set_charger(int ichrg, int vchrg)
 	log_chrg_entry_args("(ichrg=%d, vchrg=%d)", ichrg, vchrg);
 
 	if (ichrg == 0) {
-
 		err = pmic_batt_disable_charger(BATT_MAIN_CHGR);
-
 		if (err) {
 			log_chrg_err(CHRG_MSG_ERROR_DISABLING_CHARGER, err);
 		}
 
 	} else {
-
 		err = pmic_batt_enable_charger(BATT_MAIN_CHGR, vchrg, ichrg);
-
 		if (err) {
 			log_chrg_err(CHRG_MSG_ERROR_ENABLING_CHARGER, err);
 		}
@@ -562,7 +491,6 @@ static void set_charger(int ichrg, int vchrg)
 /* pmic initialization required for the green LED.
  * This allows "green_led_control" to simply turn it on and off.
  */
-
 static PMIC_STATUS green_led_initialization(void)
 {
 	t_bklit_channel	channel		= BACKLIGHT_LED3;
@@ -663,6 +591,7 @@ static void set_led(int led_state)
 	if (ret_y || ret_g) {
 		log_chrg_err(CHRG_MSG_ERROR_SET_LED, ret_y, ret_g);
 	}
+
 	log_chrg_exit();
 }
 
@@ -724,9 +653,9 @@ static int get_latest_readings(int *chrgraw, int *bp, int *batt)
 	unsigned short	adc_chrg_current, adc_batt_current;
 	int		valid = true;
 	PMIC_STATUS	pstat;
-	
+
+	disable_irq(PMIC_IRQ);	
 	mutex_lock(&charger_wq_mutex);		/* Enter critical region */
-	disable_irq(ARCOTG_IRQ);		/* Disable gadget IRQ */ 
 	del_timer_sync(&charger->timer);	/* Disable charger timer */
 
 	pstat = pmic_adc_convert(CHARGE_VOLTAGE, &adc_chrgraw);
@@ -760,10 +689,8 @@ static int get_latest_readings(int *chrgraw, int *bp, int *batt)
 	}
 
 	mod_timer(&charger->timer, jiffies + (charger->timer_delay * HZ));
-	enable_irq(ARCOTG_IRQ);
 	mutex_unlock(&charger_wq_mutex);
-
-	/* If we had trouble reading the voltages, return "false".  */
+	enable_irq(PMIC_IRQ);
 
 	if (valid == false) {
 		return false;
@@ -779,11 +706,9 @@ static int get_latest_readings(int *chrgraw, int *bp, int *batt)
 	log_chrg_readings(CHRG_MSG_DBG_CURRENT_READINGS,
 			adc_to_mA(adc_chrg_current), adc_to_mA(adc_batt_current), 
 			adc_chrg_current, adc_batt_current);
+
 	return true;
 }
-
-
-/* Return the appropriate VCHRG setting based on the current BP voltage. */
 
 static int lookup_vchrg(int bp_voltage)
 {
@@ -798,12 +723,10 @@ static int lookup_vchrg(int bp_voltage)
 	while (bp_voltage > charging_table[i].max_mV) {
 		i++;
 	}
-	
+
 	return charging_table[i].vchrg_value;
 }
 
-
-/* Return the appropriate ICHRG setting based on the current limit. */
 
 static int lookup_ichrg(int mA)
 {
@@ -844,7 +767,6 @@ static void post_low_battery_event(void)
 	}
 }
 
-
 static void post_critical_battery_event(void)
 {
 	struct kobject *kobj = &charger->dev.dev.kobj;
@@ -861,34 +783,50 @@ static void charger_arcotg_wakeup(struct work_struct *not_used)
 	queue_work(charger->charger_wq, &charger->charger_work);
 }
 
+extern int mxc_spi_suspended;
+
 static void charger_work_fn(struct work_struct *work)
 {
-	int		current_limit;
-	int		vbus_present, charger_present;
-	int		max_dissipation;
-	int		temp_ok, battery_full, usb_current_limit;
-	unsigned long	flags;
-	unsigned long	ops;
+	int		current_limit = 0;
+	int		vbus_present = 0, charger_present = 0;
+	int		max_dissipation = 0;
+	int		temp_ok = 0, battery_full = 0, usb_current_limit = 0;
+	unsigned long	ops = 0;
 	int		chrgraw = 0, bp = 0, batt = 0;
-	int		lobathi_occurred;
-	int		lobatli_occurred;
-	int		critical_voltage, low_voltage;
-	int		new_current_limit, new_ichrg, new_vchrg, new_led;
-	int		need_to_set_charger, need_to_set_led;
+	int		lobathi_occurred = 0;
+	int		lobatli_occurred = 0;
+	int		critical_voltage = 0, low_voltage = 0;
+	int		new_current_limit = 0, new_ichrg = 0, new_vchrg = 0, new_led = 0;
+	int		need_to_set_charger = 0, need_to_set_led = 0;
 	int		valid = 0;
 	int		ret = 0; /* Check return value from arcotg */
+	t_sensor_bits	sensors;
+
+	if (atomic_read(&charger_in_scaling) == 1) {
+		queue_work(charger->charger_wq, &charger->charger_work);
+		return;
+	}	
+
+	if (mxc_spi_suspended) {
+		queue_work(charger->charger_wq, &charger->charger_work);
+		return;
+	}
 
 	log_chrg_entry();
 
 	if (charger->suspended)
-		goto exit;
+		goto exit_charger;
 
-	spin_lock_irqsave(&charger->lock, flags);
-
+	pmic_get_sensors(&sensors);
+	if (sensors.sense_usb4v4s || (sensors.sense_chgcurrs && sensors.sense_chgdets)) {
+		if (charger->current_led == LED_OFF) {
+			schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(1000));
+		}
+	}
+			
 	ops = charger->operations;
 	charger->operations = 0;
-
-	spin_unlock_irqrestore(&charger->lock, flags);
+	atomic_set(&arcotg_callback_done, 0);
 
 	/* First, handle any interrupt enabling/disabling.  This may be a high
 	 * priority - for example, in response to a LOBATLI while running.
@@ -921,7 +859,7 @@ static void charger_work_fn(struct work_struct *work)
 			ret = charger->arcotg_callback(charger->arcotg_arg,
 						charger->arcotg_state);
 
-			if (ret < 0) {
+			if (ret == -EAGAIN) {
 				/*
 				 * arcotg is not ready yet. So, we will need to
 				 * set this bit. We can then either leave it upto
@@ -929,11 +867,19 @@ static void charger_work_fn(struct work_struct *work)
 				 * or queue work here. Queue'ing work makes sense
 				 * since it will be faster.
 				 */
-				set_bit(OP_PLUG_INSERTION, &charger->operations);
+				charger->operations |= ops;
 				schedule_delayed_work(&charger_arcotg_work, msecs_to_jiffies(5000));	
 				set_led(LED_YELLOW);	
 				goto exit;
 			}
+
+			if (ret == -EBUSY) {
+				charger->operations |= ops;
+				schedule_delayed_work(&charger_arcotg_work, msecs_to_jiffies(1000));
+				set_led(LED_YELLOW);
+				goto exit;
+			}
+			atomic_set(&arcotg_callback_done, 1);
 		}
 	}
 
@@ -944,8 +890,6 @@ static void charger_work_fn(struct work_struct *work)
 	 */
 	if (charger_misdetect_retry == 0)
 		valid = get_latest_readings(&chrgraw, &bp, &batt);
-
-	spin_lock_irqsave(&charger->lock, flags);
 
 	if (valid) {
 		charger->voltage = bp;		/* save latest readings */
@@ -973,9 +917,6 @@ static void charger_work_fn(struct work_struct *work)
 	charger_present = charger->charger_present;
 	max_dissipation = charger->max_power_dissipation;
 
-	spin_unlock_irqrestore(&charger->lock, flags);
-
-
 	/* The LOBATH (and possibly LOBATL) interrupt may have been spurious.
 	 * We need to check the current battery level to decide whether or not
 	 * to send an event notification to the system.
@@ -994,49 +935,19 @@ static void charger_work_fn(struct work_struct *work)
 		log_chrg_info(CHRG_MSG_INFO_LOW_BATT_READINGS, bp, batt);
 		
 		if (bp > LOW_VOLTAGE_THRESHOLD) {
-
-			/* BP > 3.4V - false alarm */
-
 			log_chrg_warn(CHRG_MSG_WARN_SPURIOUS_INTERRUPT,
 					(lobathi_occurred ? 1 : 0),
 					(lobatli_occurred ? 1 : 0));
 
-			/* Restore interrupts to their normal run state */
 			enable_lobathi_lobatli_interrupts(false, true);
-
 		} else {
-		
-			/* Only send one event - either Critical or Low */
-
 			if (lobatli_occurred || critical_voltage) {
-
-				/* BP <= 3.1V
-				 * Critical battery is higher priority */
-
 				post_critical_battery_event();
-
 			} else if (lobathi_occurred) {
-
-				/* BP <= 3.4V + LOBATLI interrupt
-				 * Low battery is lower priority */
-
 				post_low_battery_event();
-			
 			}
 		}
 	}
-
-	/* Finally, handle the more mundane charger control work.
-	 *
-	 * We don't explicitly make the following checks:
-	 *
-	 *	if (test_bit(OP_CHECK_CHARGER, &ops)) { ...
-	 *	if (test_bit(OP_SET_CHARGER, &ops)) { ...
-	 *
-	 * because it doesn't hurt to check on the charger every time this
-	 * task is run, and handling either of these bits would involve
-	 * running the following code.
-	 */
 
 	if (!temp_ok || !vbus_present) {
 	
@@ -1057,19 +968,10 @@ static void charger_work_fn(struct work_struct *work)
 
 	} else {
 		if (charger_present) {
-
-			// Current limit calculated using latest voltage
-			// readings.
-
 			new_current_limit = determine_current_limit(chrgraw,
 						bp, max_dissipation);
-	
 		} else {
-
-			// Current limit provided by the USB gadget driver.
-	
 			new_current_limit = usb_current_limit;
-
 		}
 
 		new_ichrg = lookup_ichrg(new_current_limit);
@@ -1081,7 +983,6 @@ static void charger_work_fn(struct work_struct *work)
 			new_led = LED_GREEN;
 		else
 			new_led = LED_YELLOW;
-	
 	}
 
 	if ((charger->current_current_limit != new_current_limit) ||
@@ -1100,17 +1001,17 @@ static void charger_work_fn(struct work_struct *work)
 				charge_led_string[new_led]);
 	} else
 		need_to_set_led = false;
-	
+
+	if (need_to_set_led) {
+		if (atomic_read(&arcotg_callback_done) == 0)
+			schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(1000));
+	}
+
 	if (need_to_set_charger || need_to_set_led) {
-
-		spin_lock_irqsave(&charger->lock, flags);
-
 		charger->current_current_limit = new_current_limit;
 		charger->current_ichrg = new_ichrg;
 		charger->current_vchrg = new_vchrg;
 		charger->current_led   = new_led;
-
-		spin_unlock_irqrestore(&charger->lock, flags);
 
 		if (need_to_set_charger)
 			set_charger(new_ichrg, new_vchrg);
@@ -1118,7 +1019,7 @@ static void charger_work_fn(struct work_struct *work)
 		if (need_to_set_led)
 			set_led(new_led);
 	}
-	
+exit:	
 	/* If a request was received to switch to the appropriate interrupt
 	 * enables for suspend, then we're in the middle of handling a suspend
 	 * request.
@@ -1132,8 +1033,8 @@ static void charger_work_fn(struct work_struct *work)
 	 *  suspend handler should return an error result to stop the suspend
 	 *  process.)
 	 */
-
 	if (test_bit(OP_ENABLE_SUSPEND_INTR, &ops)) {
+		test_and_clear_bit(OP_ENABLE_SUSPEND_INTR, &charger->operations);
 
 		if (bp <= CRITICAL_VOLTAGE_THRESHOLD) {
 			post_critical_battery_event();
@@ -1148,11 +1049,10 @@ static void charger_work_fn(struct work_struct *work)
 
 
 	} else if (test_bit(OP_ENABLE_NORMAL_INTR, &ops)) {
-
+		test_and_clear_bit(OP_ENABLE_NORMAL_INTR, &charger->operations);
 		enable_lobathi_lobatli_interrupts(false, true);
-
 	}
-exit:
+exit_charger:
 	log_chrg_exit();
 }
 
@@ -1181,7 +1081,7 @@ static void enable_lobathi_lobatli_interrupts(int enable_lobathi, int enable_lob
 	} else {
 		retval = pmic_event_unsubscribe(EVENT_LOBATHI,
 				charger->lobathi_callback);
-		if (retval && (retval != PMIC_EVENT_NOT_SUBSCRIBED)) {
+		if (retval) {
 			log_chrg_err(CHRG_MSG_ERROR_UNSUBSCRIBE_LOBATHI, retval);
 		} else {
 			log_chrg_interrupts(CHRG_MSG_DBG_INTERRUPT_CTRL,
@@ -1207,7 +1107,7 @@ static void enable_lobathi_lobatli_interrupts(int enable_lobathi, int enable_lob
 	} else {
 		retval = pmic_event_unsubscribe(EVENT_LOBATLI,
 				charger->lobatli_callback);
-		if (retval && (retval != PMIC_EVENT_NOT_SUBSCRIBED)) {
+		if (retval) {
 			log_chrg_err(CHRG_MSG_ERROR_UNSUBSCRIBE_LOBATLI, retval);
 		} else {
 			log_chrg_interrupts(CHRG_MSG_DBG_INTERRUPT_CTRL,
@@ -1237,31 +1137,28 @@ static void charger_timer(unsigned long data)
 /*
  * Atlas event handlers
  */
-
 static void charger_queue_plug_event(int state)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&charger->lock, flags);
 	charger->arcotg_state = state;
 	if (state)
 		charger->vbus_present = 1;
 
 	set_bit(OP_PLUG_INSERTION, &charger->operations);
 	queue_work(charger->charger_wq, &charger->charger_work);
-	spin_unlock_irqrestore(&charger->lock, flags);
 }
 
 static void chgdeti_event(void *param)
 {
 	t_sensor_bits	sensors;
 
+	disable_irq(PMIC_IRQ);
 	mutex_lock(&charger_wq_mutex);
+
 	pmic_get_sensors(&sensors);
 
-	//If this is a disconnect, just exit as this is the repeat event
 	if (!sensors.sense_chgdets) {
 		mutex_unlock(&charger_wq_mutex);
+		enable_irq(PMIC_IRQ);
 		return;
 	}
 
@@ -1270,43 +1167,73 @@ static void chgdeti_event(void *param)
 
 	charger_queue_plug_event(1);
 	mutex_unlock(&charger_wq_mutex);
+	enable_irq(PMIC_IRQ);
 }
 
 static void charger_usb4v4(struct work_struct *not_used)
 {
 	t_sensor_bits   sensors;
 
+	disable_irq(PMIC_IRQ);
+
+	if (charger_turn_off_curri == 1) {
+		pmic_event_unsubscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
+		charger_turn_off_curri = 0;
+		curri_test = 1;
+	}
+
 	mutex_lock(&charger_wq_mutex);
 
 	pmic_get_sensors(&sensors);
-	if (sensors.sense_usb4v4s || (sensors.sense_chgcurrs && sensors.sense_chgdets))
-		schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(3000));
+	if (sensors.sense_usb4v4s || (sensors.sense_chgcurrs && sensors.sense_chgdets)) {
+		if (curri_test == 1) {
+			schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(3000));
+		}
+		if (charger->current_led == LED_OFF) {
+			charger_queue_plug_event(1);
+		}
+	}
 	else {
+		curri_test = 0;
+		set_led(LED_OFF);
 		charger_queue_plug_event(0);
 		pmic_write_reg(REG_CHARGER, 0, 0xffffffff);
+		pmic_event_subscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
 	}
 
 	mutex_unlock(&charger_wq_mutex);
+	enable_irq(PMIC_IRQ);
 }
 
 static void chrgcurri_event(void *param)
 {
 	t_sensor_bits   sensors;
 
+	disable_irq(PMIC_IRQ);
+
 	log_chrg_interrupts(CHRG_MSG_DBG_INTERRUPT,
 			"Charge current below threshold intr (CHRGCURRI)");
+
+	if (charger_turn_off_curri == 1) {
+		enable_irq(PMIC_IRQ);
+		return;
+	}
 
 	mutex_lock(&charger_wq_mutex);
 
 	pmic_get_sensors(&sensors);
-	if (sensors.sense_usb4v4s || (sensors.sense_chgcurrs && sensors.sense_chgdets))
-		schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(3000));
+	if (sensors.sense_usb4v4s || (sensors.sense_chgcurrs && sensors.sense_chgdets)) {
+		charger_turn_off_curri = 1;
+		schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(10));
+	}
 	else {
+		set_led(LED_OFF);
 		charger_queue_plug_event(0);
 		pmic_write_reg(REG_CHARGER, 0, 0xffffffff);
 	}
 
 	mutex_unlock(&charger_wq_mutex);
+	enable_irq(PMIC_IRQ);
 }
 
 
@@ -1317,19 +1244,31 @@ static void chrgcurri_event(void *param)
  * the thresholds, so we need to unsubscribe these handlers in
  * order to disable this interrupt source when it occurs.
  */
-	
 static void lobathi_event(void *param)
 {
+	int reg;
+	t_sensor_bits sensors;
+
 	log_chrg_interrupts(CHRG_MSG_DBG_INTERRUPT,
 			"Low battery warning interrupt (LOBATHI)");
+
+	if (charger->lobathi_callback_subscribed == CALLBACK_NOT_SUBSCRIBED) {
+		pmic_read_reg(REG_INTERRUPT_MASK_0, &reg, 0xffffffff);
+
+		log_chrg_interrupts(CHRG_MSG_DBG_INTERRUPT_CTRL,
+			"LOBATHI occurred after unsubscription");
+
+		pmic_get_sensors(&sensors);
+
+		printk(KERN_ERR "charger: E def:332:reg=%x,LOBATHS=%d,LOBATHL=%d\n",
+					reg, sensors.sense_lobaths, sensors.sense_lobatls);
+	}
 
 	set_bit(OP_LOBATHI, &charger->operations);
 
 	set_bit(OP_DISABLE_INTR, &charger->operations);
 
-	mutex_lock(&charger_wq_mutex);
 	queue_work(charger->charger_wq, &charger->charger_work);
-	mutex_unlock(&charger_wq_mutex);
 }
 
 static void lobatli_event(void *param)
@@ -1341,9 +1280,7 @@ static void lobatli_event(void *param)
 
 	set_bit(OP_DISABLE_INTR, &charger->operations);
 
-	mutex_lock(&charger_wq_mutex);
 	queue_work(charger->charger_wq, &charger->charger_work);
-	mutex_unlock(&charger_wq_mutex);
 }
 
 
@@ -1660,6 +1597,8 @@ static int __init charger_init(void)
 	charger->arcotg_callback = NULL;
 	charger->arcotg_arg = NULL;
 
+	printk("Version 2.0\n");
+
 	/* Create a fake piece of hardware for us to bind against... */
 
 	retval = platform_device_register(&charger->dev);
@@ -1693,13 +1632,13 @@ static int __init charger_init(void)
 	retval = device_create_file(&charger->dev.dev, &dev_attr_voltage);
 
 	charger->chgdeti_callback.func    = chgdeti_event;
-	charger->chgdeti_callback.param   = charger;
+	charger->chgdeti_callback.param   = NULL;
 	charger->chrgcurri_callback.func  = chrgcurri_event;
-	charger->chrgcurri_callback.param = charger;
+	charger->chrgcurri_callback.param = NULL;
 	charger->lobathi_callback.func    = lobathi_event;
-	charger->lobathi_callback.param   = charger;
+	charger->lobathi_callback.param   = NULL;
 	charger->lobatli_callback.func    = lobatli_event;
-	charger->lobatli_callback.param   = charger;
+	charger->lobatli_callback.param   = NULL;
 
 	pmic_event_subscribe(EVENT_CHGDETI, charger->chgdeti_callback);
 	pmic_event_subscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
@@ -1720,7 +1659,14 @@ static int __init charger_init(void)
 		set_led(LED_OFF);
 		pmic_write_reg(REG_CHARGER, 0, 0xffffffff);
 	}
-	
+
+#ifdef CONFIG_CPU_FREQ
+	charger->cpufreq_transition.notifier_call = charger_cpufreq_notifier;
+	cpufreq_register_notifier(&charger->cpufreq_transition,
+					CPUFREQ_TRANSITION_NOTIFIER);
+#endif
+
+	charger_probed = 1;
 	goto exit;
 exit1:
 	platform_device_unregister(&charger->dev);
@@ -1760,11 +1706,17 @@ static void __exit charger_exit(void)
 	platform_driver_unregister(&charger->drvr);
 
 	printk(KERN_INFO "Battery charger driver unloaded.\n");
+
+#ifdef CONFIG_CPU_FREQ
+	cpufreq_unregister_notifier(&charger->cpufreq_transition,
+				CPUFREQ_TRANSITION_NOTIFIER);
+#endif
+	charger_probed = 0;
 }
 
 module_init(charger_init);
 module_exit(charger_exit);
 
-MODULE_DESCRIPTION("Battery charger driver");
-MODULE_AUTHOR("Lab126");
+MODULE_DESCRIPTION("Charger driver");
+MODULE_AUTHOR("Manish Lachwani");
 MODULE_LICENSE("GPL");

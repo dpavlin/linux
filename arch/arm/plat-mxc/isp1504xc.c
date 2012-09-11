@@ -162,7 +162,7 @@ phy_retry:
 phy_reboot:
 	if (phy_not_responding_counter == PHY_NOT_RESPONDING_MAX) {
 		/* MAX limit exceeded */
-		printk(KERN_ERR"PHY locked up at runtime: Rebooting ...\n");
+		printk(KERN_CRIT "isp1504: C def:lkup::PHY locked up at runtime: Rebooting ...\n");
 		dump_stack();
 		phy_not_responding_counter = 0;
 		mxc_wd_reset();

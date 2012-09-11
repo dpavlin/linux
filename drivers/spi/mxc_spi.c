@@ -235,6 +235,7 @@ MXC_SPI_BUF_RX(u8)
 
 
 int mxc_spi_suspended = 0;
+EXPORT_SYMBOL(mxc_spi_suspended);
 
 /*!
  * This function enables CSPI interrupt(s)
