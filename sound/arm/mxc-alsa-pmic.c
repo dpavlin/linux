@@ -1003,7 +1003,10 @@ void configure_ssi_tx(snd_pcm_substream_t * substream)
 	ssi_synchronous_mode(ssi, true);
 
 	if (runtime->channels == 1) {
-		ssi_network_mode(ssi, false);
+		if (stream_id == 2)
+			ssi_network_mode(ssi, true);
+		else
+			ssi_network_mode(ssi, false);
 	} else {
 		ssi_network_mode(ssi, true);
 	}
@@ -2783,7 +2786,7 @@ static snd_pcm_hardware_t snd_mxc_pmic_playback_stereo = {
 	.rates = (SNDRV_PCM_RATE_8000_44100 | SNDRV_PCM_RATE_CONTINUOUS),
 	.rate_min = 8000,
 	.rate_max = 44100,
-	.channels_min = 1,
+	.channels_min = 2,
 	.channels_max = 2,
 	.buffer_bytes_max = MAX_BUFFER_SIZE,
 	.period_bytes_min = MIN_PERIOD_SIZE,

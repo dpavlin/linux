@@ -18,6 +18,7 @@
 #include <linux/platform_device.h>
 #include <linux/delay.h>
 #include <linux/usb/fsl_xcvr.h>
+#include <linux/reboot.h>
 
 #include <asm/hardware.h>
 #include <asm/arch/arc_otg.h>
@@ -43,6 +44,9 @@
 #define DM_PULL_DOWN		(1 << 2)	/* enable DM Pull Down */
 #define DP_PULL_DOWN		(1 << 1)	/* enable DP Pull Down */
 #define ID_PULL_UP		(1 << 0)	/* enable ID Pull Up */
+
+#define	PHY_NOT_RESPONDING_MAX	6 		/* MAX # of messages */
+static int phy_not_responding_counter = 0;
 
 /*!
  * read ULPI register 'reg' thru VIEWPORT register 'view'
@@ -107,12 +111,32 @@ static void isp1504_set(u8 bits, int reg, volatile u32 * view)
 	pr_debug("%s: \n",__FUNCTION__);
 	/* make sure interface is running */
 	if (!(__raw_readl(view) & ULPIVW_SS)) {
+phy_interface_retry:
 		__raw_writel(ULPIVW_WU, view);
 		do {		/* wait for wakeup */
 			data = __raw_readl(view);
-		} while (data & ULPIVW_WU);
+			ulpi_count--;
+		} while ((data & ULPIVW_WU) && (ulpi_count != 0) );
+
+		if (ulpi_count == 0) {
+			phy_not_responding_counter++;
+			printk(KERN_CRIT "isp1504: C def:wrf::PHY interface not running ... Retrying\n");
+			if (phy_not_responding_counter != PHY_NOT_RESPONDING_MAX) {
+				udelay(100);
+				ulpi_count = 1000;
+				goto phy_interface_retry;
+			}
+		}
+		else {
+			phy_not_responding_counter = 0; /* Reset counter */
+			ulpi_count = 1000;
+		}
+
+		if (phy_not_responding_counter == PHY_NOT_RESPONDING_MAX)
+			goto phy_reboot;
 	}
 
+phy_retry:
 	__raw_writel((ULPIVW_RUN | ULPIVW_WRITE |
 		      ((reg + ISP1504_REG_SET) << ULPIVW_ADDR_SHIFT) |
 		      ((bits & ULPIVW_WDATA_MASK) << ULPIVW_WDATA_SHIFT)),
@@ -123,8 +147,26 @@ static void isp1504_set(u8 bits, int reg, volatile u32 * view)
 		ulpi_count--;
 	} while ( (data & ULPIVW_RUN) && (ulpi_count != 0) );
 
-	if (ulpi_count == 0)
-		printk(KERN_CRIT "isp1504: C def:wrf::PHY did not respond\n");
+	if (ulpi_count == 0) {
+		phy_not_responding_counter++;
+		printk(KERN_CRIT "isp1504: C def:wrf::PHY did not respond ... Retrying\n");
+		if (phy_not_responding_counter != PHY_NOT_RESPONDING_MAX) {
+			udelay(100);
+			ulpi_count = 1000;
+			goto phy_retry;
+		}
+	}
+	else 
+		phy_not_responding_counter = 0; /* Reset counter */
+
+phy_reboot:
+	if (phy_not_responding_counter == PHY_NOT_RESPONDING_MAX) {
+		/* MAX limit exceeded */
+		printk(KERN_ERR"PHY locked up at runtime: Rebooting ...\n");
+		dump_stack();
+		phy_not_responding_counter = 0;
+		mxc_wd_reset();
+	}
 }
 #ifdef CONFIG_MACH_LAB126
 EXPORT_SYMBOL(isp1504_set);

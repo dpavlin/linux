@@ -39,6 +39,7 @@
 #include <linux/pm.h>
 #include <linux/notifier.h>
 #include <linux/cpufreq.h>
+#include <linux/reboot.h>
 
 #include <asm/arch/gpio.h>
 #include <asm/arch/pmic_external.h>
@@ -334,6 +335,11 @@ void pmic_voltage_init(void)
 
 	reg = __raw_readl(MXC_CCM_RCSR);
 	printk(KERN_ERR "RCSR register - %x\n", reg);
+
+	if (reg & 0x2) {
+		printk(KERN_ERR "Previous reset was a watchdog ... rebooting\n");
+		kernel_restart(NULL);
+	}
 
 	/* Enable 4 mc13783 output voltages */
 	pmic_write_reg(REG_ARBITRATION_SWITCHERS, (1 << 5), (1 << 5));
