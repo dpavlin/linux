@@ -110,6 +110,9 @@ static int timeout;
 static struct clk *usb_ahb_clk;
 static void chgdisc_event(struct arcotg_udc *udc);
 
+/* Has the charger timer been deleted? */
+static int udc_charger_timer_deleted = 0;
+
 #undef	USB_TRACE
 
 #define	DRIVER_DESC	"ARC USBOTG Device Controller driver"
@@ -474,8 +477,6 @@ static int dr_controller_setup(struct arcotg_udc *udc)
 
 #ifdef CONFIG_MACH_LAB126
 	UDC_LOG(INFO, "fs", "force_fs = %d\n", force_fs);
-	if (force_fs)
-		portctrl |= 0x1000000;
 #else
 #ifdef DEBUG_FORCE_FS
 	portctrl |= 0x1000000;
@@ -2251,6 +2252,7 @@ static void dtd_complete_irq(struct arcotg_udc *udc)
 static void port_change_irq(struct arcotg_udc *udc)
 {
 	u32 speed;
+	unsigned int portsc1;
 
 	if (udc->bus_reset)
 		udc->bus_reset = FALSE;
@@ -2275,7 +2277,15 @@ static void port_change_irq(struct arcotg_udc *udc)
 			break;
 		}
 	}
-	UDC_LOG(CRIT, "upc", "UDC port change, speed=%d\n", udc->gadget.speed);
+
+	portsc1 = le32_to_cpu(usb_slave_regs->portsc1);
+	/* Check the High Speed Port settings */
+	if ((portsc1 & PORTSCX_CURRENT_CONNECT_STATUS) &&
+		(portsc1 & PORTSCX_PORT_HSP)) {
+			udc->gadget.speed = USB_SPEED_HIGH;
+	}
+
+	UDC_LOG(INFO, "upc", "UDC port change, speed=%d\n", udc->gadget.speed);
 
 	/* Update USB state */
 	if (!udc->resume_state)
@@ -2286,7 +2296,7 @@ static void suspend_irq(struct arcotg_udc *udc)
 {
 	pr_debug("%s\n", __FUNCTION__);
 
-	UDC_LOG(CRIT, "usi", "%s: usb_slave_regs->usbintr:%x\n", __FUNCTION__,
+	UDC_LOG(INFO, "usi", "%s: usb_slave_regs->usbintr:%x\n", __FUNCTION__,
 			usb_slave_regs->usbintr);
 
 	udc->resume_state = udc->usb_state;
@@ -2301,7 +2311,7 @@ static void resume_irq(struct arcotg_udc *udc)
 {
 	pr_debug("%s\n", __FUNCTION__);
 
-	UDC_LOG(CRIT, "uri", "%s: usb_slave_regs->usbintr:%x\n", __FUNCTION__,
+	UDC_LOG(INFO, "uri", "%s: usb_slave_regs->usbintr:%x\n", __FUNCTION__,
                         usb_slave_regs->usbintr);
 
 	udc->usb_state = udc->resume_state;
@@ -2340,7 +2350,7 @@ static inline void reset_queues(struct arcotg_udc *udc)
 	if (udc->driver)
 		udc->driver->disconnect(&udc->gadget);
 
-	if (atomic_read(&port_reset_counter) == 3) {
+	if (atomic_read(&port_reset_counter) == 3 && (!udc_full_sr)) {
 		UDC_LOG(CRIT, "hmf", "USB Host mode failed enumeration\n");
 		/* Host mode failed to enumerate, do full suspend/resume */
 		udc_full_suspend_resume(udc);
@@ -2384,7 +2394,7 @@ static void reset_irq(struct arcotg_udc *udc)
 	usb_slave_regs->endptflush = 0xFFFFFFFF;
 
 	if (le32_to_cpu(usb_slave_regs->portsc1) & PORTSCX_PORT_RESET) {
-		UDC_LOG(CRIT, "ubr", "UDC Bus Reset\n");
+		UDC_LOG(INFO, "ubr", "UDC Bus Reset\n");
 		/* Bus is reseting */
 		udc->bus_reset = TRUE;
 		udc->ep0_state = WAIT_FOR_SETUP;
@@ -2416,11 +2426,14 @@ static void reset_irq(struct arcotg_udc *udc)
 #ifdef CONFIG_MACH_LAB126
 static void delete_charger_timer(struct arcotg_udc *udc)
 {
-	del_timer_sync(&udc->charger_timer);
+	del_timer(&udc->charger_timer);
 	atomic_set(&udc->timer_scheduled, 0);
 	charger_misdetect_retry = 0;	// allow charger readings to continue
 
 	atomic_set(&arcotg_busy, 0);
+
+	/* charger timer has been deleted */
+	udc_charger_timer_deleted = 1;
 }
 #endif
 
@@ -2543,6 +2556,8 @@ int usb_gadget_register_driver(struct usb_gadget_driver *driver)
 
 	if (udc->driver)
 		return -EBUSY;
+
+	arcotg_reschedule_work(udc);
 
 	/* lock is needed but whether should use this lock or another */
 	spin_lock_irqsave(&udc->lock, flags);
@@ -3183,7 +3198,7 @@ static void fsl_udc_low_power_suspend(struct arcotg_udc *udc)
 	suspend_port();
 	mdelay(20);
 	suspend_ctrl();
-	mdelay(20); /* Let the controller settle down */
+	mdelay(20);
 	suspend_irq(udc);
 
 	/* Check if CPU is scaling */
@@ -3224,8 +3239,6 @@ static void reset_nxp_phy(void)
 	mdelay(3);
 }
 
-static int udc_resume(struct arcotg_udc *udc);
-
 static void reset_smsc_phy(void)
 {
 	mxc_set_gpio_dataout(MX31_PIN_GPIO3_0, 0);
@@ -3233,6 +3246,8 @@ static void reset_smsc_phy(void)
 	mxc_set_gpio_dataout(MX31_PIN_GPIO3_0, 1);
 	mdelay(3);
 }
+
+static int udc_resume(struct arcotg_udc *udc);
 
 static void fsl_udc_low_power_resume(struct arcotg_udc *udc)
 {
@@ -3266,7 +3281,7 @@ static void fsl_udc_low_power_resume(struct arcotg_udc *udc)
 	if (SMSC_ID == local_phy_ops->id)
 		reset_smsc_phy();
 
-	udc_resume(udc);
+	udc_resume(udc);	
 	resume_ctrl();
 	enable_irq(ARCOTG_IRQ);
 	resume_irq(udc);
@@ -3291,6 +3306,10 @@ static void udc_charger_timer_func(unsigned long arg)
 	u32 portsc = le32_to_cpu(usb_slave_regs->portsc1);
 	unsigned long flags;
 
+	/* Charger timer deleted and so no need to rerun it */
+	if (udc_charger_timer_deleted)
+		return;
+
 	if ((portsc & PORTSCX_LINE_STATUS_BITS) == PORTSCX_LINE_STATUS_UNDEF) {
 		LOG_DPDM(INFO, "cc2", "USB charger type 2 was previously misdetected as a host\n", (portsc & PORTSCX_LINE_STATUS_KSTATE) != 0, (portsc & PORTSCX_LINE_STATUS_JSTATE) != 0);
 		udc->conn_sts = USB_CONN_CHARGER;
@@ -3308,19 +3327,32 @@ static void udc_charger_timer_func(unsigned long arg)
 		spin_unlock_irqrestore(&udc->lock, flags);
 		mod_timer(&udc->charger_timer, jiffies + msecs_to_jiffies(1000));
 	} else {
+		/*
+		 * This code adds support for the following chargers:
+		 *
+		 * 1) iPhone charger
+		 * 2) Car charger
+		 * 3) Powered Hubs
+		 *
+		 * All the sources that can provide a VBUS work and we set the
+		 * current limit to 500mA. 
+		 *
+		 * For non-Powered HUBs, there is no VBUS and so we are OK.
+		 */
 		charger_misdetect_retry = 0;
-		LOG_DPDM(INFO, "uc", "USB connected to a non-configuring host 3rd party charger?\n", (portsc & PORTSCX_LINE_STATUS_KSTATE) != 0, (portsc & PORTSCX_LINE_STATUS_JSTATE) != 0);
 		atomic_set(&udc->timer_scheduled, 0);
 		udc->conn_sts = USB_CONN_CHARGER;
 		atomic_set(&arcotg_busy, 0);
-
-		/* Do 100mA charging */
-		charger_set_current_limit(100);
 
 		if (!udc_full_sr) {
 			udc_full_sr = 1;
 			/* All attempts to enumerate failed */
 			udc_full_suspend_resume(udc);
+		}
+		else {
+			printk(KERN_INFO "Detected 3rd party charger: 500mA current limit\n");
+			/* Do 500mA charging */
+			charger_set_current_limit(500);
 		}
 	}
 }
@@ -3439,6 +3471,9 @@ static void chgdisc_event(struct arcotg_udc *udc)
 	/* 30 second work is no longer scheduled */
 	udc->work_scheduled = 0;
 	atomic_set(&arcotg_busy, 0);
+
+	/* Charger detection timer flag cleared out */
+	udc_charger_timer_deleted = 0;
 }
 
 static int chg_event(void *param, int connected)

@@ -73,6 +73,10 @@ static void charger_queue_plug_event(int state);
 static void set_led(int led_state);
 #ifdef CONFIG_CPU_FREQ
 int charger_cpufreq_notifier(struct notifier_block *nb, unsigned long val, void *data);
+
+extern void disable_cpufreq(void);
+extern void enable_cpufreq(void);
+
 #endif
 
 static int host_charging = 0;
@@ -190,6 +194,7 @@ struct charger {
 	int			(*arcotg_callback)(void *arcotg_arg, int state);
 	void			*arcotg_arg;
 	int			arcotg_state;
+	int			lobat_condition;
 #ifdef CONFIG_CPU_FREQ
 	struct notifier_block	cpufreq_transition;
 #endif
@@ -229,6 +234,7 @@ static struct charger charger_globals = {
 	.arcotg_callback	= NULL,
 	.arcotg_arg		= NULL,
 	.arcotg_state		= 0,
+	.lobat_condition	= 0,
 };
 
 atomic_t charger_in_scaling = ATOMIC_INIT(0);
@@ -293,6 +299,8 @@ static void charger_disable(void)
 	cpufreq_unregister_notifier(&charger->cpufreq_transition,
 			CPUFREQ_TRANSITION_NOTIFIER);
 #endif
+	charger_started = 0;
+
 	/* Delete the charger timer */
 	del_timer_sync(&charger->timer);
 
@@ -310,7 +318,6 @@ static void charger_disable(void)
 	/* Charger state variables */
 	charger->current_led = LED_OFF;
 	charger->current_ichrg = 0;
-	charger_started = 0;
 }
 
 static void charger_enable(void)
@@ -854,6 +861,8 @@ static void post_low_battery_event(void)
 {
 	struct kobject *kobj = &charger->dev.dev.kobj;
 
+	charger->lobat_condition = 1;
+
 	if (kobject_uevent_env(kobj, KOBJ_CHANGE, envp_low)) {
 		log_chrg_err(CHRG_MSG_ERROR_POSTING_LOW_BATT_EVT);
 	} else {
@@ -864,6 +873,8 @@ static void post_low_battery_event(void)
 static void post_critical_battery_event(void)
 {
 	struct kobject *kobj = &charger->dev.dev.kobj;
+
+	charger->lobat_condition = 1;
 
 	if (kobject_uevent_env(kobj, KOBJ_CHANGE, envp_critical)) {
 		log_chrg_err(CHRG_MSG_ERROR_POSTING_CRIT_BATT_EVT);
@@ -1233,6 +1244,9 @@ static void charger_timer(unsigned long data)
 {
 	log_chrg_entry();
 
+	if (!charger_started)
+		return;
+
 	set_bit(OP_CHECK_CHARGER, &charger->operations);
 	queue_work(charger->charger_wq, &charger->charger_work);
 	mod_timer(&charger->timer, jiffies + (charger->timer_delay * HZ));
@@ -1255,6 +1269,13 @@ static int charger_batt_err_callback(void * arg, int error_flags)
  */
 static void charger_queue_plug_event(int state)
 {
+	if (state) {
+		disable_cpufreq();
+	}
+	else {
+		enable_cpufreq();
+	}
+
 	charger->arcotg_state = state;
 	if (state)
 		charger->vbus_present = 1;
@@ -1577,6 +1598,14 @@ store_charger_state (struct device *_dev, struct device_attribute *attr,
 
 static DEVICE_ATTR (charger_state, S_IRUGO|S_IWUSR, show_charger_state, store_charger_state);
 
+/* Returns the current state of lobat */
+static ssize_t
+show_lobat_condition(struct device *_dev, struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", charger->lobat_condition);
+}
+static DEVICE_ATTR (lobat_condition, S_IRUGO|S_IWUSR, show_lobat_condition, NULL);
+
 /* "temp_ok" sysfs attribute */
 
 static ssize_t
@@ -1658,6 +1687,7 @@ static int charger_suspend(struct platform_device *pdev, pm_message_t state)
 
 	log_chrg_entry_args("(state.event = %d)", state.event);
 
+	charger_started = 0;
 	del_timer_sync(&charger->timer);
 
 	/* Enable the appropriate low-battery interrupts for suspend mode,
@@ -1701,7 +1731,7 @@ static int charger_resume(struct platform_device *pdev)
 	charger->current_led = 1;
 
 	green_led_initialization();
-
+	charger_started = 1;
 	mod_timer(&charger->timer, jiffies + (charger->timer_delay * HZ));
 	
 	set_bit(OP_CHECK_CHARGER, &charger->operations);
@@ -1813,6 +1843,7 @@ static int __init charger_init(void)
 	retval = device_create_file(&charger->dev.dev, &dev_attr_vbatt);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_voltage);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_charger_state);
+	retval = device_create_file(&charger->dev.dev, &dev_attr_lobat_condition);
 
 	battery_register_callback(charger_batt_err_callback, NULL);
 
@@ -1893,6 +1924,7 @@ static void __exit charger_exit(void)
 	device_remove_file(&charger->dev.dev, &dev_attr_vbatt);
 	device_remove_file(&charger->dev.dev, &dev_attr_voltage);
 	device_remove_file(&charger->dev.dev, &dev_attr_charger_state);
+	device_remove_file(&charger->dev.dev, &dev_attr_lobat_condition);
 
 	platform_device_unregister(&charger->dev);
 	

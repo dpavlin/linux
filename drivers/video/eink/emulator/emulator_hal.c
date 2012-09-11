@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/emulator/emulator_hal.c
  *  -- eInk frame buffer device HAL emulator
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -29,7 +29,7 @@
 #define IS_LANDSCAPE()                          \
     (EINK_ORIENT_LANDSCAPE == emu_orientation)
 
-static struct fb_var_screeninfo emulator_var __INIT_DATA =
+static struct fb_var_screeninfo emulator_var =
 {
     .xres               = XRES_6,
     .yres               = YRES_6,
@@ -42,7 +42,7 @@ static struct fb_var_screeninfo emulator_var __INIT_DATA =
     .width              = -1,
 };
 
-static struct fb_fix_screeninfo emulator_fix __INIT_DATA =
+static struct fb_fix_screeninfo emulator_fix =
 {
     .id                 = EINKFB_NAME,
     .smem_len           = EMULATOR_SIZE,
@@ -196,7 +196,7 @@ static einkfb_hal_ops_t emulator_hal_ops =
     .hal_get_display_orientation = emulator_get_display_orientation
 };
 
-static __INIT_CODE int emulator_hal_init(void)
+static int emulator_hal_init(void)
 {
     return ( einkfb_hal_ops_init(&emulator_hal_ops) );
 }

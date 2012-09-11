@@ -11,6 +11,7 @@
 #ifndef _EINKFB_HAL_H
 #define _EINKFB_HAL_H
 
+#include <asm/arch/board_id.h>
 #include <asm/arch/boot_globals.h>
 #include <asm/uaccess.h>
 #include <linux/delay.h>
@@ -26,6 +27,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/notifier.h>
+#include <linux/platform_device.h>
 #include <linux/platform_lab126.h>
 #include <linux/poll.h>
 #include <linux/proc_fs.h>
@@ -36,14 +38,9 @@
 #include <linux/suspend.h>
 #include <linux/syscalls.h>
 #include <linux/timer.h>
+#include <linux/version.h>
 #include <linux/vmalloc.h>
-
-#include <asm/arch/board_id.h>
-#include <linux/platform_device.h>
 #include <llog.h>
-
-#define __INIT_DATA     __devinitdata
-#define __INIT_CODE     __devinit
 
 #define FB_DSHOW_PARAMS struct device *dev, struct device_attribute *attr, char *buf
 #define FB_DSTOR_PARAMS struct device *dev, struct device_attribute *attr, const char *buf, size_t count
@@ -113,7 +110,6 @@ static struct platform_driver d =                       \
 #include <asm/types.h>
 #include <linux/einkfb.h>
 
-#define __EXIT_CODE             __exit
 #define PRAGMAS                 0
 
 #define EINKFB_NAME             "eink_fb"
@@ -297,6 +293,8 @@ extern unsigned long einkfb_logging;
 #define EINKFB_FLASHING_ROM()   einkfb_get_flash_mode()
 #define EINKFB_NEEDS_RESET()    einkfb_set_reset(true)
 #define EINKFB_RESETTING()      einkfb_get_reset()
+
+#define EINKFB_SKIP_BUFS_EQ()   einkfb_get_skip_buffers_equal()
 
 #define STRETCH_HI_NYBBLE(n, b) einkfb_stretch_nybble(((0xF0 & n) >> 4), b)
 #define STRETCH_LO_NYBBLE(n, b) einkfb_stretch_nybble(((0x0F & n) >> 0), b)
@@ -598,6 +596,7 @@ extern orientation_t einkfb_get_display_orientation(void);
 
 // From einkfb_hal_proc.c
 //
+extern bool einkfb_get_skip_buffers_equal(void);
 extern bool einkfb_get_flash_mode(void);
 
 extern bool einkfb_get_reset(void);
@@ -671,6 +670,7 @@ extern unsigned int einkfb_events_poll(struct file *file, poll_table *wait);
 // From system.c
 //
 extern void eink_doze_enable(int enable);
+
 #define EINKFB_DOZE_DISABLE(p)  if (einkfb_power_level_on == (p)) eink_doze_enable(0)
 #define EINKFB_DOZE_ENABLE(p)   if (einkfb_power_level_on != (p)) eink_doze_enable(1)
 

@@ -25,6 +25,7 @@
 #define BPP_SIZE(r, b)          (((r)*(b))/8)
 #define BPP_MAX(b)              (1 << (b))
 
+#define U_IN_RANGE(n, m, M)     ((((n) == 0) && ((m) == 0)) || (((n) > (m)) && ((n) <= (M))))
 #define IN_RANGE(n, m, M)       (((n) >= (m)) && ((n) <= (M)))
 
 #define ORIENTATION(x, y)       (((y) > (x)) ? EINK_ORIENT_PORTRAIT : EINK_ORIENT_LANDSCAPE)
@@ -41,12 +42,12 @@ typedef struct raw_image_t raw_image_t;
 
 struct image_t
 {
-	int xres,		// image's visual width, in pixels
-		xlen,		// image's actual width, used for rowbyte & memory size calculations
-		yres,		// image's height
-		bpp;		// image's pixel (bit) depth
-		
-	u8	*start; 	// pointer to start of image
+    int xres,       // image's visual width, in pixels
+        xlen,       // image's actual width, used for rowbyte & memory size calculations
+        yres,       // image's height
+        bpp;        // image's pixel (bit) depth
+        
+    u8  *start;     // pointer to start of image
 };
 typedef struct image_t image_t;
 
@@ -86,16 +87,16 @@ enum splash_screen_type
     
     splash_screen_shim_picture = 18,          // Message: shim wants a picture displayed.
 
-	splash_screen_lowbatt,                    // Picture: Not composite, post-legacy ordering (Mario only).
-	splash_screen_reboot,                     // Picture: Composite (not used on Fiona).
-	
-	splash_screen_update_initial,             // Composite software-update screens. 
-	splash_screen_update_success,             //
-	splash_screen_update_failure,             //
-	splash_screen_update_failure_no_wait,     //
-	
-	splash_screen_repair_needed,              // More composite screens.
-	splash_screen_boot,                       // 
+    splash_screen_lowbatt,                    // Picture: Not composite, post-legacy ordering (Mario only).
+    splash_screen_reboot,                     // Picture: Composite (not used on Fiona).
+    
+    splash_screen_update_initial,             // Composite software-update screens. 
+    splash_screen_update_success,             //
+    splash_screen_update_failure,             //
+    splash_screen_update_failure_no_wait,     //
+    
+    splash_screen_repair_needed,              // More composite screens.
+    splash_screen_boot,                       // 
 
     splash_screen_invalid = -1
 };
@@ -104,7 +105,6 @@ typedef enum splash_screen_type splash_screen_type;
 // Alias some of the legacy enumerations for Mario.
 //
 #define splash_screen_usb_recovery_util ((splash_screen_type)8) // splash_screen_usb
-#define splash_screen_usb_framework     ((splash_screen_type)6) // splash_screen_usb_internal
 
 struct power_override_t
 {
@@ -117,22 +117,16 @@ enum fx_type
 {
     // Deprecated from the HAL, but still supported by the Shim.
     //
-    //fx_stipple_posterize_dark = 5,        // Deprecated.
-    //fx_stipple_posterize_lite = 6,        // Deprecated.
-    
-    //fx_stipple_lighten_dark = 7,          // Deprecated.
-    //fx_stipple_lighten_lite = 8,          // Deprecated.
-    
     fx_mask = 11,                           // Only for use with update_area_t's non-NULL buffer which_fx.
     fx_buf_is_mask = 14,                    // Same as fx_mask, but doesn't require a doubling (i.e., the buffer & mask are the same).
-    
-    fx_flash = 20,                          // Only for use with update_area_t (for faking a flashing update).
-    fx_invert = 21,                         // Only for use with update_area_t (only inverts output data).
     
     fx_none = -1,                           // No legacy-FX to apply.
     
     // Screen-update FX, supported by HAL.
     //
+    fx_flash = 20,                          // Only for use with update_area_t (for faking a flashing update).
+    fx_invert = 21,                         // Only for use with update_area_t (only inverts output data).
+    
     fx_update_partial = 0,                  // eInk GU/PU/MU-style (non-flashing) update.
     fx_update_full = 1                      // eInk GC-style (slower, flashing) update.
 };
@@ -141,7 +135,7 @@ typedef enum fx_type fx_type;
 // The only valid legacy-FX types for area updates are fx_mask and fx_buf_is_mask.
 //
 #define UPDATE_AREA_FX(f)                   \
-    ((fx_mask == (f))           ||          \
+    ((fx_mask == (f))                   ||  \
      (fx_buf_is_mask == (f)))
 
 // The default ("none") for area updates is partial (non-flashing); full (flashing) updates
@@ -320,6 +314,8 @@ typedef enum sleep_behavior_t sleep_behavior_t;
 #define ORIENT_LANDSCAPE_UPSIDE_DOWN        orientation_landscape_upside_down
 #define ORIENT_ASIS                         (-1)
 
+#define EINK_USID_FILE                      "/var/local/eink/usid"
+
 #define EINK_CLEAR_SCREEN                   0
 #define EINK_CLEAR_BUFFER                   1
 
@@ -335,10 +331,10 @@ typedef enum sleep_behavior_t sleep_behavior_t;
 
 // Implemented in the eInk HAL.
 //
-#define FBIO_EINK_UPDATE_DISPLAY            _IO(FBIO_MAGIC_NUMBER, 0xdb) // 0x46db (fx_type: fx_update_full || fx_update_partial)
+#define FBIO_EINK_UPDATE_DISPLAY            _IO(FBIO_MAGIC_NUMBER, 0xdb) // 0x46db (fx_type)
 #define FBIO_EINK_UPDATE_DISPLAY_AREA       _IO(FBIO_MAGIC_NUMBER, 0xdd) // 0x46dd (update_area_t *)
 
-#define FBIO_EINK_RESTORE_DISPLAY           _IO(FBIO_MAGIC_NUMBER, 0xef) // 0x46ef (fx_type: fx_update_full || fx_update_partial)
+#define FBIO_EINK_RESTORE_DISPLAY           _IO(FBIO_MAGIC_NUMBER, 0xef) // 0x46ef (fx_type)
 
 #define FBIO_EINK_SET_REBOOT_BEHAVIOR       _IO(FBIO_MAGIC_NUMBER, 0xe9) // 0x46e9 (reboot_behavior_t)
 #define FBIO_EINK_GET_REBOOT_BEHAVIOR       _IO(FBIO_MAGIC_NUMBER, 0xed) // 0x46ed (reboot_behavior_t *)
@@ -388,9 +384,10 @@ typedef enum sleep_behavior_t sleep_behavior_t;
 #define PROC_EINK_RESTORE_DISPLAY          15   // FBIO_EINK_RESTORE_DISPLAY
 #define PROC_EINK_SET_SLEEP_BEHAVIOR       16   // FBIO_EINK_SET_SLEEP_BEHAVIOR
 #define PROC_EINK_PROGRESSBAR_BACKGROUND   17   // FBIO_EINK_PROGRESSBAR_BACKGROUND
+#define PROC_EINK_UPDATE_DISPLAY_WHICH     18   // FBIO_EINK_UPDATE_DISPLAY
 
-//#define PROC_EINK_FAKE_PNLCD_TEST       100   // Programmatically drive FBIO_EINK_FAKE_PNLCD (not implemented)
-#define PROC_EINK_GRAYSCALE_TEST          101   // Fills display with white-to-black ramp at current bit depth
+//#define PROC_EINK_FAKE_PNLCD_TEST       100   // Programmatically drive FBIO_EINK_FAKE_PNLCD (not implemented).
+#define PROC_EINK_GRAYSCALE_TEST          101   // Fills display with white-to-black ramp at current bit depth.
 
 // Inter-module/inter-driver eink ioctl access.
 //

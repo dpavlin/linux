@@ -32,6 +32,10 @@ static struct clk *cpu_clk;
  */
 #undef MX3_CPU_FREQ_DEBUG
 
+static int cpufreq_suspended = 0;
+
+#define MAX_CPU_FREQUENCY	532000000	/* MAX speed of the CPU */
+
 /*
  * Freescale defined operating points
  */
@@ -75,6 +79,57 @@ static int calc_frequency(int target, unsigned int relation)
 	return 532000;
 }
 
+static void set_cpu_freq(int freq)
+{
+	unsigned long flags;
+
+#ifdef MX31_CPU_FREQ_DEBUG
+	printk ("ARM frequency: %dHz\n", (int)clk_get_rate(cpu_clk));
+#endif
+
+	local_irq_save(flags);
+	clk_set_rate(cpu_clk, freq);
+	local_irq_restore(flags);
+
+#ifdef MX31_CPU_FREQ_DEBUG
+	printk ("ARM frequency after change: %dHz\n", (int)clk_get_rate(cpu_clk));
+#endif
+
+	clk_put(cpu_clk);
+}
+
+/*!
+ * Disable CPUFReq 
+ */
+void disable_cpufreq(void)
+{
+	struct cpufreq_freqs freqs;
+	int org_freq = clk_get_rate(cpu_clk);
+
+	freqs.old = org_freq / 1000;
+	freqs.new = MAX_CPU_FREQUENCY / 1000;
+	freqs.cpu = 0;
+	freqs.flags = 0;
+	
+	cpufreq_suspended = 1;
+
+	if (clk_get_rate(cpu_clk) != MAX_CPU_FREQUENCY) {
+		set_cpu_freq(MAX_CPU_FREQUENCY);
+		cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
+		cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
+	}
+}
+EXPORT_SYMBOL(disable_cpufreq);
+
+/*!
+ * Re-enable CPUFreq
+ */
+void enable_cpufreq(void)
+{
+	cpufreq_suspended = 0;
+}
+EXPORT_SYMBOL(enable_cpufreq);
+
 /* 
  * Set the destination CPU frequency target
  */
@@ -85,6 +140,9 @@ static int mx3_set_target(struct cpufreq_policy *policy,
 	struct cpufreq_freqs freqs;
 	long freq;
 	unsigned long flags;
+
+	if (cpufreq_suspended)
+		return 0;
 
 	if (target_freq < policy->cpuinfo.min_freq)
 		target_freq = policy->cpuinfo.min_freq;

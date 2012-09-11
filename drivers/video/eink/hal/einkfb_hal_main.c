@@ -59,9 +59,9 @@ static sleep_behavior_t  einkfb_sleep_behavior  = sleep_behavior_allow_sleep;
 einkfb_hal_ops_t hal_ops			= INIT_EINKFB_OPS_T();
 
 #ifndef MODULE
-static int  einkfb_enable __INIT_DATA 		= 0;
+static int  einkfb_enable	 		= 0;
 #else
-static int  einkfb_enable __INIT_DATA 		= 1;
+static int  einkfb_enable 	 		= 1;
 static bool einkfb_hal_module			= false;
 
 module_param_named(einkfb_hw_shutdown_mode, einkfb_hw_shutdown_mode, int, S_IRUGO);
@@ -226,7 +226,7 @@ static struct fb_cmap einkfb_8bpp_cmap		=
 };
 
 #ifndef MODULE
-int __INIT_CODE einkfb_setup(char *options)
+int einkfb_setup(char *options)
 {
 	char *this_opt;
 

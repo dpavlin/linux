@@ -901,11 +901,7 @@ config_desc = {
 	.bConfigurationValue =	CONFIG_VALUE,
 	.iConfiguration =	STRING_CONFIG,
 	.bmAttributes =		USB_CONFIG_ATT_ONE | USB_CONFIG_ATT_SELFPOWER,
-#ifdef CONFIG_MACH_LAB126
-	.bMaxPower =		(500/2),
-#else
 	.bMaxPower =		1,	// self-powered
-#endif
 };
 
 static struct usb_otg_descriptor
@@ -1468,12 +1464,18 @@ get_config:
 			value = DELAYED_STATUS;
 
 #ifdef CONFIG_MACH_LAB126
-			if (w_value)
-				usb_gadget_vbus_draw(fsg->gadget, 500);
-#if 0 // FIXME
-			else
-				usb_gadget_vbus_draw(fsg->gadget, 100);
-#endif
+			/*
+			 * Low powered HUBs cannot provide more than 100mA
+			 * and so we need to first figure out the speed
+			 * of the port. If this is full speed, then
+			 * restrict current limit to 100mA.
+			 */
+			if (w_value) {
+				if (fsg->gadget->speed == USB_SPEED_HIGH)
+					usb_gadget_vbus_draw(fsg->gadget, 500);
+				else
+					usb_gadget_vbus_draw(fsg->gadget, 100);
+			}
 #endif
 		}
 		break;

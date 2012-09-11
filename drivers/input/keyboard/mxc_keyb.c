@@ -1084,6 +1084,9 @@ ssize_t keypad_proc_write( struct file *filp, const char __user *buff,
       }
    }
    else if ( !strncmp(command, "keycnt", 6) ) {
+      // Ignore
+   }
+   else if ( !strncmp(command, "dokeycnt", 8) ) {
       // Requested the key-pressed count for selected keycodes
       LLOG_INFO("keycnt_home", "HOME_keycount=%d", "\n", keycode_count[KEY_KPSLASH]);
       LLOG_INFO("keycnt_menu", "MENU_keycount=%d", "\n", keycode_count[KEY_MENU]);

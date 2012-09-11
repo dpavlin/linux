@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_hal.c
  *  -- eInk frame buffer device HAL broadsheet
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2009 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -59,7 +59,7 @@
 
 #define BROADSHEET_BTYE_ALIGNMENT       2 // BPP_BYTE_ALIGN(2) -> 4 for 32-bit alignment (4 * 8)
 
-static struct fb_var_screeninfo broadsheet_var __INIT_DATA =
+static struct fb_var_screeninfo broadsheet_var =
 {
     .xres               = XRES,
     .yres               = YRES,
@@ -72,7 +72,7 @@ static struct fb_var_screeninfo broadsheet_var __INIT_DATA =
     .width              = -1,
 };
 
-static struct fb_fix_screeninfo broadsheet_fix __INIT_DATA =
+static struct fb_fix_screeninfo broadsheet_fix =
 {
     .id                 = EINKFB_NAME,
     .smem_len           = BROADSHEET_SIZE,
@@ -310,7 +310,7 @@ static int read_hardwarefb_count(unsigned long addr, unsigned char *data, int co
 
 static int read_hardwarefb(char *page, unsigned long off, int count)
 {
-	return ( einkfb_read_which(page, off, count, read_hardwarefb_count, scratchfb_size) );
+    return ( einkfb_read_which(page, off, count, read_hardwarefb_count, scratchfb_size) );
 }
 
 static int hardwarefb_read(char *page, char **start, off_t off, int count, int *eof, void *data)
@@ -325,8 +325,8 @@ static int hardwarefb_read(char *page, char **start, off_t off, int count, int *
             EINKFB_LOCK_EXIT();
         }
     }
-	
-	return ( EINKFB_PROC_SYSFS_RW_NO_LOCK(page, start, off, count, eof, scratchfb_size, read_hardwarefb) );
+    
+    return ( EINKFB_PROC_SYSFS_RW_NO_LOCK(page, start, off, count, eof, scratchfb_size, read_hardwarefb) );
 }
 
 // /proc/eink_fb/eink_rom (read/write)
@@ -425,36 +425,36 @@ static int eink_ram_write(struct file *file, const char __user *buf, unsigned lo
 //
 static int write_eink_reg(char *buf, unsigned long count, int unused)
 {
-	int result = count;
-	u32 ra, wd;
-	
-	switch ( sscanf(buf, "%x %x", &ra, &wd) )
-	{
-	    // Read:  REG[ra]
-	    //
-	    case 1:
-	        EINKFB_PRINT("0x%04X = 0x%04X\n", ra, BS_CMD_RD_REG((u16)ra));
-	    break;
-	    
-	    // Write: REG[ra] = wd
-	    //
-	    case 2:
-	        BS_CMD_WR_REG((u16)ra, (u16)wd);
-	    break;
-	    
-	    // Huh?
-	    //
-	    default:
-	        result = -EINVAL;
-	    break;
-	}
-	
-	return ( result );
+    int result = count;
+    u32 ra, wd;
+    
+    switch ( sscanf(buf, "%x %x", &ra, &wd) )
+    {
+        // Read:  REG[ra]
+        //
+        case 1:
+            EINKFB_PRINT("0x%04X = 0x%04X\n", ra, BS_CMD_RD_REG((u16)ra));
+        break;
+        
+        // Write: REG[ra] = wd
+        //
+        case 2:
+            BS_CMD_WR_REG((u16)ra, (u16)wd);
+        break;
+        
+        // Huh?
+        //
+        default:
+            result = -EINVAL;
+        break;
+    }
+    
+    return ( result );
 }
 
 static int eink_reg_write(struct file *file, const char __user *buf, unsigned long count, void *data)
 {
-	return ( EINKFB_PROC_SYSFS_RW_LOCK((char *)buf, NULL, count, 0, NULL, 0, write_eink_reg) );
+    return ( EINKFB_PROC_SYSFS_RW_LOCK((char *)buf, NULL, count, 0, NULL, 0, write_eink_reg) );
 }
 
 #if PRAGMAS
@@ -467,158 +467,140 @@ static int eink_reg_write(struct file *file, const char __user *buf, unsigned lo
 //
 static ssize_t show_eink_rom_select(FB_DSHOW_PARAMS)
 {
-	return ( sprintf(buf, "%d\n", broadsheet_get_flash_select()) );
+    return ( sprintf(buf, "%d\n", broadsheet_get_flash_select()) );
 }
 
 static ssize_t store_eink_rom_select(FB_DSTOR_PARAMS)
 {
-	int result = -EINVAL, select;
-	
-	if ( sscanf(buf, "%d", &select) )
-	{
+    int result = -EINVAL, select;
+    
+    if ( sscanf(buf, "%d", &select) )
+    {
         broadsheet_set_flash_select((bs_flash_select)select);
-		result = count;
-	}
-	
-	return ( result );
+        result = count;
+    }
+    
+    return ( result );
 }
 
 // /sys/devices/platform/eink_fb.0/eink_ram_select (read/write)
 //
 static ssize_t show_eink_ram_select(FB_DSHOW_PARAMS)
 {
-	return ( sprintf(buf, "%d\n", broadsheet_get_ram_select()) );
+    return ( sprintf(buf, "%d\n", broadsheet_get_ram_select()) );
 }
 
 static ssize_t store_eink_ram_select(FB_DSTOR_PARAMS)
 {
-	int result = -EINVAL, select;
-	
-	if ( sscanf(buf, "%d", &select) )
-	{
-		broadsheet_set_ram_select(select);
-		result = count;
-	}
-	
-	return ( result );
+    int result = -EINVAL, select;
+    
+    if ( sscanf(buf, "%d", &select) )
+    {
+        broadsheet_set_ram_select(select);
+        result = count;
+    }
+    
+    return ( result );
 }
 
 // /sys/devices/platform/eink_fb.0/ignore_hw_ready (read/write)
 //
 static ssize_t show_ignore_hw_ready(FB_DSHOW_PARAMS)
 {
-	return ( sprintf(buf, "%d\n", ignore_hw_ready) );
+    return ( sprintf(buf, "%d\n", ignore_hw_ready) );
 }
 
 static ssize_t store_ignore_hw_ready(FB_DSTOR_PARAMS)
 {
-	int result = -EINVAL, ignore_ready;
-	
-	if ( sscanf(buf, "%d", &ignore_ready) )
-	{
-		ignore_hw_ready = ignore_ready ? true : false;
-		result = count;
-	}
-	
-	return ( result );
+    int result = -EINVAL, ignore_ready;
+    
+    if ( sscanf(buf, "%d", &ignore_ready) )
+    {
+        ignore_hw_ready = ignore_ready ? true : false;
+        result = count;
+    }
+    
+    return ( result );
 }
 
 // /sys/devices/platform/eink_fb.0/force_hw_not_ready (read/write)
 //
 static ssize_t show_force_hw_not_ready(FB_DSHOW_PARAMS)
 {
-	return ( sprintf(buf, "%d\n", force_hw_not_ready) );
+    return ( sprintf(buf, "%d\n", force_hw_not_ready) );
 }
 
 static ssize_t store_force_hw_not_ready(FB_DSTOR_PARAMS)
 {
-	int result = -EINVAL, force_not_ready;
-	
-	if ( sscanf(buf, "%d", &force_not_ready) )
-	{
-		force_hw_not_ready = force_not_ready ? true : false;
-		result = count;
-	}
-	
-	return ( result );
+    int result = -EINVAL, force_not_ready;
+    
+    if ( sscanf(buf, "%d", &force_not_ready) )
+    {
+        force_hw_not_ready = force_not_ready ? true : false;
+        result = count;
+    }
+    
+    return ( result );
 }
 
 // /sys/devices/platform/eink_fb.0/override_upd_mode (read/write)
 //
 static ssize_t show_override_upd_mode(FB_DSHOW_PARAMS)
 {
-	return ( sprintf(buf, "%d\n", override_upd_mode) );
+    return ( sprintf(buf, "%d\n", override_upd_mode) );
 }
 
 static ssize_t store_override_upd_mode(FB_DSTOR_PARAMS)
 {
-	int result = -EINVAL, upd_mode;
-	
-	if ( sscanf(buf, "%d", &upd_mode) )
-	{
-		switch ( upd_mode )
-		{
-		    // Only override with valid upd_modes.
-		    //
-		    case BS_UPD_MODE_MU:
-		    case BS_UPD_MODE_GU:
-		    case BS_UPD_MODE_GC:
-		    case BS_UPD_MODE_PU:
-		        override_upd_mode = upd_mode;
-		    break;
-		    
-		    // Default to not overriding if the value
-		    // is invalid.
-		    //
-		    default:
-		        override_upd_mode = BS_UPD_MODE_INIT;
-		    break;
-		}
-
-		result = count;
-	}
-	
-	return ( result );
+    int result = -EINVAL, upd_mode;
+    
+    if ( sscanf(buf, "%d", &upd_mode) )
+    {
+        broadsheet_set_override_upd_mode(upd_mode);
+        result = count;
+    }
+    
+    return ( result );
 }
 
 // /sys/devices/platform/eink_fb.0/promote_flashing_updates (read/write)
 //
 static ssize_t show_promote_flashing_updates(FB_DSHOW_PARAMS)
 {
-	return ( sprintf(buf, "%d\n", promote_flashing_updates) );
+    return ( sprintf(buf, "%d\n", promote_flashing_updates) );
 }
 
 static ssize_t store_promote_flashing_updates(FB_DSTOR_PARAMS)
 {
-	int result = -EINVAL, promote = false;
-	
-	if ( sscanf(buf, "%d", &promote) )
-	{
-		promote_flashing_updates = promote ? true : false;
-		result = count;
-	}
-	
-	return ( result );
+    int result = -EINVAL, promote = false;
+    
+    if ( sscanf(buf, "%d", &promote) )
+    {
+        promote_flashing_updates = promote ? true : false;
+        result = count;
+    }
+    
+    return ( result );
 }
 
 // /sys/devices/platform/eink_fb.0/preflight_failure (read-only)
 //
 static ssize_t show_preflight_failure(FB_DSHOW_PARAMS)
 {
-	return ( sprintf(buf, "%d\n", (int)bs_get_preflight_failure()) );
+    return ( sprintf(buf, "%d\n", (int)bs_get_preflight_failure()) );
 }
 
 // /sys/devices/platform/eink_fb.0/image_timings (read-only)
 //
 static ssize_t show_image_timings(FB_DSHOW_PARAMS)
 {
-	int i, len, num_timings;
-	unsigned long *timings = bs_get_img_timings(&num_timings);
-	
-	for ( i = 0, len = 0; i < num_timings; i++ )
-	    len += sprintf(&buf[len], "%ld%s", timings[i], (i == (num_timings - 1)) ? "" : " " );
-	    
-	return ( len );
+    int i, len, num_timings;
+    unsigned long *timings = bs_get_img_timings(&num_timings);
+    
+    for ( i = 0, len = 0; i < num_timings; i++ )
+        len += sprintf(&buf[len], "%ld%s", timings[i], (i == (num_timings - 1)) ? "" : " " );
+        
+    return ( len );
 }
 
 static DEVICE_ATTR(eink_rom_select,          DEVICE_MODE_RW, show_eink_rom_select,          store_eink_rom_select);
@@ -723,12 +705,12 @@ static void broadsheet_watchdog_timer_function(unsigned long unused)
 
 static void broadsheet_start_watchdog_timer(void)
 {
-	init_timer(&broadsheet_watchdog_timer);
-	
-	broadsheet_watchdog_timer.function = broadsheet_watchdog_timer_function;
-	broadsheet_watchdog_timer.data = 0;
+    init_timer(&broadsheet_watchdog_timer);
+    
+    broadsheet_watchdog_timer.function = broadsheet_watchdog_timer_function;
+    broadsheet_watchdog_timer.data = 0;
 
-	broadsheet_watchdog_timer_active  = true;
+    broadsheet_watchdog_timer_active  = true;
     broadsheet_watchdog_timer_primed  = false;
     
     broadsheet_start_watchdog_thread();
@@ -736,14 +718,14 @@ static void broadsheet_start_watchdog_timer(void)
 
 static void broadsheet_stop_watchdog_timer(void)
 {
-	if ( broadsheet_watchdog_timer_active )
-	{
-		broadsheet_watchdog_timer_active  = false;
-		broadsheet_watchdog_timer_primed  = false;
+    if ( broadsheet_watchdog_timer_active )
+    {
+        broadsheet_watchdog_timer_active  = false;
+        broadsheet_watchdog_timer_primed  = false;
 
-		broadsheet_stop_watchdog_thread();
-		del_timer_sync(&broadsheet_watchdog_timer);
-	}
+        broadsheet_stop_watchdog_thread();
+        del_timer_sync(&broadsheet_watchdog_timer);
+    }
 }
 
 #if PRAGMAS
@@ -858,6 +840,28 @@ bool broadsheet_get_upside_down(void)
     return ( bs_upside_down );
 }
 
+void broadsheet_set_override_upd_mode(int upd_mode)
+{
+    switch ( upd_mode )
+    {
+        // Only override with valid upd_modes.
+        //
+        case BS_UPD_MODE_MU:
+        case BS_UPD_MODE_GU:
+        case BS_UPD_MODE_GC:
+        case BS_UPD_MODE_PU:
+            override_upd_mode = upd_mode;
+        break;
+        
+        // Default to not overriding if the value
+        // is invalid.
+        //
+        default:
+            override_upd_mode = BS_UPD_MODE_INIT;
+        break;
+    }
+}
+
 int broadsheet_get_override_upd_mode(void)
 {
     return ( override_upd_mode );
@@ -897,33 +901,33 @@ int broadsheet_get_recent_commands(char *page, int max_commands)
 
 void broadsheet_prime_watchdog_timer(bool delay_timer)
 {
-	if ( broadsheet_watchdog_timer_active )
-	{
-		unsigned long timer_delay;
-		
-		// If Broadsheet isn't still in its ready state, ensure
-		// that we don't expire the timer.
-		//
-		if ( !BS_STILL_READY() )
-		    delay_timer = true;
-		
-		// If requested, delay the timer.
-		//
-		if ( delay_timer )
-		{
-		    timer_delay = BROADSHEET_WATCHDOG_TIMER_DELAY;
-		    broadsheet_watchdog_timer_primed = true;
-		}
-		else
-		{
-		    // Otherwise, expire the timer immediately.
-		    //
-		    timer_delay = MIN_SCHEDULE_TIMEOUT;
-		    broadsheet_watchdog_timer_primed = false;
-		}
+    if ( broadsheet_watchdog_timer_active )
+    {
+        unsigned long timer_delay;
+        
+        // If Broadsheet isn't still in its ready state, ensure
+        // that we don't expire the timer.
+        //
+        if ( !BS_STILL_READY() )
+            delay_timer = true;
+        
+        // If requested, delay the timer.
+        //
+        if ( delay_timer )
+        {
+            timer_delay = BROADSHEET_WATCHDOG_TIMER_DELAY;
+            broadsheet_watchdog_timer_primed = true;
+        }
+        else
+        {
+            // Otherwise, expire the timer immediately.
+            //
+            timer_delay = MIN_SCHEDULE_TIMEOUT;
+            broadsheet_watchdog_timer_primed = false;
+        }
 
         mod_timer(&broadsheet_watchdog_timer, TIMER_EXPIRES_JIFS(timer_delay));
-	}
+    }
 }
 
 #if PRAGMAS
@@ -1319,7 +1323,7 @@ static einkfb_hal_ops_t broadsheet_hal_ops =
     .hal_needs_dma_buffer        = broadsheet_needs_dma
 };
 
-static __INIT_CODE int broadsheet_init(void)
+static int broadsheet_init(void)
 {
     // Preflight the Broadsheet controller.  Note that, if any of the
     // the preflight checks fail, the preflighting process will

@@ -132,6 +132,19 @@ atomic_t mxc_mmc_dma_starting = ATOMIC_INIT(1);
  */
 #define NR_SG   1
 
+/*!
+ * Reset the device on encountering a disk error
+ */
+static void mxc_mmc_reset_device(struct work_struct *work)
+{
+	pmic_write_reg(REG_MEMORY_A, (0 << 3), (1 << 3));
+	pmic_write_reg(REG_MEMORY_A, (1 << 3), (1 << 3));
+
+	/* Assert SRS signal */
+	mxc_wd_reset();
+}
+DECLARE_WORK(mxc_mmc_reset_work, mxc_mmc_reset_device);
+
 #ifdef CONFIG_MMC_DEBUG
 static void dump_cmd(struct mmc_command *cmd)
 {
@@ -788,11 +801,13 @@ static void mxcmci_cmd_done(struct work_struct *work)
 		if (status & STATUS_TIME_OUT_READ) {
 			pr_debug("%s: Read time out occurred\n", DRIVER_NAME);
 			data->error = -ETIMEDOUT;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_TIME_OUT_READ,
 				     host->base + MMC_STATUS);
 		} else if (status & STATUS_READ_CRC_ERR) {
 			pr_debug("%s: Read CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_READ_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -826,6 +841,7 @@ static void mxcmci_cmd_done(struct work_struct *work)
 		if (status & STATUS_WRITE_CRC_ERR) {
 			pr_debug("%s: Write CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_WRITE_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -964,11 +980,13 @@ static void mxcmci_cmd_done_notq(struct mxcmci_host *host)
 		if (status & STATUS_TIME_OUT_READ) {
 			pr_debug("%s: Read time out occurred\n", DRIVER_NAME);
 			data->error = -ETIMEDOUT;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_TIME_OUT_READ,
 				     host->base + MMC_STATUS);
 		} else if (status & STATUS_READ_CRC_ERR) {
 			pr_debug("%s: Read CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_READ_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -1002,6 +1020,7 @@ static void mxcmci_cmd_done_notq(struct mxcmci_host *host)
 		if (status & STATUS_WRITE_CRC_ERR) {
 			pr_debug("%s: Write CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_WRITE_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -1162,10 +1181,12 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 				pr_debug("%s: Read time out occurred\n",
 					 DRIVER_NAME);
 				data->error = -ETIMEDOUT;
+				schedule_work(&mxc_mmc_reset_work);
 			} else if (status & STATUS_READ_CRC_ERR) {
 				pr_debug("%s: Read CRC error occurred\n",
 					 DRIVER_NAME);
 				data->error = -EILSEQ;
+				schedule_work(&mxc_mmc_reset_work);
 			}
 			__raw_writel(STATUS_READ_OP_DONE,
 				     host->base + MMC_STATUS);
@@ -1177,6 +1198,7 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 				pr_debug("%s: Write CRC error occurred\n",
 					 DRIVER_NAME);
 				data->error = -EILSEQ;
+				schedule_work(&mxc_mmc_reset_work);
 			}
 		}
 		mxcmci_data_done(host, status);
@@ -1702,6 +1724,7 @@ static int mxcmci_suspend(struct platform_device *pdev, pm_message_t state)
 		ret = mmc_suspend_host(mmc, state);
 	}
 	clk_disable(host->clk);
+	gpio_sdhc_inactive(host->id);
 
 	return ret;
 }
@@ -1730,6 +1753,7 @@ static int mxcmci_resume(struct platform_device *pdev)
 	if (!host->mxc_mmc_suspend_flag) {
 		return 0;
 	}
+	gpio_sdhc_active(host->id);
 	clk_enable(host->clk);
 
 	if (mmc) {
@@ -1744,9 +1768,7 @@ static int mxcmci_resume(struct platform_device *pdev)
 		pmic_power_regulator_set_lp_mode(REGU_VMMC2, LOW_POWER_EN);
 		pmic_power_regulator_off(REGU_VMMC2);
 		clk_disable(host->clk);
-		gpio_sdhc_inactive(host->id);
 	}
-
 	return ret;
 }
 #else

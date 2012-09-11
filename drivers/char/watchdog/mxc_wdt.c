@@ -73,7 +73,7 @@
 #define WDOG_SEC_TO_COUNT(s)  (((s * 2) + 1) << 8)
 #define WDOG_COUNT_TO_SEC(c)  (((c >> 8) - 1) / 2)
 
-#define WATCHDOG_PING_THRESHOLD	10	/* 10 second refresh rate */
+#define WATCHDOG_PING_THRESHOLD	10000	/* 10 second refresh rate */
 static u32 wdt_base_reg;
 static int mxc_wdt_users;
 static struct clk *mxc_wdt_clk;
@@ -111,7 +111,7 @@ static void mxc_wdt_ping(u32 base)
 static void do_watchdog_timer(unsigned long unused)
 {
 	mxc_wdt_ping(wdt_base_reg);
-	mod_timer(&wdt_timer, jiffies + WATCHDOG_PING_THRESHOLD*HZ);
+	mod_timer(&wdt_timer, jiffies + msecs_to_jiffies(WATCHDOG_PING_THRESHOLD));
 }
 
 static void mxc_wdt_config(u32 base)
@@ -343,8 +343,8 @@ static int __init mxc_wdt_probe(struct platform_device *pdev)
 
 	init_timer(&wdt_timer);	
 	wdt_timer.function = do_watchdog_timer;
-	mod_timer(&wdt_timer, jiffies + WATCHDOG_PING_THRESHOLD*HZ);
-	pr_info("MXC Watchdog: Started %d second watchdog refresh\n", WATCHDOG_PING_THRESHOLD);
+	mod_timer(&wdt_timer, jiffies + msecs_to_jiffies(WATCHDOG_PING_THRESHOLD));
+	pr_info("MXC Watchdog: Started %d millisecond watchdog refresh\n", WATCHDOG_PING_THRESHOLD);
 
 	ret = device_create_file(&pdev->dev, &dev_attr_mxc_wdt_timeout);
 	return 0;
@@ -389,7 +389,7 @@ static int mxc_wdt_suspend(struct platform_device *pdev, pm_message_t state)
 
 static int mxc_wdt_resume(struct platform_device *pdev)
 {
-	mod_timer(&wdt_timer, jiffies + WATCHDOG_PING_THRESHOLD*HZ);
+	mod_timer(&wdt_timer, jiffies + msecs_to_jiffies(WATCHDOG_PING_THRESHOLD));
 	return 0;
 }
 

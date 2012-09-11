@@ -2,28 +2,26 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_mxc.c --
  *  eInk frame buffer device HAL broadsheet hw
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2009 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
  *  more details.
  */
 
-#undef  USE_BS_IRQ
-
-#include <asm/arch-mxc/mx31_pins.h>
-#include <asm/arch/board_id.h>
-#include <asm/arch/gpio.h>
 #include <asm/arch/ipu.h>
 
+#undef USE_BS_IRQ
 #ifdef USE_BS_IRQ
 #include <asm/irq.h>
 #include <asm/arch/irqs.h>
 #include <asm/mach/irq.h>
 #endif
 
-extern void slcd_gpio_config(void); // From mx31ads_gpio.c/mario_gpio.c
-extern void gpio_lcd_active(void);  // Ditto.
+extern int  broadsheet_gpio_config(irq_handler_t broadsheet_irq_handler, char *broadsheet_irq_handler_name);
+extern void broadsheet_gpio_disable(int disable_bs_irq);
+extern int  broadsheet_ready(void);
+extern void broadsheet_reset(void);
 
 #include "../hal/einkfb_hal.h"
 #include "broadsheet.h"
@@ -32,43 +30,29 @@ extern void gpio_lcd_active(void);  // Ditto.
     #pragma mark Definitions/Globals
 #endif
 
-#ifdef CONFIG_MACH_MX31ADS
-#include <asm/arch-mxc/board-mx31ads.h>
-uint16_t pin_addr;  // Needed for __raw_writew calls
-#    define BROADSHEET_HIRQ_LINE      MX31_PIN_GPIO3_0
-#    define BROADSHEET_HRDY_LINE      MX31_PIN_GPIO3_1
-#    define BROADSHEET_RST_LINE       PBC_BCTRL2_LDC_RST0
-#    define BROADSHEET_RESET_VAL      PBC_BASE_ADDRESS + PBC_BCTRL2_CLEAR
-#    define BROADSHEET_NON_RESET_VAL  PBC_BASE_ADDRESS + PBC_BCTRL2_SET
-#    define WR_GPIO_LINE(addr, val)   pin_addr=addr; __raw_writew(pin_addr, val);
-#elif  CONFIG_MACH_MARIO_MX
-#include <asm/arch-mxc/board-mario.h>
-#    define BROADSHEET_HIRQ_LINE      MX31_PIN_SD_D_CLK
-#    define BROADSHEET_HRDY_LINE      MX31_PIN_SD_D_I
-#    define BROADSHEET_RST_LINE       MX31_PIN_SD_D_IO
-#    define BROADSHEET_RESET_VAL      0
-#    define BROADSHEET_NON_RESET_VAL  1
-#    define WR_GPIO_LINE(addr, val)   mxc_set_gpio_dataout(addr, val);
-#endif
-#define BROADSHEET_HIRQ_IRQ           IOMUX_TO_IRQ(BROADSHEET_HIRQ_LINE)
+#define BROADSHEET_GPIO_INIT_SUCCESS    0
+#define BROADSHEET_HIRQ_RQST_FAILURE    1
+#define BROADSHEET_HIRQ_INIT_FAILURE    2
+#define BROADSHEET_HRST_INIT_FAILURE    3
+#define BROADSHEET_HRDY_INIT_FAILURE    4
 
-// Other Broadsheet constants
-#define BROADSHEET_DISPLAY_NUMBER     DISP0
-#define BROADSHEET_PIXEL_FORMAT       IPU_PIX_FMT_RGB565
-#define BROADSHEET_SCREEN_HEIGHT      600
-#define BROADSHEET_SCREEN_HEIGHT_NELL 825
-#define BROADSHEET_SCREEN_WIDTH       800
-#define BROADSHEET_SCREEN_WIDTH_NELL  1200
-#define BROADSHEET_SCREEN_BPP         4
-#define BROADSHEET_READY_TIMEOUT      BS_RDY_TIMEOUT
-#define BROADSHEET_DMA_TIMEOUT        BS_DMA_TIMEOUT
-#define BROADSHEET_DMA_MIN_SIZE       64
-#define BROADSHEET_DMA_IN_USE         1
-#define BROADSHEET_DMA_DONE           0
+#define DISABLE_BS_IRQ                  1
+#define NO_BS_IRQ                       0
 
-#define BROADSHEET_DMA_SIZE(s)        BROADSHEET_DMA_MIN_SIZE,     \
-                                      (s)/BROADSHEET_DMA_MIN_SIZE, \
-                                      BROADSHEET_DMA_MIN_SIZE
+#define BROADSHEET_DISPLAY_NUMBER       DISP0
+#define BROADSHEET_PIXEL_FORMAT         IPU_PIX_FMT_RGB565
+#define BROADSHEET_SCREEN_HEIGHT        825
+#define BROADSHEET_SCREEN_WIDTH         1200
+#define BROADSHEET_SCREEN_BPP           4
+#define BROADSHEET_READY_TIMEOUT        BS_RDY_TIMEOUT
+#define BROADSHEET_DMA_TIMEOUT          BS_DMA_TIMEOUT
+#define BROADSHEET_DMA_MIN_SIZE         64
+#define BROADSHEET_DMA_IN_USE           1
+#define BROADSHEET_DMA_DONE             0
+
+#define BROADSHEET_DMA_SIZE(s)          BROADSHEET_DMA_MIN_SIZE,     \
+                                        (s)/BROADSHEET_DMA_MIN_SIZE, \
+                                        BROADSHEET_DMA_MIN_SIZE
 
 // Select which R/W timing parameters to use (slow or fast); these
 // settings affect the Freescale IPU Asynchronous Parallel System 80
@@ -126,12 +110,17 @@ static uint32_t   dma_stopped;
 
 static bool bs_hardware_ready(void *unused)
 {
-    return ( !broadsheet_force_hw_not_ready() && mxc_get_gpio_datain(BROADSHEET_HRDY_LINE) );
+    return ( !broadsheet_force_hw_not_ready() && broadsheet_ready() );
 }
 
 static int wait_for_ready(void)
 {
     return ( EINKFB_SCHEDULE_TIMEOUT(BROADSHEET_READY_TIMEOUT, bs_hardware_ready) );
+}
+
+bool bs_hrdy_preflight(void)
+{
+    return ( EINKFB_SUCCESS == wait_for_ready() );
 }
 
 #define BS_READY()      (broadsheet_ignore_hw_ready() || (EINKFB_SUCCESS == wait_for_ready()))
@@ -257,7 +246,7 @@ static int bs_io_buf_dma(u32 data_size, dma_addr_t phys_addr)
             
             // Wait for it to complete.
             //
-            result = EINKFB_SCHEDULE_TIMEOUT_INTERRUPTIBLE(BROADSHEET_DMA_TIMEOUT, bs_dma_ready);
+            result = EINKFB_SCHEDULE_TIMEOUT(BROADSHEET_DMA_TIMEOUT, bs_dma_ready);
             
             // If it fails to complete, complete it anyway.
             //
@@ -332,7 +321,7 @@ int bs_wr_dat(bool which, u32 data_size, u16 *data)
                     
                     if ( remainder )
                     {
-                        pio_data = &data[alignment];
+                        pio_data = &data[alignment * BROADSHEET_DMA_MIN_SIZE];
                         result = EINKFB_FAILURE;
                     }
                 }
@@ -456,12 +445,8 @@ static irqreturn_t bs_irq_handler (int irq, void *data, struct pt_regs *r)
 bool bs_hw_init(void)
 {
     ipu_channel_params_t params;
-
-#ifdef USE_BS_IRQ
-    int  rqstatus;
-#endif
-
-    bool result = true;
+    int gpio_config_result;
+    bool result = false;
 
     ipu_adc_sig_cfg_t sig = { 0, 0, 0, 0, 0, 0, 0, 0,
             IPU_ADC_BURST_WCS,
@@ -469,37 +454,23 @@ bool bs_hw_init(void)
             16, 0, 0, IPU_ADC_SER_NO_RW
     };
 
-    // Init DI interface
-    if ( IS_NELLWW() || IS_NELL() || IS_MARIO() || IS_ADS() )
+    // Set up ADC IRQ.
+    //
+    if ( ipu_request_irq(IPU_IRQ_ADC_SYS1_EOF, bs_eof_irq_handler, 0, EINKFB_NAME, NULL) )
     {
-        broadsheet_screen_height = BROADSHEET_SCREEN_HEIGHT_NELL;
-        broadsheet_screen_width  = BROADSHEET_SCREEN_WIDTH_NELL;
-        
-        broadsheet_screen_stride = BPP_SIZE(broadsheet_screen_width, BROADSHEET_SCREEN_BPP);
+        einkfb_print_crit("Could not register SYS1 irq handler\n");
+        dma_available = false;
     }
-
-    // Set up ADC IRQ
-    
-    dma_available = false;
-    
-    if ( !IS_ADS() )
+    else
     {
-        if ( ipu_request_irq(IPU_IRQ_ADC_SYS1_EOF, bs_eof_irq_handler, 0, EINKFB_NAME, NULL) )
-        {
-            einkfb_print_crit("Could not register SYS1 irq handler\n");
-        }
-        else
-        {
-            bs_eof_irq_completion();
-    
-            memset(&params, 0, sizeof(params));
-            params.adc_sys1.disp = BROADSHEET_DISPLAY_NUMBER;
-            params.adc_sys1.ch_mode = WriteDataWoRS;
-            ipu_init_channel(ADC_SYS1, &params);
-            
-            dma_available = true;
-        }
+        bs_eof_irq_completion();
+        dma_available = true;
     }
+    
+    memset(&params, 0, sizeof(params));
+    params.adc_sys1.disp = BROADSHEET_DISPLAY_NUMBER;
+    params.adc_sys1.ch_mode = WriteDataWoRS;
+    ipu_init_channel(ADC_SYS1, &params);
 
     ipu_adc_init_panel(BROADSHEET_DISPLAY_NUMBER,
                        broadsheet_screen_width,
@@ -508,14 +479,17 @@ bool bs_hw_init(void)
                        broadsheet_screen_stride,
                        sig, XY, 0, VsyncInternal);
 
-    // Set IPU timing for read cycles
+    // Set IPU timing for read cycles.
+    //
     ipu_adc_init_ifc_timing(BROADSHEET_DISPLAY_NUMBER, true,
                             BROADSHEET_READ_CYCLE_TIME,
                             BROADSHEET_READ_UP_TIME,
                             BROADSHEET_READ_DOWN_TIME,
                             BROADSHEET_READ_LATCH_TIME,
                             BROADSHEET_PIXEL_CLK);
-    // Set IPU timing for write cycles
+                            
+    // Set IPU timing for write cycles.
+    //
     ipu_adc_init_ifc_timing(BROADSHEET_DISPLAY_NUMBER, false,
                             BROADSHEET_WRITE_CYCLE_TIME,
                             BROADSHEET_WRITE_UP_TIME,
@@ -524,87 +498,53 @@ bool bs_hw_init(void)
 
     ipu_adc_set_update_mode(ADC_SYS1, IPU_ADC_REFRESH_NONE, 0, 0, 0);
 
-    gpio_lcd_active();
-    slcd_gpio_config();
-
-#ifdef CONFIG_MACH_MX31ADS
-    // Reset the level translator for the two GPIO inputs (HIRQ and HRDY)
-    pin_addr = PBC_BCTRL2_LDCIO_EN;
-    __raw_writew(pin_addr, PBC_BASE_ADDRESS + PBC_BCTRL2_CLEAR);
-#endif
-
 #ifdef USE_BS_IRQ
-    // Set up IRQ for for Broadsheet HIRQ line
-    disable_irq(BROADSHEET_HIRQ_IRQ);
-    set_irq_type(BROADSHEET_HIRQ_IRQ, IRQF_TRIGGER_RISING);
-    rqstatus = request_irq(BROADSHEET_HIRQ_IRQ, (irq_handler_t) bs_irq_handler, 0, "eink_fb_hal_broads", NULL);
-    if (rqstatus != 0) {
-        einkfb_print_crit("Failed IRQ request for Broadsheet HIRQ line; request status = %d\n", rqstatus);
-        result = false;
-    }
-
-    if (mxc_request_gpio(BROADSHEET_HIRQ_LINE)) {
-        einkfb_print_crit("Could not obtain GPIO pin for HIRQ\n");
-        result = false;
-    }
-    else {
-        // Set HIRQ pin as input
-        mxc_set_gpio_direction(BROADSHEET_HIRQ_LINE, 1);
-    }
+    gpio_config_result = broadsheet_gpio_config((irq_handler_t)bs_irq_handler, "eink_fb_hal_broads");
+#else
+    gpio_config_result = broadsheet_gpio_config(NULL, NULL);
 #endif
-
-#ifdef CONFIG_MACH_MARIO_MX
-    if (mxc_request_gpio(BROADSHEET_RST_LINE)) {
-        einkfb_print_crit("Could not obtain GPIO pin for RST\n");
-        result = false;
-    }
-    else {
-        // Set RST pin as output and initialize to zero (it's active LOW)
-        mxc_set_gpio_direction(BROADSHEET_RST_LINE, 0);
-        mxc_set_gpio_dataout(BROADSHEET_RST_LINE, 0);
-    }
-#endif
-
-    if (mxc_request_gpio(BROADSHEET_HRDY_LINE)) {
-        einkfb_print_crit("Could not obtain GPIO pin for HRDY\n");
-        result = false;
-    }
-    else {
-        // Set HRDY pin as input
-        mxc_set_gpio_direction(BROADSHEET_HRDY_LINE, 1);
-    }
-
-#ifdef CONFIG_MACH_MX31ADS
-    // Enable the level translator for the two GPIO inputs (HIRQ and HRDY)
-    mdelay(100);    // Pause 100 ms to allow level translator to settle
-    pin_addr = PBC_BCTRL2_LDCIO_EN;
-    __raw_writew(pin_addr, PBC_BASE_ADDRESS + PBC_BCTRL2_SET);
-#endif
-
-    // Reset Broadsheet
-    einkfb_debug("Sending RST signal to Broadsheet...\n");
-    WR_GPIO_LINE(BROADSHEET_RST_LINE, BROADSHEET_RESET_VAL);     // Assert RST
-    mdelay(100);    // Pause 100 ms during reset
-    WR_GPIO_LINE(BROADSHEET_RST_LINE, BROADSHEET_NON_RESET_VAL); // Clear RST
-    mdelay(400);    // Pause 400 ms to allow Broasheet time to come up
-    einkfb_debug("Broadsheet reset done.\n");
-
-#ifdef TEST_BROADSHEET
-    test_broadsheet(disp);
-#endif
-
-#ifdef USE_BS_IRQ
-    // Set up Broadsheet for interrupt generation (enable all conditions)
-    bs_cmd_wr_reg(BS_INTR_CTL_REG, BS_ALL_IRQS);
-    bs_cmd_wr_reg(BS_INTR_RAW_STATUS_REG, BS_ALL_IRQS);
-
-    // Enable all Broadsheet display engine interrupts
-    bs_cmd_wr_reg(BS_DE_INTR_ENABLE_REG, BS_DE_ALL_IRQS);
-    bs_cmd_wr_reg(BS_DE_INTR_RAW_STATUS_REG, BS_DE_ALL_IRQS);
-#endif
-
-    einkfb_debug("GPIOs and IRQ set; Broadsheet has been reset\n");
     
+    switch ( gpio_config_result )
+    {
+        case BROADSHEET_GPIO_INIT_SUCCESS:
+            // Reset Broadsheet.
+            einkfb_debug("Sending RST signal to Broadsheet...\n");
+            broadsheet_reset();
+            einkfb_debug("Broadsheet reset done.\n");
+            
+#ifdef USE_BS_IRQ
+            // Set up Broadsheet for interrupt generation (enable all conditions).
+            bs_cmd_wr_reg(BS_INTR_CTL_REG, BS_ALL_IRQS);
+            bs_cmd_wr_reg(BS_INTR_RAW_STATUS_REG, BS_ALL_IRQS);
+        
+            // Enable all Broadsheet display engine interrupts.
+            bs_cmd_wr_reg(BS_DE_INTR_ENABLE_REG, BS_DE_ALL_IRQS);
+            bs_cmd_wr_reg(BS_DE_INTR_RAW_STATUS_REG, BS_DE_ALL_IRQS);
+#endif
+            
+            einkfb_debug("GPIOs and IRQ set; Broadsheet has been reset\n");
+            result = true;
+        break;
+        
+#ifdef USE_BS_IRQ
+        case BROADSHEET_HIRQ_RQST_FAILURE:
+            einkfb_print_crit("Failed IRQ request for Broadsheet HIRQ line\n");
+        break;
+        
+        case BROADSHEET_HIRQ_INIT_FAILURE:
+            einkfb_print_crit("Could not obtain GPIO pin for HIRQ\n");
+        break;
+#endif
+
+        case BROADSHEET_HRST_INIT_FAILURE:
+            einkfb_print_crit("Could not obtain GPIO pin for HRST\n");
+        break;
+        
+        case BROADSHEET_HRDY_INIT_FAILURE:
+            einkfb_print_crit("Could not obtain GPIO pin for HRDY\n");
+        break;
+    }
+
     return ( result );
 }
 
@@ -657,21 +597,10 @@ void bs_hw_done(void)
     }
 
 #ifdef USE_BS_IRQ
-    disable_irq(BROADSHEET_HIRQ_IRQ);
-    free_irq(BROADSHEET_HIRQ_IRQ, NULL);
-    mxc_free_gpio(BROADSHEET_HIRQ_LINE);
+    broadsheet_gpio_disable(DISABLE_BS_IRQ);
+#else
+    broadsheet_gpio_disable(NO_BS_IRQ);
 #endif
-
-#ifdef CONFIG_MACH_MX31ADS
-    // Reset the level translator for the two GPIO inputs (HIRQ and HRDY)
-    pin_addr = PBC_BCTRL2_LDCIO_EN;
-    __raw_writew(pin_addr, PBC_BASE_ADDRESS + PBC_BCTRL2_CLEAR);
-    mdelay(100);    // Pause 100 ms to allow level translator to settle
-#elif  CONFIG_MACH_MARIO_MX
-    mxc_free_gpio(BROADSHEET_RST_LINE);
-#endif
-
-    mxc_free_gpio(BROADSHEET_HRDY_LINE);
 
     einkfb_debug("Released Broadsheet GPIO pins and IRQs\n");
 }

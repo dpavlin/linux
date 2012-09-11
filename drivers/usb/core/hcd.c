@@ -1435,7 +1435,7 @@ irqreturn_t usb_hcd_irq (int irq, void *__hcd)
 
 	if (unlikely(start == HC_STATE_HALT ||
 	    !test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags)))
-		return IRQ_NONE;
+		return IRQ_HANDLED;
 	if (hcd->driver->irq (hcd) == IRQ_NONE)
 		return IRQ_NONE;
 

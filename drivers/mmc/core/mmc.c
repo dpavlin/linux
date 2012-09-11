@@ -54,10 +54,16 @@ static const unsigned int tacc_mant[] = {
 		__res & __mask;						\
 	})
 
-#define SAMSUNG_PATCH_V05  0x05		/* Check for Samsung Patch version 05 */
-#define SAMSUNG_MANF_ID    0x15		/* Samsung manufacturer ID */
-#define SAMSUNG_PATCH_V0   0x00		/* PRV is 0 on re-flashing */
-#define SAMSUNG_PATCH_V03  0x03		/* Patch version if 03 */
+#ifdef CONFIG_MACH_LAB126
+
+#define SAMSUNG_PATCH_V05	0x05		/* Check for Samsung Patch version 05 */
+#define SAMSUNG_MANF_ID 	0x15		/* Samsung manufacturer ID */
+#define SAMSUNG_PATCH_V0	0x00		/* PRV is 0 on re-flashing */
+#define SAMSUNG_PATCH_V03	0x03		/* Patch version if 03 */
+#define SANDISK_MANF_ID 	0x2		/* Sandisk manufacturer ID */
+#define HYNIX_MANF_ID		0x90		/* Hynix manufacturer ID */
+
+#endif
 
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
@@ -123,11 +129,11 @@ static int mmc_decode_csd(struct mmc_card *card)
 	u32 *resp = card->raw_csd;
 
 	/*
-	 * We only understand CSD structure v1.1 and v1.2.
-	 * v1.2 has extra information in bits 15, 11 and 10.
+	 * We only understand CSD structure v1.1, v1.2 and v1.3.
+	 * v1.2 and v1.3 have extra information in bits 15, 11 and 10.
 	 */
 	csd_struct = UNSTUFF_BITS(resp, 126, 2);
-	if (csd_struct != 1 && csd_struct != 2) {
+	if (csd_struct != 1 && csd_struct != 2 && csd_struct != 3) {
 		printk(KERN_ERR "%s: unrecognised CSD structure version %d\n",
 			mmc_hostname(card->host), csd_struct);
 		return -EINVAL;
@@ -258,6 +264,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	unsigned int max_dtr;
 	char product_revision;
 	unsigned long manufacturer_id;
+	unsigned int serial_num;
 
 	BUG_ON(!host);
 	WARN_ON(!host->claimed);
@@ -313,9 +320,7 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		 * Product revision: 55-48
 		 */
 		product_revision = UNSTUFF_BITS(card->raw_cid, 48, 8);
-
-		printk(KERN_INFO "%s: Product Revision %d\n", mmc_hostname(host),
-				(product_revision & 0x0f));
+		serial_num = UNSTUFF_BITS(card->raw_cid, 16, 24);
 
 #ifdef CONFIG_MACH_LAB126	
 		/*
@@ -328,18 +333,36 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		 * PRV 0x0 as well since this just means that Samsung upgraded
 		 * the firmware.
 		 *		-Manish Lachwani (06/15/2009)
-		 */	
-		if ( (manufacturer_id == SAMSUNG_MANF_ID) &&
-			(((product_revision & 0x0f) == SAMSUNG_PATCH_V05) ||
-			((product_revision & 0x0f) == 0x0)) ) {
-				host->predefined = 1;
-				printk(KERN_INFO "%s: Using predefined mode\n", mmc_hostname(host));
-		}
-		else {
-			if ( (manufacturer_id == SAMSUNG_MANF_ID) &&
-				((product_revision & 0x0f) == SAMSUNG_PATCH_V03) ) {
-					printk(KERN_INFO "%s: open-ended mode\n", mmc_hostname(host));
+		 */
+		switch (manufacturer_id) {
+		case SAMSUNG_MANF_ID:	
+			if ( ((product_revision & 0x0f) == SAMSUNG_PATCH_V05) ||
+				((product_revision & 0x0f) == 0x0) ) {
+					printk(KERN_INFO "%s: Using predefined mode on Samsung eMMC %d\n",
+							mmc_hostname(host), (product_revision & 0x0f));
+					host->predefined = 1;
 			}
+			else {
+				printk(KERN_INFO "%s: Using open-ended mode on Samsung eMMC\n",
+					mmc_hostname(host));
+				host->predefined = 0;
+			}
+			break;
+		case SANDISK_MANF_ID:
+			printk(KERN_INFO "%s: Using open-ended mode on Sandisk eMMC\n",
+					mmc_hostname(host));
+			host->predefined = 0;
+			break;
+		case HYNIX_MANF_ID:
+			printk(KERN_INFO "%s: Using open-ended mode on Hynix eMMC\n",
+					mmc_hostname(host));
+			host->predefined = 0;
+			break;
+		default:
+			printk(KERN_INFO "%s: Using open-ended mode on eMMC\n",
+					mmc_hostname(host));
+			host->predefined = 0;
+			break;
 		}
 #endif
 	}

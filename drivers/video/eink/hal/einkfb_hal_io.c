@@ -282,7 +282,7 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
         switch ( local_cmd )
         {
             case FBIO_EINK_UPDATE_DISPLAY:
-                 einkfb_update_display(UPDATE_MODE(local_arg));
+                 einkfb_update_display(local_arg);
             break;
             
             case FBIO_EINK_UPDATE_DISPLAY_AREA:
@@ -310,6 +310,7 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
                         
                         case fx_invert:
                             einkfb_invert_area_data(update_area);
+                            saved_fx = fx_update_partial;
                         break;
 
                         // Prevent compiler from complaining.
@@ -318,7 +319,7 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
                         break;
                     }
                     
-                    update_area->which_fx = UPDATE_AREA_MODE(saved_fx);
+                    update_area->which_fx = saved_fx;
                     einkfb_update_display_area(update_area);
                     
                     if ( flash_area )
@@ -342,7 +343,7 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
             break;
             
             case FBIO_EINK_RESTORE_DISPLAY:
-                einkfb_restore_display(UPDATE_MODE(local_arg));
+                einkfb_restore_display(local_arg);
             break;
             
             case FBIO_EINK_SET_REBOOT_BEHAVIOR:

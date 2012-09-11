@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_mem.c -- eInk frame buffer device HAL memory
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2009 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -20,8 +20,8 @@
 
 struct einkfb_vma_list_entry
 {
-	struct list_head list;
-	struct vm_area_struct *vma;
+    struct list_head list;
+    struct vm_area_struct *vma;
 };
 
 static struct page **einkfb_pages = NULL;
@@ -38,100 +38,100 @@ static LIST_HEAD(vma_list);
 
 static int add_vma(struct vm_area_struct *vma)
 {
-	struct einkfb_vma_list_entry *list_entry;
+    struct einkfb_vma_list_entry *list_entry;
 
-	list_entry = kmalloc(sizeof(struct einkfb_vma_list_entry), GFP_KERNEL);
-	list_entry->vma = vma;
+    list_entry = kmalloc(sizeof(struct einkfb_vma_list_entry), GFP_KERNEL);
+    list_entry->vma = vma;
 
-	down_interruptible(&vma_list_semaphore);
+    down_interruptible(&vma_list_semaphore);
 
-	list_add_tail((struct list_head *)list_entry, &vma_list);
+    list_add_tail((struct list_head *)list_entry, &vma_list);
 
-	up(&vma_list_semaphore);
+    up(&vma_list_semaphore);
 
-	return ( EINKFB_SUCCESS );
+    return ( EINKFB_SUCCESS );
 }
 
 static struct einkfb_vma_list_entry *einkfb_find_vma_entry(struct vm_area_struct *vma)
 {
-	struct einkfb_vma_list_entry *entry = NULL;
-	struct list_head *ptr = NULL;
-	int done = 0;
+    struct einkfb_vma_list_entry *entry = NULL;
+    struct list_head *ptr = NULL;
+    int done = 0;
   
-	for ( ptr = vma_list.next; ptr != &vma_list && !done; ptr = ptr->next )
-	{
-		entry = list_entry(ptr, struct einkfb_vma_list_entry, list);
-		if ( entry->vma == vma )
-		    done = 1;
-	}
+    for ( ptr = vma_list.next; ptr != &vma_list && !done; ptr = ptr->next )
+    {
+        entry = list_entry(ptr, struct einkfb_vma_list_entry, list);
+        if ( entry->vma == vma )
+            done = 1;
+    }
 
     if ( !done )
         entry = NULL;
 
-	return ( entry );
+    return ( entry );
 }
 
 static int remove_vma(struct vm_area_struct *vma)
 {
-	struct einkfb_vma_list_entry *entry;
+    struct einkfb_vma_list_entry *entry;
 
-	down_interruptible(&vma_list_semaphore);
+    down_interruptible(&vma_list_semaphore);
 
-	entry = einkfb_find_vma_entry(vma);
-	if ( entry )
-	{
-		list_del((struct list_head *)entry);
-		kfree(entry);
-	}
+    entry = einkfb_find_vma_entry(vma);
+    if ( entry )
+    {
+        list_del((struct list_head *)entry);
+        kfree(entry);
+    }
 
-	up(&vma_list_semaphore);
+    up(&vma_list_semaphore);
 
-	return ( EINKFB_SUCCESS );
+    return ( EINKFB_SUCCESS );
 }
 
 static struct page *vmalloc_2_page(void *addr)
 {
-	unsigned long lpage;
-	pgd_t *pgd;
-	pmd_t *pmd;
-	pte_t *pte;
-	struct page *page;
+    unsigned long lpage;
+    pgd_t *pgd;
+    pmd_t *pmd;
+    pte_t *pte;
+    struct page *page;
   
-	lpage = VMALLOC_VMADDR(addr);
-	spin_lock(&init_mm.page_table_lock);
+    lpage = VMALLOC_VMADDR(addr);
+    spin_lock(&init_mm.page_table_lock);
 
-	pgd = pgd_offset(&init_mm, lpage);
-	pmd = pmd_offset(pgd, lpage);
-	pte = pte_offset_map(pmd, lpage);
-	page = pte_page(*pte);
+    pgd = pgd_offset(&init_mm, lpage);
+    pmd = pmd_offset(pgd, lpage);
+    pte = pte_offset_map(pmd, lpage);
+    page = pte_page(*pte);
 
-	spin_unlock(&init_mm.page_table_lock);
+    spin_unlock(&init_mm.page_table_lock);
 
 //  return ( vmalloc_to_page(addr) );
-	return ( page );
+    return ( page );
 }
 
 static void einkfb_vma_open(struct vm_area_struct *vma)
 {
-	add_vma(vma);
+    add_vma(vma);
 }
 
 static void einkfb_vma_close(struct vm_area_struct *vma)
 {
-	remove_vma(vma);
+    remove_vma(vma);
 }
 
 static struct page *einkfb_vma_nopage(struct vm_area_struct *vma, unsigned long address,
-	int *type)
+    int *type)
 {
-	unsigned long offset = address - vma->vm_start + (vma->vm_pgoff << PAGE_SHIFT);
-	struct page *page = NOPAGE_SIGBUS;
+    unsigned long offset = address - vma->vm_start + (vma->vm_pgoff << PAGE_SHIFT);
+    struct page *page = NOPAGE_SIGBUS;
 
-	struct einkfb_info info;
-	einkfb_get_info(&info);
+    struct einkfb_info info;
+    einkfb_get_info(&info);
 
-	if ( offset < info.mem )
-	{
+    if ( offset < info.mem )
+    {
         page = einkfb_pages[offset >> PAGE_SHIFT];
         get_page(page);
     }
@@ -141,11 +141,11 @@ static struct page *einkfb_vma_nopage(struct vm_area_struct *vma, unsigned long 
 
 static int einkfb_alloc_page_array(size_t size, void *start)
 {
-	int result = EINKFB_FAILURE;
+    int result = EINKFB_FAILURE;
 
-	num_einkfb_pages = (size >> PAGE_SHIFT) + 1;
+    num_einkfb_pages = (size >> PAGE_SHIFT) + 1;
 
-	einkfb_pages = kmalloc(num_einkfb_pages * sizeof(struct page *), GFP_KERNEL);
+    einkfb_pages = kmalloc(num_einkfb_pages * sizeof(struct page *), GFP_KERNEL);
 
     if ( einkfb_pages )
     {
@@ -159,7 +159,7 @@ static int einkfb_alloc_page_array(size_t size, void *start)
         result = EINKFB_SUCCESS;
     }
 
-	return ( result );
+    return ( result );
 }
 
 static void einkfb_free_page_array(void)
@@ -200,7 +200,7 @@ int einkfb_mmap(FB_MMAP_PARAMS)
         einkfb_vma_open(vma);
     }
 
-	return ( EINKFB_SUCCESS );
+    return ( EINKFB_SUCCESS );
 }
 
 void *einkfb_malloc(size_t size, einkfb_dma_addr_t *phys, bool mmap)
@@ -214,11 +214,11 @@ void *einkfb_malloc(size_t size, einkfb_dma_addr_t *phys, bool mmap)
             struct einkfb_info info;
             einkfb_get_info(&info);
 
-	        result = dma_alloc_coherent(info.fbinfo->device, size, &phys->addr,
-	            GFP_DMA);
-	            
-	        if ( result )
-	            phys->size = size;
+            result = dma_alloc_coherent(info.fbinfo->device, size, &phys->addr,
+                GFP_DMA);
+                
+            if ( result )
+                phys->size = size;
         }
         else
         {
@@ -249,9 +249,9 @@ void einkfb_free(void *ptr, einkfb_dma_addr_t *phys, bool mmap)
         {
             struct einkfb_info info;
             einkfb_get_info(&info);
-	        
-	        dma_free_coherent(info.fbinfo->device, phys->size, ptr, phys->addr);
-	    }
+            
+            dma_free_coherent(info.fbinfo->device, phys->size, ptr, phys->addr);
+        }
         else
             vfree(ptr);
     }

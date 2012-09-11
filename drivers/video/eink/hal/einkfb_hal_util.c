@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_util.c -- eInk frame buffer device HAL utilities
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2010 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -210,7 +210,7 @@ static bool einkfb_update_vfb_area(update_area_t *update_area)
     {
         einkfb_event_t event; einkfb_init_event(&event);
         
-        event.update_mode = update_area->which_fx;
+        event.update_mode = UPDATE_AREA_MODE(update_area->which_fx);
         event.x1 = update_area->x1; event.x2 = update_area->x2;
         event.y1 = update_area->y1; event.y2 = update_area->y2;
         event.event = einkfb_event_update_display_area;
@@ -282,7 +282,7 @@ static bool einkfb_update_vfb(fx_type update_mode)
         einkfb_event_t event; einkfb_init_event(&event);
 
         event.event = einkfb_event_update_display;
-        event.update_mode = update_mode;
+        event.update_mode = UPDATE_MODE(update_mode);
     
         einkfb_post_event(&event);
     }
@@ -443,45 +443,80 @@ void einkfb_lock_exit(char *function_name)
     }
 }
 
+#define UNINTERRUPTIBLE             false
+#define INTERRUPTIBLE               true
+
+#define INTERRUPTIBLE_TIMEOUT_COUNT 3
+
+static int einkfb_schedule_timeout_guts(unsigned long hardware_timeout, einkfb_hardware_ready_t hardware_ready, void *data, bool interruptible)
+{
+    unsigned long start_time = jiffies, stop_time = start_time + hardware_timeout,
+        timeout = EINKFB_TIMEOUT_MIN;
+    int result = EINKFB_SUCCESS;
+
+    // Ask the hardware whether it's ready or not.  And, if it's not ready, start
+    // yielding the CPU for EINKFB_TIMEOUT_MIN jiffies, increasing the yield time
+    // up to EINKFB_TIMEOUT_MAX jiffies.  Time out after the requested number of
+    // of jiffies have occurred.
+    //
+    while ( !(*hardware_ready)(data) && time_before_eq(jiffies, stop_time) )
+    {
+        timeout = min(timeout++, EINKFB_TIMEOUT_MAX);
+        
+        if ( interruptible )
+            schedule_timeout_interruptible(timeout);
+        else
+            schedule_timeout(timeout);
+    }
+
+    if ( time_after(jiffies, stop_time) )
+    {
+       einkfb_print_crit("Timed out waiting for the hardware to become ready!\n");
+       result = EINKFB_FAILURE;
+    }
+    else
+    {
+        // For debugging purposes, dump the time it took for the hardware to
+        // become ready if it was more than EINKFB_TIMEOUT_MAX.
+        //
+        stop_time = jiffies - start_time;
+        
+        if ( EINKFB_TIMEOUT_MAX < stop_time )
+            einkfb_debug("Timeout time = %ld\n", stop_time);
+    }
+
+    return ( result );    
+}
+
+static int einkfb_schedule_timeout_uninterruptible(unsigned long hardware_timeout, einkfb_hardware_ready_t hardware_ready, void *data)
+{
+    int timeout_count = 0, result = EINKFB_FAILURE;
+    
+    // In the uninterruptible case, we try to be more CPU friendly by first doing things
+    // in an interruptible way.
+    //
+    while ( (INTERRUPTIBLE_TIMEOUT_COUNT > timeout_count++) && (EINKFB_FAILURE == result) )
+        result = einkfb_schedule_timeout_guts(hardware_timeout, hardware_ready, data, INTERRUPTIBLE);
+    
+    // It's possible that we haven't been able to access the hardware enough times by doing
+    // things in an interruptible way.  So, try again once more in an uninterruptible way.
+    //
+    if ( EINKFB_FAILURE == result )
+        result = einkfb_schedule_timeout_guts(hardware_timeout, hardware_ready, data, UNINTERRUPTIBLE);
+
+    return ( result );
+}
+
 int einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_ready_t hardware_ready, void *data, bool interruptible)
 {
     int result = EINKFB_SUCCESS;
     
     if ( hardware_timeout && hardware_ready )
     {
-        unsigned long start_time = jiffies, stop_time = start_time + hardware_timeout,
-            timeout = EINKFB_TIMEOUT_MIN;
-
-        // Ask the hardware whether it's ready or not.  And, if it's not ready, start
-        // yielding the CPU for EINKFB_TIMEOUT_MIN jiffies, increasing the yield time
-        // up to EINKFB_TIMEOUT_MAX jiffies.  Time out after the requested number of
-        // of jiffies have occurred.
-        //
-        while ( !(*hardware_ready)(data) && time_before_eq(jiffies, stop_time) )
-        {
-            timeout = min(timeout++, EINKFB_TIMEOUT_MAX);
-            
-            if ( interruptible )
-                schedule_timeout_interruptible(timeout);
-            else
-                schedule_timeout(timeout);
-        }
-
-        if ( time_after(jiffies, stop_time) )
-        {
-           einkfb_print_crit("Timed out waiting for the hardware to become ready!\n");
-           result = EINKFB_FAILURE;
-        }
+        if ( interruptible )
+            result = einkfb_schedule_timeout_guts(hardware_timeout, hardware_ready, data, INTERRUPTIBLE);
         else
-        {
-            // For debugging purposes, dump the time it took for the hardware to
-            // become ready if it was more than EINKFB_TIMEOUT_MAX.
-            //
-            stop_time = jiffies - start_time;
-            
-            if ( EINKFB_TIMEOUT_MAX < stop_time )
-                einkfb_debug("Timeout time = %ld\n", stop_time);
-        }
+            result = einkfb_schedule_timeout_uninterruptible(hardware_timeout, hardware_ready, data);
     }
     else
     {
@@ -493,6 +528,7 @@ int einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_read
     
     return ( result );
 }
+
 
 #if PRAGMAS
     #pragma mark -
@@ -801,6 +837,49 @@ static void einkfb_print_update_timing(unsigned long time, int which, char *kind
     }
 }
 
+#define EINKFB_BUFFERS_EQUAL_MESSAGE_AREA_UPDATE    "area_update(%s):x1=%d,x2=%d,y1=%d,y2=%d"
+#define EINKFB_BUFFERS_EQUAL_MESSAGE_FULL_SCREEN    "full_screen(%s)"
+#define EINKFB_BUFFERS_EQUAL_MESSAGE_SIZE           256
+#define EINKFB_BUFFERS_EQUAL_MESSAGE                "%s\n"
+
+#define EINKFB_BUFFERS_EQUAL_MESSAGE_PART           "non-flashing"
+#define EINKFB_BUFFERS_EQUAL_MESSAGE_FULL           "flashing"
+
+#define EINKFB_PRINT_BUFFERS_EQUAL_MESSAGE(f, s)    \
+    einkfb_debug(f, s)
+
+#define EINKFB_PRINT_BUFFERS_EQUAL_MESSAGE_AREA(u)  \
+    einkfb_print_buffers_equal_message(false, fx_none, u)
+#define EINKFB_PRINT_BUFFERS_EQUAL_MESSAGE_FULL(m)  \
+    einkfb_print_buffers_equal_message(true, m, NULL)
+
+static void einkfb_print_buffers_equal_message(bool full_screen, fx_type update_mode, update_area_t *update_area)
+{
+    char einkfb_buffers_equal_message[EINKFB_BUFFERS_EQUAL_MESSAGE_SIZE] = { 0 };    
+
+    // First, generate a message that's appropriate for the update type.
+    //
+    if ( full_screen )
+    {
+        sprintf(einkfb_buffers_equal_message, EINKFB_BUFFERS_EQUAL_MESSAGE_FULL_SCREEN,
+           (UPDATE_MODE(update_mode) ? EINKFB_BUFFERS_EQUAL_MESSAGE_FULL :
+                                       EINKFB_BUFFERS_EQUAL_MESSAGE_PART));
+    }
+    else
+    {
+        sprintf(einkfb_buffers_equal_message, EINKFB_BUFFERS_EQUAL_MESSAGE_AREA_UPDATE,
+            (UPDATE_AREA_MODE(update_area->which_fx) ? EINKFB_BUFFERS_EQUAL_MESSAGE_FULL :
+                                                       EINKFB_BUFFERS_EQUAL_MESSAGE_PART),
+            update_area->x1,
+            update_area->x2,
+            update_area->y1,
+            update_area->y2);
+    }
+    
+    EINKFB_PRINT_BUFFERS_EQUAL_MESSAGE(EINKFB_BUFFERS_EQUAL_MESSAGE,
+        einkfb_buffers_equal_message);
+}
+
 void einkfb_update_display_area(update_area_t *update_area)
 {
     if ( update_area )
@@ -827,7 +906,7 @@ void einkfb_update_display_area(update_area_t *update_area)
         stop_time = jiffies;
         
         if ( buffers_equal )
-            einkfb_debug("buffers equal; hardware not accessed\n");
+            EINKFB_PRINT_BUFFERS_EQUAL_MESSAGE_AREA(update_area);
             
         if ( EINKFB_PERF() )
         {
@@ -897,8 +976,8 @@ void einkfb_update_display(fx_type update_mode)
         einkfb_set_fb_restore(false);
 
     if ( buffers_equal )
-        einkfb_debug("buffers equal; hardware not accessed\n");
-
+        EINKFB_PRINT_BUFFERS_EQUAL_MESSAGE_FULL(update_mode);
+        
     if ( EINKFB_PERF() )
     {
         einkfb_print_update_timing(jiffies_to_msecs(virt_stop - virt_strt),

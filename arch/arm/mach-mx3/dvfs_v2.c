@@ -118,6 +118,7 @@ enum {
 #define WDOG_RST_LSH	0
 #define USB_RST_LSH	1
 #define PMIC_PC_LSH	2
+#define MXC_MMC_LSH	3
 
 u32 saved_last_seconds=0;
 EXPORT_SYMBOL(saved_last_seconds);
@@ -345,6 +346,7 @@ void pmic_voltage_init(void)
 	unsigned int reg;
 	unsigned int reg_memory_a;
 	unsigned int regA = 0, regB = 0;
+	int reset_cause = 0;
 
 	reg = __raw_readl(MXC_CCM_RCSR);
 	printk(KERN_ERR "RCSR register - %x\n", reg);
@@ -355,14 +357,22 @@ void pmic_voltage_init(void)
 		/* Turn on bit #0 */
 		pmic_write_reg(REG_MEMORY_A, (1 << WDOG_RST_LSH), (1 << WDOG_RST_LSH));
 		printk(KERN_ERR "boot: I def:wdrbt::Previous reset was a watchdog ... rebooting\n");
+
+		/* Check if there was a MMC error and save it */
+		pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << MXC_MMC_LSH));
+		if (reg_memory_a & 0x8)
+			pmic_write_reg(REG_MEMORY_A, (1 << 3), (1 << MXC_MMC_LSH));
+
 		kernel_restart(NULL);
 	}
 
 	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << WDOG_RST_LSH));
+
 	if (reg_memory_a & 0x1) {
 		/* Clear out bit #0 */
 		pmic_write_reg(REG_MEMORY_A, (0 << WDOG_RST_LSH), (1 << WDOG_RST_LSH));
 		printk(KERN_ERR "boot: I def:wdrst::Watchdog Reset Encountered\n");
+		reset_cause = 1;
 	}
 
 	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << USB_RST_LSH));
@@ -370,6 +380,7 @@ void pmic_voltage_init(void)
 		/* Clear out bit #1 */
 		pmic_write_reg(REG_MEMORY_A, (0 << USB_RST_LSH), (1 << USB_RST_LSH));
 		printk(KERN_ERR "boot: I def:usbhost::USB Host Detection restart\n");
+		reset_cause = 1;
 	}
 
 	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << PMIC_PC_LSH));
@@ -377,7 +388,23 @@ void pmic_voltage_init(void)
 		/* Clear out MEMA - bit #2 */
 		pmic_write_reg(REG_MEMORY_A, (0 << 2), (1 << PMIC_PC_LSH));
 		printk(KERN_ERR "boot: I def:pcut::Atlas power cut encountered\n");
+		reset_cause = 1;
 	}
+
+	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << MXC_MMC_LSH));
+	if (reg_memory_a & 0x8) {
+		/* Clear out MEMA - bit #3 */
+		pmic_write_reg(REG_MEMORY_A, (0 << 3), (1 << MXC_MMC_LSH));
+		printk(KERN_ERR "boot: I def:mmc::MMC CMD/DATA error\n");
+		reset_cause = 1;
+	}
+
+	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, 0xffffffff);
+	if (!reset_cause && !(reg_memory_a & 0x10))
+		printk(KERN_ERR "boot: I def:bcut::15-second battery cut encountered\n");
+
+	reset_cause = 0;
+	pmic_write_reg(REG_MEMORY_A, (1 << 4), (1 << 4));
 
 	/* Get the last good saved seconds */
 	pmic_read_reg(REG_MEMORY_A, &regA, (0xff << 16));

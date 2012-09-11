@@ -174,6 +174,7 @@ struct usb_dr_device {
 #define  PORTSCX_PORT_FORCE_RESUME            (0x00000040)
 #define  PORTSCX_PORT_SUSPEND                 (0x00000080)
 #define  PORTSCX_PORT_RESET                   (0x00000100)
+#define  PORTSCX_PORT_HSP		      (0x00000200)
 #define  PORTSCX_LINE_STATUS_BITS             (0x00000C00)
 #define  PORTSCX_PORT_POWER                   (0x00001000)
 #define  PORTSCX_PORT_INDICTOR_CTRL           (0x0000C000)

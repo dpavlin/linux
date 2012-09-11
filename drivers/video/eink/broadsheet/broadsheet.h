@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet.h --
  *  eInk frame buffer device HAL broadsheet defs
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2010 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -15,6 +15,7 @@
 // Miscellaneous Broadsheet Definitions
 //
 #define BS_DFMT_2BPP            0       // Load Image Data Formats (ld_img, dfmt)
+#define BS_DFMT_2BPP_ISIS       1       //
 #define BS_DFMT_4BPP            2       //
 #define BS_DFMT_8BPP            3       //
 
@@ -65,6 +66,7 @@
 #define BS_PRD_CODE             0x0047  // All Broadsheets
 #define BS_REV_ASIC_B00         0x0000  // S1D13521 B00
 #define BS_REV_ASIC_B01         0x0100  // S1D13521 B01
+#define BS_REV_ASIC_B02         0x0200  // S1D13521 B02
 
 #define BS_PRD_CODE_ISIS        0x004D  // All ISISes
 
@@ -98,31 +100,40 @@
 
 #define broadsheet_pixels(b, p) (BS_ISIS() ? (p) : ~(p))
 
+#define BS_INIT_SDRV_CFG        (100 | (1 << 8) | (1 << 9))
+#define BS_INIT_GDRV_CFG        0x2
+#define BS_INIT_LUTIDXFMT       (4 | (1 << 7))
+#define BS_INIT_PIX_INVRT       (1 << 4)
+#define BS_INIT_AUTO_WF         (1 << 6)
+
 // Broadsheet  800x600, 6.0-inch Panel Support (AM300_MMC_IMAGE_X03a/source/broadsheet_soft/bs60_init/bs60_init.h)
-//
-// 50.09Hz
 //
 #define BS60_INIT_HSIZE         800
 #define BS60_INIT_VSIZE         600
-#define BS60_INIT_FSLEN         4
-#define BS60_INIT_FBLEN         4
-#define BS60_INIT_FELEN         12
-#define BS60_INIT_LSLEN         10
-#define BS60_INIT_LBLEN         4
-#define BS60_INIT_LELEN         84
-#define BS60_INIT_PIXCLKDIV     6
-#define BS60_INIT_SDRV_CFG      (100 | (1 << 8) | (1 << 9))
-#define BS60_INIT_GDRV_CFG      0x2
-#define BS60_INIT_LUTIDXFMT     (4 | (1 << 7))
-#define BS60_INIT_PIX_INVRT     (1 << 4)
-#define BS60_INIT_AUTO_WF       (1 << 6)
-
 #define BS60_MM_800             121
-#define BS60_MM_600              91
+#define BS60_MM_600             91
+
+// 50.09Hz (Mario/ADS-based units have a 26MHz clock)
+//
+#define BS60_INIT_FSLEN_26_50   4
+#define BS60_INIT_FBLEN_26_50   4
+#define BS60_INIT_FELEN_26_50   12
+#define BS60_INIT_LSLEN_26_50   10
+#define BS60_INIT_LBLEN_26_50   4
+#define BS60_INIT_LELEN_26_50   84
+#define BS60_INIT_PXCKD_26_50   6
+
+// 85.06Hz (Mario/ADS-based units have a 26MHz clock)
+//
+#define BS60_INIT_FSLEN_26_85   4
+#define BS60_INIT_FBLEN_26_85   4
+#define BS60_INIT_FELEN_26_85   6
+#define BS60_INIT_LSLEN_26_85   4
+#define BS60_INIT_LBLEN_26_85   20
+#define BS60_INIT_LELEN_26_85   24
+#define BS60_INIT_PXCKD_26_85   4
 
 // Broadsheet 1200x825, 9.7-inch Panel Support (AM300_MMC_IMAGE_X03b/source/broadsheet_soft/bs97_init/bs97_init.h)
-//
-// 50.03Hz
 //
 #define BS97_INIT_HSIZE         1200
 #define BS97_INIT_VSIZE         825
@@ -131,21 +142,28 @@
 #define BS97_HARD_VSIZE         (BS97_INIT_VSIZE + BS97_INIT_VSLOP)
 #define BS97_SOFT_VSIZE         824
 
-#define BS97_INIT_FSLEN         2
-#define BS97_INIT_FBLEN         4
-#define BS97_INIT_FELEN         4
-#define BS97_INIT_LSLEN         4
-#define BS97_INIT_LBLEN         10
-#define BS97_INIT_LELEN         74
-#define BS97_INIT_PIXCLKDIV     3
-#define BS97_INIT_SDRV_CFG      (100 | (1 << 8) | (1 << 9))
-#define BS97_INIT_GDRV_CFG      0x2
-#define BS97_INIT_LUTIDXFMT     (4 | (1 << 7))
-#define BS97_INIT_PIX_INVRT     (1 << 4)
-#define BS97_AUTO_WF            (1 << 6)
-
 #define BS97_MM_1200            203
 #define BS97_MM_825             139
+
+// 50.03Hz (Mario/ADS-based units have a 26MHz clock)
+//
+#define BS97_INIT_FSLEN_26_50   2
+#define BS97_INIT_FBLEN_26_50   4
+#define BS97_INIT_FELEN_26_50   4
+#define BS97_INIT_LSLEN_26_50   4
+#define BS97_INIT_LBLEN_26_50   10
+#define BS97_INIT_LELEN_26_50   74
+#define BS97_INIT_PXCKD_26_50   3
+
+// 81.72Hz (Mario/ADS-based units have a 26MHz clock)
+//
+#define BS97_INIT_FSLEN_26_85   1
+#define BS97_INIT_FBLEN_26_85   4
+#define BS97_INIT_FELEN_26_85   4
+#define BS97_INIT_LSLEN_26_85   2
+#define BS97_INIT_LBLEN_26_85   1
+#define BS97_INIT_LELEN_26_85  14
+#define BS97_INIT_PXCKD_26_85   2
 
 #define BS_WFM_ADDR             0x00886     // See AM300_MMC_IMAGE_X03a/source/broadsheet_soft/bs60_init/run_bs60_init.sh.
 #define BS_CMD_ADDR             0x00000     // Base of flash holds the commands (0x00000...(BS_WFM_ADDR - 1)).
@@ -226,6 +244,7 @@ enum bs_preflight_failure
     bs_preflight_failure_cmd  = 1 << 3,  // Commands area of flash isn't valid.
     bs_preflight_failure_wf   = 1 << 4,  // Waveform area of flash isn't valid.
     bs_preflight_failure_flid = 1 << 5,  // Flash id isn't recognized.
+    bs_preflight_failure_hrdy = 1 << 6,  // HRDY signal isn't responding.
     
     bs_preflight_failure_none = 0
 };
@@ -322,18 +341,18 @@ typedef enum bs_cmd_type bs_cmd_type;
 
 struct bs_cmd_block_t
 {
-    bs_cmd          command;               // bs_cmd_XXXX
-    bs_cmd_type     type;                  // read/write
+    bs_cmd          command;                // bs_cmd_XXXX
+    bs_cmd_type     type;                   // read/write
     
-    u32             num_args;              // [io = ]command(args[0], ..., args[BS_CMD_ARGS_MAX - 1])
-    u16             args[BS_CMD_ARGS_MAX], //
-                    io;                    // 
+    u32             num_args;               // [io = ]command(args[0], ..., args[BS_CMD_ARGS_MAX - 1])
+    u16             args[BS_CMD_ARGS_MAX],  //
+                    io;                     // 
 
-    u32             data_size;             // data[0..data_size-1]
-    u8              *data;                 //
+    u32             data_size;              // data[0..data_size-1]
+    u8              *data;                  //
     
     struct
-    bs_cmd_block_t  *sub;                  // subcommand(args[0], ..., args[BS_CMD_ARGS_MAX - 1])
+    bs_cmd_block_t  *sub;                   // subcommand(args[0], ..., args[BS_CMD_ARGS_MAX - 1])
 };
 typedef struct bs_cmd_block_t bs_cmd_block_t;
 
@@ -352,6 +371,27 @@ struct bs_resolution_t
         y_hw, y_sw, y_mm;
 };
 typedef struct bs_resolution_t bs_resolution_t;
+
+struct bs_panel_init_t
+{
+    u16 hsize, vsize,
+        fslen, fblen, felen,
+        lslen, lblen, lelen,
+        pixclkdiv;
+};
+typedef struct bs_panel_init_t bs_panel_init_t;
+
+enum bs_panels
+{
+    bs_panel_60_26_50,                      // Mario-based 6.0-inch panels (26MHz input, 50Hz output).
+    bs_panel_60_26_85,                      // Mario-based 6.0-inch panels (26MHz input, 85Hz output).
+
+    bs_panel_97_26_50,                      // Mario-based 9.7-inch panels (26MHz input, 50Hz output).
+    bs_panel_97_26_85,                      // Luigi-based 9.7-inch panels (26MHz input, 85Hz output).
+    
+    num_bs_panels
+};
+typedef enum bs_panels bs_panels;
 
 // Broadsheet Host Interface Commands API (AM300_MMC_IMAGE_X03a/source/broadsheet_soft/bs_cmd/bs_cmd.h)
 //
@@ -461,27 +501,16 @@ extern void bs_cmd_ld_img_area_upd_data(u8 *data, fx_type update_mode, u16 x, u1
 extern void bs_cmd_upd_repair(void);
 
 extern unsigned long *bs_get_img_timings(int *num_timings);
-
-// Broadsheet  800x600, 6.0-inch Panel API (AM300_MMC_IMAGE_X03a/source/broadsheet_soft/bs60_init/bs60_init.h)
-//
-extern void bs60_init(int wfmaddr, bool full);
-
-extern void bs60_ld_value(u8 v);
-extern void bs60_flash(void);
-extern void bs60_white(void );
-extern void bs60_black(void);
-
-// Broadsheet 1200x825, 9.7-inch Panel API (AM300_MMC_IMAGE_X03b/source/broadsheet_soft/bs97_init/bs97_init.h)
-//
-extern void bs97_init(int wfmaddr, bool full);
-
-extern void bs97_ld_value(u8 v);
-extern void bs97_flash(void);
-extern void bs97_white(void);
-extern void bs97_black(void);
+extern void bs_set_ib_addr(u32 iba);
 
 // Broadsheet API (broadsheet.c)
 //
+extern void bs_panel_init(int wfmaddr, bool full, int size, int rate);
+
+extern void bs_flash(u16 hsize, u16 vsize);
+extern void bs_white(u16 hsize, u16 vsize );
+extern void bs_black(u16 hsize, u16 vsize);
+
 extern void bs_sw_init_controller(bool full, bool orientation, bs_resolution_t *res);
 extern bool bs_sw_init_panel(bool full);
 
@@ -519,6 +548,8 @@ extern bool bs_hw_test(void); // Similar to bsc.test_gpio() from bs_chip.cpp.
 extern void bs_hw_done(void);
 extern void bs_hw_init_dma(void);
 
+extern bool bs_hrdy_preflight(void);
+
 // Broadsheet eInk HAL API (broadsheet_hal.c)
 //
 extern unsigned char *broadsheet_get_scratchfb(void);
@@ -536,6 +567,7 @@ extern void broadsheet_set_ram_select(int ram_select);
 
 extern bool broadsheet_get_orientation(void);
 extern bool broadsheet_get_upside_down(void);
+extern void broadsheet_set_override_upd_mode(int upd_mode);
 extern int  broadsheet_get_override_upd_mode(void);
 extern bool broadsheet_get_promote_flashing_updates(void);
 

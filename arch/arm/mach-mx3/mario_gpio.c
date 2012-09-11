@@ -16,6 +16,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/delay.h>
+#include <linux/irq.h>
 #include <asm/io.h>
 #include <asm/hardware.h>
 #include <asm/arch/gpio.h>
@@ -504,17 +505,17 @@ void gpio_sdhc_active(int module)
 				  INPUTCONFIG_FUNC);
 
 		mxc_iomux_set_pad(MX31_PIN_SD1_CLK,
-				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST));
+				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST | PAD_CTL_47K_PU));
 		mxc_iomux_set_pad(MX31_PIN_SD1_CMD,
-				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST));
+				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST | PAD_CTL_47K_PU));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA0,
-				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST));
+				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST | PAD_CTL_47K_PU));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA1,
-				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST));
+				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST | PAD_CTL_47K_PU));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA2,
-				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST));
+				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST | PAD_CTL_47K_PU));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA3,
-				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST));
+				  (PAD_CTL_DRV_MAX | PAD_CTL_SRE_FAST | PAD_CTL_47K_PU));
 		break;
 
 	case 1:     // SD/MMC Card Slot on Mario
@@ -576,17 +577,17 @@ void gpio_sdhc_inactive(int module)
 				  INPUTCONFIG_NONE);
 
 		mxc_iomux_set_pad(MX31_PIN_SD1_CLK,
-				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW));
+				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW | PAD_CTL_100K_PD));
 		mxc_iomux_set_pad(MX31_PIN_SD1_CMD,
-				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW));
+				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW | PAD_CTL_100K_PD));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA0,
-				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW));
+				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW | PAD_CTL_100K_PD));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA1,
-				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW));
+				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW | PAD_CTL_100K_PD));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA2,
-				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW));
+				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW | PAD_CTL_100K_PD));
 		mxc_iomux_set_pad(MX31_PIN_SD1_DATA3,
-				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW));
+				  (PAD_CTL_DRV_NORMAL | PAD_CTL_SRE_SLOW | PAD_CTL_100K_PD));
 		break;
 
 	case 1:
@@ -720,6 +721,112 @@ void slcd_gpio_config(void)
 }
 
 EXPORT_SYMBOL(slcd_gpio_config);
+
+/*!
+ * Setup pins for Broadsheet/ISIS.
+ */
+#define BROADSHEET_HIRQ_LINE		MX31_PIN_SD_D_CLK
+#define BROADSHEET_HRST_LINE		MX31_PIN_SD_D_IO
+#define BROADSHEET_HRDY_LINE		MX31_PIN_SD_D_I
+#define BROADSHEET_RESET_VAL		0
+#define BROADSHEET_NON_RESET_VAL	1
+#define WR_GPIO_LINE(addr, val)		mxc_set_gpio_dataout(addr, val);
+#define BROADSHEET_HIRQ_IRQ		IOMUX_TO_IRQ(BROADSHEET_HIRQ_LINE)
+
+#define BROADSHEET_GPIO_INIT_SUCCESS	0
+#define BROADSHEET_HIRQ_RQST_FAILURE	1
+#define BROADSHEET_HIRQ_INIT_FAILURE	2
+#define BROADSHEET_HRST_INIT_FAILURE	3
+#define BROADSHEET_HRDY_INIT_FAILURE	4
+
+int broadsheet_gpio_config(irq_handler_t broadsheet_irq_handler, char *broadsheet_irq_handler_name)
+{
+	int result = BROADSHEET_GPIO_INIT_SUCCESS;
+	
+	gpio_lcd_active();
+	slcd_gpio_config();
+	
+	if ( broadsheet_irq_handler )
+	{
+		// Set up IRQ for for Broadsheet HIRQ line.
+		//
+		disable_irq(BROADSHEET_HIRQ_IRQ);
+		set_irq_type(BROADSHEET_HIRQ_IRQ, IRQF_TRIGGER_RISING);
+		
+		if ( request_irq(BROADSHEET_HIRQ_IRQ, broadsheet_irq_handler, 0, broadsheet_irq_handler_name, NULL) )
+			result = BROADSHEET_HIRQ_RQST_FAILURE;
+		else
+		{
+			if ( mxc_request_gpio(BROADSHEET_HIRQ_LINE) )
+				result = BROADSHEET_HIRQ_INIT_FAILURE;
+			else
+			{
+				// Set HIRQ pin as input.
+				//
+				mxc_set_gpio_direction(BROADSHEET_HIRQ_LINE, 1);
+			}
+		}
+	}
+	
+	if ( BROADSHEET_GPIO_INIT_SUCCESS == result )
+	{
+		if ( mxc_request_gpio(BROADSHEET_HRST_LINE) )
+			result = BROADSHEET_HRST_INIT_FAILURE;
+		else
+		{
+			// Set HRST pin as an output and initialize it to zero (it's active LOW).
+			//
+			mxc_set_gpio_direction(BROADSHEET_HRST_LINE, 0);
+			mxc_set_gpio_dataout(BROADSHEET_HRST_LINE, 0);
+		}
+	}
+	
+	if ( BROADSHEET_GPIO_INIT_SUCCESS == result )
+	{
+		if ( mxc_request_gpio(BROADSHEET_HRDY_LINE) )
+			result = BROADSHEET_HRDY_INIT_FAILURE;
+		else
+		{
+			// Set HRDY pin as an input.
+			//
+			mxc_set_gpio_direction(BROADSHEET_HRDY_LINE, 1);
+		}
+	}
+	
+	return ( result );
+}
+
+void broadsheet_gpio_disable(int disable_bs_irq)
+{
+	if ( disable_bs_irq )
+	{
+		disable_irq(BROADSHEET_HIRQ_IRQ);
+		free_irq(BROADSHEET_HIRQ_IRQ, NULL);
+		
+		mxc_free_gpio(BROADSHEET_HIRQ_LINE);
+	}
+	
+	mxc_free_gpio(BROADSHEET_HRST_LINE);
+	mxc_free_gpio(BROADSHEET_HRDY_LINE);
+}
+
+void broadsheet_reset(void)
+{
+	WR_GPIO_LINE(BROADSHEET_HRST_LINE, BROADSHEET_RESET_VAL);	// Assert RST.
+	mdelay(100);	// Pause 100 ms during reset.
+	WR_GPIO_LINE(BROADSHEET_HRST_LINE, BROADSHEET_NON_RESET_VAL);	// Clear RST.
+	mdelay(400);	// Pause 400 ms to allow Broasheet time to come up.
+}
+
+int broadsheet_ready(void)
+{
+	return ( mxc_get_gpio_datain(BROADSHEET_HRDY_LINE) );
+}
+
+EXPORT_SYMBOL(broadsheet_gpio_config);
+EXPORT_SYMBOL(broadsheet_gpio_disable);
+EXPORT_SYMBOL(broadsheet_ready);
+EXPORT_SYMBOL(broadsheet_reset);
 
 /*!
  * Setup GPIO for ATA interface

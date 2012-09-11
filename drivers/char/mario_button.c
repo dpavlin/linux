@@ -73,6 +73,7 @@ static void mario_button_handler(void *param)
 	int i;
 	struct timeval tv;
 	s64 timestamp;
+	int pb_counter = 100;   /* Monitor battery cut */
 
 	/*
 	 * reset button - restart
@@ -114,6 +115,8 @@ static void mario_button_handler(void *param)
 	if (!press_event)
 		do {
 			msleep(50);
+			if (--pb_counter == 0)
+				printk(KERN_EMERG "bcut: C def:pcut:: pending battery cut\n");
 			pmic_read_reg(REG_INTERRUPT_SENSE_1, &sense, (1 << 3));
 		} while (!(sense & (1 << 3)));
 
