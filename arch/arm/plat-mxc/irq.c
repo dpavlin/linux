@@ -374,9 +374,9 @@ void __init mxc_init_irq(void)
 	reg |= (0xF << 28);
 	__raw_writel(reg, AVIC_NIPRIORITY6);
 
-	reg = __raw_readl(AVIC_NIPRIORITY4);
-	reg |= (0xF << 8);
-	__raw_writel(reg, AVIC_NIPRIORITY4);
+	reg = __raw_readl(AVIC_NIPRIORITY1);
+	reg |= (0xF << 4);
+	__raw_writel(reg, AVIC_NIPRIORITY1);
 
 	printk(KERN_INFO "MXC IRQ initialized\n");
 }
