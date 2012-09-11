@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_waveform.h --
  *  eInk frame buffer device HAL broadsheet waveform defs
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -19,20 +19,21 @@
 #define EINK_ADDR_CHECKSUM2             0x002F  // 1 byte  (checksum of bytes 0x20-0x2E)
 #define EINK_ADDR_CHECKSUM              0x0000  // 4 bytes (was EINK_ADDR_MFG_DATA_DEVICE)
 #define EINK_ADDR_FILESIZE              0x0004  // 4 bytes (was EINK_ADDR_MFG_DATA_DISPLAY)
-#define EINK_ADDR_MFG_CODE              0x0015  // 1 byte  (0x01=PVI, 0x02=LGD)
+#define EINK_ADDR_MFG_CODE              0x0015  // 1 byte  (0x01=PVI, 0x02=LGD, 0x03=P/H)
 #define EINK_ADDR_SERIAL_NUMBER         0x0008  // 4 bytes (little-endian)
 
-#define EINK_ADDR_RUN_TYPE              0x000C  // 1 byte  (0x00=[B]aseline, 0x01=[T]est/trial, 0x02=[P]roduction, 0x03=[Q]ualification)
+#define EINK_ADDR_RUN_TYPE              0x000C  // 1 byte  (0x00=[B]aseline, 0x01=[T]est/trial, 0x02=[P]roduction, 0x03=[Q]ualification, 0x04=V110[A])
 
-#define EINK_ADDR_FPL_PLATFORM          0x000D  // 1 byte  (0x00=2.0, 0x01=2.1, 0x02=2.3; 0x03=Vizplex 110; other values undefined)
+#define EINK_ADDR_FPL_PLATFORM          0x000D  // 1 byte  (0x00=2.0, 0x01=2.1, 0x02=2.3; 0x03=Vizplex 110, 0x04=V110A; other values undefined)
 #define EINK_ADDR_FPL_SIZE              0x0014  // 1 byte  (0x32=5", 0x3C=6", 0x50=8", 0x61=9.7")
 #define EINK_ADDR_FPL_LOT               0x000E  // 2 bytes (little-endian)
 #define EINK_ADDR_ADHESIVE_RUN_NUM      0x0010  // 1 byte  (mode version when EINK_ADDR_FPL_PLATFORM is 0x03 or later)
-#define EINK_ADDR_MODE_VERSION          0x0010  // 1 byte  (0x01 -> 0 INIT, 1 DU, 2 GC16, 3 GC4)
+#define EINK_ADDR_MODE_VERSION          0x0010  // 1 byte  (0x00=MU/GU/GC/PU, 0x01=DU/GC4/GC16, 0x02=DU/GC4D/GC16/GC4)
 
 #define EINK_ADDR_WAVEFORM_VERSION      0x0011  // 1 byte  (BCD)
 #define EINK_ADDR_WAVEFORM_SUBVERSION   0x0012  // 1 byte  (BCD)
 #define EINK_ADDR_WAVEFORM_TYPE         0x0013  // 1 byte  (0x0B=TE, 0x0E=WE; other values undefined)
+#define EINK_ADDR_WAVEFORM_TUNING_BIAS  0x0016  // 1 byte  (0x00=Standard, 0x01=Increased DS blooming)
 
 #define EINK_FPL_SIZE_60                0x3C    // 6.0-inch panel,  800x600
 #define EINK_FPL_SIZE_97                0x61    // 9.7-inch panel, 1200x825
@@ -47,7 +48,8 @@ struct broadsheet_waveform_info_t
                     fpl_size,                   // EINK_ADDR_FPL_SIZE
                     adhesive_run_number,        // EINK_ADDR_ADHESIVE_RUN_NUM
                     mode_version,               // EINK_ADDR_MODE_VERSION
-                    mfg_code;                   // EINK_ADDR_MFG_CODE
+                    mfg_code,                   // EINK_ADDR_MFG_CODE
+                    tuning_bias;                // EINK_ADDR_WAVEFORM_TUNING_BIAS
 
     unsigned short  fpl_lot;                    // EINK_ADDR_FPL_LOT
     
@@ -64,7 +66,8 @@ struct broadsheet_waveform_t
                     type,
                     run_type,
                     mode_version,
-                    mfg_code;
+                    mfg_code,
+                    tuning_bias;
     unsigned long   serial_number;
     
     bool            parse_wf_hex;
