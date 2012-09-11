@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_waveform.h --
  *  eInk frame buffer device HAL broadsheet waveform defs
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2009 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -19,7 +19,7 @@
 #define EINK_ADDR_CHECKSUM2             0x002F  // 1 byte  (checksum of bytes 0x20-0x2E)
 #define EINK_ADDR_CHECKSUM              0x0000  // 4 bytes (was EINK_ADDR_MFG_DATA_DEVICE)
 #define EINK_ADDR_FILESIZE              0x0004  // 4 bytes (was EINK_ADDR_MFG_DATA_DISPLAY)
-#define EINK_ADDR_MFG_CODE              0x0015  // 1 byte  (0x01=PVI, 0x02=LGD, 0x03=P/H)
+#define EINK_ADDR_MFG_CODE              0x0015  // 1 byte  (0x00..0xFF -> M00..MFF)
 #define EINK_ADDR_SERIAL_NUMBER         0x0008  // 4 bytes (little-endian)
 
 #define EINK_ADDR_RUN_TYPE              0x000C  // 1 byte  (0x00=[B]aseline, 0x01=[T]est/trial, 0x02=[P]roduction, 0x03=[Q]ualification, 0x04=V110[A])

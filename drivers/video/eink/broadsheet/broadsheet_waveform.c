@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_waveform.c --
  *  eInk frame buffer device HAL broadsheet waveform code
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2009 Amazon Technologies
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -41,12 +41,6 @@ enum panel_sizes
 };
 typedef enum panel_sizes panel_sizes;
 
-enum mfg_codes
-{
-    undefined_mfg_code, pvi, lgd, pvi_hydis, unknown_mfg_code, num_mfg_codes
-};
-typedef enum mfg_codes mfg_codes;
-
 enum tuning_biases
 {
     standard_bias, increased_ds_blooming, unknown_tuning_bias, num_tuning_biases
@@ -76,11 +70,6 @@ static char *panel_size_names[num_panel_sizes] =
     "50", "60", "80", "97", "??"
 };
 
-static char *mfg_code_names[num_mfg_codes] =
-{
-    "???", "PVI", "LGD", "P/H", "???"
-};
-
 static char *tuning_bias_names[num_tuning_biases] = 
 {
     "S", "D", "?"
@@ -94,7 +83,7 @@ static char *tuning_bias_names[num_tuning_biases] =
     (((b == r) || (p == r)) && (0 != s))
 
 #define has_valid_mfg_code(c) \
-    (IN_RANGE(c, pvi, pvi_hydis))
+    true
 
 #define BS_CHECKSUM(c1, c2) (((c2) << 16) | (c1))
 
@@ -391,9 +380,9 @@ char *broadsheet_get_waveform_version_string(void)
     temp_string[0] = '\0';
 
     if ( valid_mfg_code && valid_serial_number )
-        sprintf(temp_string, " (%s, S/N %ld)", mfg_code_names[waveform.mfg_code], waveform.serial_number);
+        sprintf(temp_string, " (M%02X, S/N %ld)", waveform.mfg_code, waveform.serial_number);
     else if ( valid_mfg_code )
-            sprintf(temp_string, " (%s)", mfg_code_names[waveform.mfg_code]);
+            sprintf(temp_string, " (M%02X)", waveform.mfg_code);
         else if ( valid_serial_number )
                 sprintf(temp_string, " (S/N %ld)", waveform.serial_number);
 
