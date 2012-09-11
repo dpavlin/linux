@@ -30,6 +30,7 @@ extern int einkfb_power_timer_delay;
 
 unsigned long einkfb_logging = einkfb_logging_default;
 bool einkfb_flash_mode = false;
+bool einkfb_reset = false;
 
 #ifdef MODULE
 module_param_named(einkfb_logging, einkfb_logging, long, S_IRUGO);
@@ -185,6 +186,20 @@ static int update_display_write(struct file *file, const char __user *buf, unsig
 			case PROC_EINK_PROGRESSBAR_BADGE:
 			    if (m > 1) {
 					cmd = FBIO_EINK_PROGRESSBAR_BADGE;
+					arg = n[1];
+			    }
+			    break;
+			    
+			case PROC_EINK_PROGRESSBAR_BACKGROUND:
+			    if (m > 1) {
+					cmd = FBIO_EINK_PROGRESSBAR_BACKGROUND;
+					arg = n[1];
+			    }
+			    break;
+		    
+		    case PROC_EINK_SET_DISPLAY_ORIENTATION:
+			    if (m > 1) {
+					cmd = FBIO_EINK_SET_DISPLAY_ORIENTATION;
 					arg = n[1];
 			    }
 			    break;
@@ -388,6 +403,59 @@ static ssize_t store_einkfb_logging(FB_DSTOR_PARAMS)
 	return ( result );
 }
 
+// /sys/devices/platform/eink_fb0/reset (read/write)
+//
+bool einkfb_get_reset(void)
+{
+    return ( einkfb_reset );
+}
+
+void einkfb_set_reset(bool reset)
+{
+    einkfb_reset = reset ? true : false;
+    
+    if ( reset )
+    {
+	    mm_segment_t saved_fs = get_fs();
+	    int einkfb_reset_file;
+	    
+	    set_fs(get_ds());
+	    
+	    einkfb_reset_file = sys_open(EINKFB_RESET_FILE, O_WRONLY, 0);
+	    
+	    if ( 0 <= einkfb_reset_file )
+	    {
+	        sys_write(einkfb_reset_file, "1", 1);
+	        sys_close(einkfb_reset_file);
+	    }
+    
+        set_fs(saved_fs);
+    }
+}
+
+static ssize_t show_einkfb_reset(FB_DSHOW_PARAMS)
+{
+    return ( sprintf(buf, "%d\n", einkfb_reset) );
+}
+
+static ssize_t store_einkfb_reset(FB_DSTOR_PARAMS)
+{
+	char reset_string[16] = { 0 };
+	int result = -EINVAL;
+	
+	if ( (16 > count) && sscanf(buf, "%s", reset_string) )
+	{
+		bool reset = simple_strtoul(reset_string, NULL, 0) ? true : false;
+		
+		if ( einkfb_reset != reset )
+		    einkfb_set_reset(reset);
+		
+		result = count;
+	}
+
+	return ( result );
+}
+
 #if PRAGMAS
     #pragma mark -
     #pragma mark Local Utilities
@@ -403,6 +471,7 @@ static struct proc_dir_entry *einkfb_create_proc_parent(void)
 static DEVICE_ATTR(power_timer_delay, DEVICE_MODE_RW,   show_einkfb_power_timer_delay,  store_einkfb_power_timer_delay);
 static DEVICE_ATTR(flash_mode,        DEVICE_MODE_RW,   show_einkfb_flash_mode,         store_einkfb_flash_mode);
 static DEVICE_ATTR(logging,           DEVICE_MODE_RW,   show_einkfb_logging,            store_einkfb_logging);
+static DEVICE_ATTR(reset,             DEVICE_MODE_RW,   show_einkfb_reset,              store_einkfb_reset);
 
 static void einkfb_create_hal_proc_entries(void)
 {
@@ -424,6 +493,7 @@ static void einkfb_create_hal_proc_entries(void)
 	FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_power_timer_delay);
 	FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_flash_mode);
 	FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_logging);
+	FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_reset);
 }
 
 static void einkfb_remove_hal_proc_entries(void)
@@ -441,6 +511,7 @@ static void einkfb_remove_hal_proc_entries(void)
     device_remove_file(&info.dev->dev, &dev_attr_power_timer_delay);
     device_remove_file(&info.dev->dev, &dev_attr_flash_mode);
     device_remove_file(&info.dev->dev, &dev_attr_logging);
+    device_remove_file(&info.dev->dev, &dev_attr_reset);
 }
 
 #if PRAGMAS
@@ -610,8 +681,10 @@ void einkfb_remove_proc_entries(void)
     }
 }
 
-EXPORT_SYMBOL(einkfb_logging);
 EXPORT_SYMBOL(einkfb_get_flash_mode);
+EXPORT_SYMBOL(einkfb_logging);
+EXPORT_SYMBOL(einkfb_get_reset);
+EXPORT_SYMBOL(einkfb_set_reset);
 EXPORT_SYMBOL(einkfb_read_which);
 EXPORT_SYMBOL(einkfb_write_which);
 EXPORT_SYMBOL(einkfb_proc_sysfs_rw);

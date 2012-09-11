@@ -23,28 +23,28 @@
 #define INT_IRQ           IOMUX_TO_IRQ(int_gpio)
 
 // Strings sent by driver to uevent
-#define ORIENTATION_STRING_UP         "orientation=up"
-#define ORIENTATION_STRING_DOWN       "orientation=down"
-#define ORIENTATION_STRING_LEFT       "orientation=left"
-#define ORIENTATION_STRING_RIGHT      "orientation=right"
-#define ORIENTATION_STRING_FACE_UP    "orientation=face_up"
-#define ORIENTATION_STRING_FACE_DOWN  "orientation=face_down"
-#define ORIENTATION_STRING_FREE_FALL  "orientation=free_fall"
-#define ORIENTATION_STRING_SHAKE      "orientation=shake"
-#define ORIENTATION_STRING_TAP        "orientation=tap"
+#define ORIENTATION_STRING_UP           "orientation=up"
+#define ORIENTATION_STRING_DOWN         "orientation=down"
+#define ORIENTATION_STRING_LEFT         "orientation=left"
+#define ORIENTATION_STRING_RIGHT        "orientation=right"
+#define ORIENTATION_STRING_FACE_UP      "orientation=face_up"
+#define ORIENTATION_STRING_FACE_DOWN    "orientation=face_down"
+#define ORIENTATION_STRING_SHAKE        "orientation=shake"
+#define ORIENTATION_STRING_TAP          "orientation=tap"
+#define ORIENTATION_STRING_DOUBLE_WAVE  "orientation=double_wave"
 
 // Strings sent by driver to proc file read
-#define PROC_ORIENTATION_STRING_UP         "orientationUp"
-#define PROC_ORIENTATION_STRING_DOWN       "orientationDown"
-#define PROC_ORIENTATION_STRING_LEFT       "orientationLeft"
-#define PROC_ORIENTATION_STRING_RIGHT      "orientationRight"
-#define PROC_ORIENTATION_STRING_FACE_UP    "orientationFaceUp"
-#define PROC_ORIENTATION_STRING_FACE_DOWN  "orientationFaceDown"
-#define PROC_ORIENTATION_STRING_FREE_FALL  "orientationFreeFall"
-#define PROC_ORIENTATION_STRING_UNKNOWN    "orientationUnknown"
-#define PROC_ORIENTATION_STRING_INVALID    "orientationInvalid"
-#define PROC_ORIENTATION_STRING_SHAKE      "orientationShake"
-#define PROC_ORIENTATION_STRING_TAP        "orientationTap"
+#define PROC_ORIENTATION_STRING_UP           "orientationUp"
+#define PROC_ORIENTATION_STRING_DOWN         "orientationDown"
+#define PROC_ORIENTATION_STRING_LEFT         "orientationLeft"
+#define PROC_ORIENTATION_STRING_RIGHT        "orientationRight"
+#define PROC_ORIENTATION_STRING_FACE_UP      "orientationFaceUp"
+#define PROC_ORIENTATION_STRING_FACE_DOWN    "orientationFaceDown"
+#define PROC_ORIENTATION_STRING_UNKNOWN      "orientationUnknown"
+#define PROC_ORIENTATION_STRING_INVALID      "orientationInvalid"
+#define PROC_ORIENTATION_STRING_SHAKE        "orientationShake"
+#define PROC_ORIENTATION_STRING_TAP          "orientationTap"
+#define PROC_ORIENTATION_STRING_DOUBLE_WAVE  "orientationDoubleWave"
 
 #define OUTPUTCONFIG_GPIO 0
 #define INPUTCONFIG_GPIO  1
@@ -146,11 +146,12 @@ enum {
    READ_I2C_REG
 };
 
-// States for device orientation polling state-machine
+// States for device orientation state-machine
 enum {
-   ORIENTATION_INIT,
-   ORIENTATION_IDLE,
-   ORIENTATION_COUNTING
+   IRQ_UNKNOWN,
+   IRQ_READ_ORIENTATION,
+   IRQ_IGNORE,
+   IRQ_WAIT_FOR_READING
 }; 
 
 // States for device polling state-machine
@@ -171,7 +172,6 @@ enum {
    DEVICE_RIGHT,
    DEVICE_FACE_UP,
    DEVICE_FACE_DOWN,
-   DEVICE_FREE_FALL
 }; 
 
 // External function definitions

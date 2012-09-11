@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet.h --
  *  eInk frame buffer device HAL broadsheet defs
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2008 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -35,25 +35,40 @@
 #define BS_UPD_MODE_GC16        2       //  GC/GU @4bpp -> GC16
 #define BS_UPD_MODE_GC4         3       //  GC/GU @2bpp -> GC4
 
+#define BS_PIX_CNFG_REG         0x015E  // Host Memory Access Pixel Swap Configuration
+#define BS_PIX_DEFAULT          0       // 15, 14, 13, 12, ..., 03, 02, 01, 00
+#define BS_PIX_REVERSE          1       // 00, 01, 02, 03, ..., 12, 13, 14, 15
+#define BS_PIX_SWAPPED          2       // 07, 06, 05, 04, ..., 11, 10, 09, 08
+#define BS_PIX_REVSWAP          3       // 08, 09, 10, 11, ..., 04, 05, 06, 07
+
 #define BS_SDR_IMG_MSW_REG      0x0312  // Host Raw Memory Access Address bits 16-31
 #define BS_SDR_IMG_LSW_REG      0x0310  // Host Raw Memory Access Address bits  0-15
 
+#define BS_UPD_BUF_CFG_REG      0x0330  // Update Buffer Configuration Register
+#define BS_LAST_WF_USED(v)      (((v) & 0x0F00) >> 8)
+
+#define BS_AUTO_WF_REG_DU       0x03A0  // Auto Waveform Mode Configuration Register DU   [0, 15]
+#define BS_AUTO_WF_REG_GC4      0x03A2  // Auto Waveform Mode Configuration Register GC4  [0, 5, 10, 15]
+#define BS_AUTO_WF_REG_GC16     0x03A6  // Auto Waveform Mode Configuration Register GC16 [0..15]
+#define BS_AUTO_WF_MODE_DU      ((15 << 12) | (3 << 4) | BS_UPD_MODE_DU)
+#define BS_AUTO_WF_MODE_GC4     ((15 << 12) | (3 << 4) | BS_UPD_MODE_GC4)
+#define BS_AUTO_WF_MODE_GC16    ((15 << 12) | (3 << 4) | BS_UPD_MODE_GC16)
+
 #define BS_REV_CODE_REG         0x0000  // Revision Code Register
-#define BS_PRD_CODE_REG         0x0002  // Product Code Register
+#define BS_PRD_CODE_REG         0x0002  // Product  Code Register
+
+#define BS_REV_CODE_UNKNOWN     0xFFFF  // Revision Code Not Read Yet
+#define BS_PRD_CODE_UNKNOWN     0xFFFF  // Product  Code Not Read Yet
 
 #define BS_PRD_CODE             0x0047  // All Broadsheets
 #define BS_REV_ASIC_B00         0x0000  // S1D13521 B00
 #define BS_REV_ASIC_B01         0x0100  // S1D13521 B01
 
-#define BS_ASIC_B00()           \
-    ((BS_PRD_CODE == BS_CMD_RD_REG(BS_PRD_CODE_REG)) && (BS_REV_ASIC_B00 == BS_CMD_RD_REG(BS_REV_CODE_REG)))
-#define BS_ASIC_B01()           \
-    ((BS_PRD_CODE == BS_CMD_RD_REG(BS_PRD_CODE_REG)) && (BS_REV_ASIC_B01 == BS_CMD_RD_REG(BS_REV_CODE_REG)))
+#define BS_PRD_CODE_ISIS        0x004D  // All ISISes
 
-#define BS_ASIC()               \
-    (BS_ASIC_B00() || BS_ASIC_B01())
-#define BS_FPGA()               \
-    ((BS_PRD_CODE == BS_CMD_RD_REG(BS_PRD_CODE_REG)) && !BS_ASIC())
+#define BS_ISIS()               bs_isis()
+#define BS_ASIC()               bs_asic()
+#define BS_FPGA()               bs_fpga()
 
 #define BS_CMD_Q_ITERATE_ALL     (-1)   // For use with bs_iterate_cmd_queue() &...
 #define BS_CMD_Q_DEBUG           5      // ...broadsheet_get_recent_commands().
@@ -75,6 +90,9 @@
 #define FULL_BRINGUP_PANEL      FULL_BRINGUP
 #define DONT_BRINGUP_PANEL      DONT_BRINGUP
 
+#define DONT_DEALLOC            false
+#define DEALLOC                 true
+
 #define UPD_DATA_RESTORE        true
 #define UPD_DATA_NORMAL         false
 
@@ -94,9 +112,8 @@
 #define BS60_INIT_SDRV_CFG      (100 | (1 << 8) | (1 << 9))
 #define BS60_INIT_GDRV_CFG      0x2
 #define BS60_INIT_LUTIDXFMT     (4 | (1 << 7))
-
-#define BS60_MM_800             121
-#define BS60_MM_600              91
+#define BS60_INIT_PIX_INVRT     (1 << 4)
+#define BS60_INIT_AUTO_WF       (1 << 6)
 
 // Broadsheet 1200x825, 9.7-inch Panel Support (AM300_MMC_IMAGE_X03b/source/broadsheet_soft/bs97_init/bs97_init.h)
 //
@@ -119,14 +136,17 @@
 #define BS97_INIT_SDRV_CFG      (100 | (1 << 8) | (1 << 9))
 #define BS97_INIT_GDRV_CFG      0x2
 #define BS97_INIT_LUTIDXFMT     (4 | (1 << 7))
-
-#define BS97_MM_1200            203
-#define BS97_MM_825             139
+#define BS97_INIT_PIX_INVRT     (1 << 4)
+#define BS97_AUTO_WF            (1 << 6)
 
 #define BS_WFM_ADDR             0x00886     // See AM300_MMC_IMAGE_X03a/source/broadsheet_soft/bs60_init/run_bs60_init.sh.
 #define BS_CMD_ADDR             0x00000     // Base of flash holds the commands (0x00000...(BS_WFM_ADDR - 1)).
 #define BS_TST_ADDR_128K        0x1E000     // Test area (last 8K of 128K).
 #define BS_TST_ADDR_256K        0x3E000     // Test area (last 8K of 256K).
+
+#define BS_WFM_ADDR_ISIS        0xAFC80     // ISIS waveform SDRAM location.
+#define BS_WFM_ADDR_FLASH       0           // ISIS waveform in flash instead..
+#define BS_WFM_ADDR_SDRAM       1           // ...of in SDRAM.
 
 #define BS_INIT_DISPLAY_FAST    0x74736166  // Bring the panel up without going through cycle-back-to-white process.
 #define BS_INIT_DISPLAY_SLOW	0x776F6C73  // Bring the panel up by manually cycling it back to white.
@@ -240,6 +260,7 @@ enum bs_cmd
     bs_cmd_INIT_DSPE_CFG        = 0x0009,   BS_CMD_ARGS_DSPE_CFG        = 5,
     bs_cmd_INIT_DSPE_TMG        = 0x000A,   BS_CMD_ARGS_DSPE_TMG        = 5,
     bs_cmd_SET_ROTMODE          = 0x000B,   BS_CMD_ARGS_SET_ROTMODE     = 1,
+    bs_cmd_INIT_WAVEFORMDEV     = 0x000C,   BS_CMD_ARGS_INIT_WFDEV      = 1,
 
     // Register and Memory Access Commands
     //
@@ -317,18 +338,12 @@ typedef struct bs_cmd_queue_elem_t bs_cmd_queue_elem_t;
 
 typedef void (*bs_cmd_queue_iterator_t)(bs_cmd_queue_elem_t *bs_cmd_queue_elem);
 
-struct bs_resolution_t
-{
-    u32 x_hw, x_sw, x_mm,
-        y_hw, y_sw, y_mm;
-};
-typedef struct bs_resolution_t bs_resolution_t;
-
 // Broadsheet Host Interface Commands API (AM300_MMC_IMAGE_X03a/source/broadsheet_soft/bs_cmd/bs_cmd.h)
 //
 // System Commands
 //
 extern void bs_cmd_init_cmd_set(u16 arg0, u16 arg1, u16 arg2);
+extern void bs_cmd_init_cmd_set_isis(u32 bc, u8 *data);
 extern void bs_cmd_init_pll_stby(u16 cfg0, u16 cfg1, u16 cfg2);
 extern void bs_cmd_run_sys(void);
 extern void bs_cmd_stby(void);
@@ -339,6 +354,7 @@ extern void bs_cmd_init_sdram(u16 cfg0, u16 cfg1, u16 cfg2, u16 cfg3);
 extern void bs_cmd_init_dspe_cfg(u16 hsize, u16 vsize, u16 sdcfg, u16 gfcfg, u16 lutidxfmt);
 extern void bs_cmd_init_dspe_tmg(u16 fs, u16 fbe, u16 ls, u16 lbe, u16 pixclkcfg);
 extern void bs_cmd_set_rotmode(u16 rotmode);
+extern void bs_cmd_init_waveform(u16 wfdev);
 
 // Register and Memory Access Commands
 //
@@ -413,6 +429,9 @@ extern void bs_cmd_wr_sdr(u32 ma, u32 bc, u8 *data);
 extern int  bs_cmd_get_lut_auto_sel_mode(void);
 extern void bs_cmd_set_lut_auto_sel_mode(int v);
 
+extern int  bs_cmd_get_wf_auto_sel_mode(void);
+extern void bs_cmd_set_wf_auto_sel_mode(int v);
+
 // Lab126
 //
 extern u32  bs_cmd_get_sdr_img_base(void);
@@ -445,11 +464,11 @@ extern void bs97_black(void);
 
 // Broadsheet API (broadsheet.c)
 //
-extern void bs_sw_init_controller(bool full, bool orientation, bs_resolution_t *res);
+extern void bs_sw_init_controller(bool full, bool orientation, u32 *xres_hw, u32 *xres_sw, u32 *yres_hw, u32 *yres_sw);
 extern bool bs_sw_init_panel(bool full);
 
 extern bool bs_sw_init(bool controller_full, bool panel_full);
-extern void bs_sw_done(void);
+extern void bs_sw_done(bool dealloc);
 
 extern bs_preflight_failure bs_get_preflight_failure(void);
 extern bool bs_preflight_passes(void);
@@ -479,7 +498,7 @@ extern void bs_wr_one(u16 data);
 extern bool bs_hw_init(void); // Similar to bsc.init_gpio() from bs_chip.cpp.
 extern bool bs_hw_test(void); // Similar to bsc.test_gpio() from bs_chip.cpp.
 
-extern void bs_hw_done(void);
+extern void bs_hw_done(bool dealloc);
 
 // Broadsheet eInk HAL API (broadsheet_hal.c)
 //
@@ -507,6 +526,8 @@ extern int broadsheet_get_recent_commands(char *page, int max_commands);
 
 // Broadsheet Read/Write SDRAM API (broadsheet.c)
 //
+extern int broadsheet_get_ram_size(void);
+
 extern int broadsheet_read_from_ram(unsigned long addr, unsigned char *data, unsigned long size);
 extern int broadsheet_read_from_ram_byte(unsigned long addr, unsigned char *data);
 extern int broadsheet_read_from_ram_short(unsigned long addr, unsigned short *data);
@@ -518,6 +539,8 @@ extern int broadsheet_program_ram(unsigned long start_addr, unsigned char *buffe
 //
 #include "broadsheet_waveform.h"
 #include "broadsheet_commands.h"
+
+extern bool broadsheet_supports_flash(void);
 
 extern int broadsheet_read_from_flash(unsigned long addr, unsigned char *data, unsigned long size);
 extern int broadsheet_read_from_flash_byte(unsigned long addr, unsigned char *data);

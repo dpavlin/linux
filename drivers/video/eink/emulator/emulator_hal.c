@@ -23,6 +23,12 @@
 
 #define EMULATOR_SIZE   BPP_SIZE((XRES_6*YRES_6), BPP)
 
+#define IS_PORTRAIT()                           \
+    (EINK_ORIENT_PORTRAIT  == emu_orientation)
+
+#define IS_LANDSCAPE()                          \
+    (EINK_ORIENT_LANDSCAPE == emu_orientation)
+
 static struct fb_var_screeninfo emulator_var __INIT_DATA =
 {
     .xres               = XRES_6,
@@ -135,9 +141,59 @@ static bool emulator_sw_init(struct fb_var_screeninfo *var, struct fb_fix_screen
     return ( EINKFB_SUCCESS );
 }
 
+static bool emulator_set_display_orientation(orientation_t orientation)
+{
+    bool rotate = false;
+    
+    switch ( orientation )
+    {
+        case orientation_portrait:
+        case orientation_portrait_upside_down:
+            if ( !IS_PORTRAIT() )
+            {
+                emu_orientation = EINK_ORIENT_PORTRAIT;
+                rotate = true;
+            }
+        break;
+        
+        case orientation_landscape:
+        case orientation_landscape_upside_down:
+            if ( !IS_LANDSCAPE() )
+            {
+                emu_orientation = EINK_ORIENT_LANDSCAPE;
+                rotate = true;
+            }
+        break;
+    }
+    
+    return ( rotate );
+}
+
+static orientation_t emulator_get_display_orientation(void)
+{
+    orientation_t orientation;
+    
+    switch ( emu_orientation )
+    {
+        case EINK_ORIENT_PORTRAIT:
+        default:
+             orientation = orientation_portrait;
+        break;
+        
+        case EINK_ORIENT_LANDSCAPE:
+            orientation = orientation_landscape;
+        break;
+    }
+    
+    return ( orientation );
+}
+
 static einkfb_hal_ops_t emulator_hal_ops =
 {
     .hal_sw_init = emulator_sw_init,
+    
+    .hal_set_display_orientation = emulator_set_display_orientation,
+    .hal_get_display_orientation = emulator_get_display_orientation
 };
 
 static __INIT_CODE int emulator_hal_init(void)

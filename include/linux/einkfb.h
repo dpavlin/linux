@@ -10,9 +10,14 @@
 #define EINK_WHITE              0x00    // For whacking all the pixels in a...
 #define EINK_BLACK              0xFF    // ...byte (8, 4, 2, or 1) at once.
 
+#define EINK_ORIENT_LANDSCAPE   1
+#define EINK_ORIENT_PORTRAIT    0
+
 #define BPP_SIZE(r, b)          (((r)*(b))/8)
 
 #define IN_RANGE(n, m, M)       (((n) >= (m)) && ((n) <= (M)))
+
+#define ORIENTATION(x, y)       (((y) > (x)) ? EINK_ORIENT_PORTRAIT : EINK_ORIENT_LANDSCAPE)
 
 struct raw_image_t
 {
@@ -78,6 +83,9 @@ enum splash_screen_type
 	splash_screen_update_success,           //
 	splash_screen_update_failure,           //
 	splash_screen_update_failure_no_wait,   //
+	
+	splash_screen_repair_needed,            // More composite screens.
+	splash_screen_boot,                     // 
 
     splash_screen_invalid = -1
 };
@@ -107,6 +115,8 @@ enum fx_type
     
     fx_mask = 11,                           // Only for use with update_area_t's non-NULL buffer which_fx.
     fx_buf_is_mask = 14,                    // Same as fx_mask, but doesn't require a doubling (i.e., the buffer & mask are the same).
+    
+    fx_flash = 20,                          // Only for use with update_area_t (for faking a flashing update).
     
     fx_none = -1,                           // No legacy-FX to apply.
     
@@ -212,12 +222,34 @@ enum screen_saver_t
 };
 typedef enum screen_saver_t screen_saver_t;
 
+enum orientation_t
+{
+    orientation_portrait,
+    orientation_portrait_upside_down,
+    orientation_landscape,
+    orientation_landscape_upside_down
+};
+typedef enum orientation_t orientation_t;
+
+#define num_orientations (orientation_landscape_upside_down + 1)
+
+#define ORIENTATION_PORTRAIT(o)     \
+    ((orientation_portrait == (o))  || (orientation_portrait_upside_down == (o)))
+    
+#define ORIENTATION_LANDSCAPE(o)    \
+    ((orientation_landscape == (o)) || (orientation_landscape_upside_down == (o)))
+    
+#define ORIENTATION_SAME(o1, o2)    \
+    ((ORIENTATION_PORTRAIT(o1)  && ORIENTATION_PORTRAIT(o2)) || \
+     (ORIENTATION_LANDSCAPE(o1) && ORIENTATION_LANDSCAPE(o2)))
+
 enum einkfb_events_t
 {
     einkfb_event_update_display = 0,        // FBIO_EINK_UPDATE_DISPLAY
     einkfb_event_update_display_area,       // FBIO_EINK_UPDATE_DISPLAY_AREA
     
-    einkfb_event_blank_display,             // Blanking
+    einkfb_event_blank_display,             // FBIOBLANK (fb.h)
+    einkfb_event_rotate_display,            // FBIO_EINK_SET_DISPLAY_ORIENTATION
     
     einkfb_event_null = -1
 };
@@ -235,6 +267,8 @@ struct einkfb_event_t
     //
     int             x1, y1,                 // Top-left...
                     x2, y2;                 // ...bottom-right.
+                    
+    orientation_t   orientation;            // Display rotated into this orientation.
 };
 typedef struct einkfb_event_t einkfb_event_t;
 
@@ -268,6 +302,15 @@ typedef enum progressbar_badge_t progressbar_badge_t;
 #define EINK_FRAME_BUFFER                   "/dev/fb/0"
 #define EINK_EVENTS                         "/dev/misc/eink_events"
 
+#define EINK_ROTATE_FILE                    "/sys/devices/platform/eink_fb.0/send_fake_rotate"
+#define ORIENT_PORTRAIT                     orientation_portrait
+#define ORIENT_PORTRAIT_UPSIDE_DOWN         orientation_portrait_upside_down
+#define ORIENT_LANDSCAPE                    orientation_landscape
+#define ORIENT_LANDSCAPE_UPSIDE_DOWN        orientation_landscape_upside_down
+#define ORIENT_ASIS                         (-1)
+
+#define EINK_ROTATE_FILE_LEN                1
+
 #define FBIO_MIN_SCREEN                     splash_screen_powering_off
 #define FBIO_MAX_SCREEN                     num_splash_screens
 #define FBIO_SCREEN_IN_RANGE(s)             \
@@ -285,6 +328,9 @@ typedef enum progressbar_badge_t progressbar_badge_t;
 #define FBIO_EINK_SET_REBOOT_BEHAVIOR       _IO(FBIO_MAGIC_NUMBER, 0xe9) // 0x46e9 (reboot_behavior_t)
 #define FBIO_EINK_GET_REBOOT_BEHAVIOR       _IO(FBIO_MAGIC_NUMBER, 0xed) // 0x46ed (reboot_behavior_t *)
 
+#define FBIO_EINK_SET_DISPLAY_ORIENTATION   _IO(FBIO_MAGIC_NUMBER, 0xf0) // 0x46f0 (orientation_t)
+#define FBIO_EINK_GET_DISPLAY_ORIENTATION   _IO(FBIO_MAGIC_NUMBER, 0xf1) // 0x46f1 (orientation_t *)
+
 // Implemented in the eInk Shim.
 //
 #define FBIO_EINK_UPDATE_DISPLAY_FX         _IO(FBIO_MAGIC_NUMBER, 0xe4) // 0x46e4 (fx_t *)
@@ -298,6 +344,7 @@ typedef enum progressbar_badge_t progressbar_badge_t;
 #define FBIO_EINK_PROGRESSBAR               _IO(FBIO_MAGIC_NUMBER, 0xea) // 0x46ea (int: 0..100 -> draw progressbar || !(0..100) -> clear progressbar)
 #define FBIO_EINK_PROGRESSBAR_SET_XY        _IO(FBIO_MAGIC_NUMBER, 0xeb) // 0x46eb (progressbar_xy_t *)
 #define FBIO_EINK_PROGRESSBAR_BADGE         _IO(FBIO_MAGIC_NUMBER, 0xec) // 0x46ec (progressbar_badge_t);
+#define FBIO_EINK_PROGRESSBAR_BACKGROUND    _IO(FBIO_MAGIC_NUMBER, 0xf4) // 0x46f4 (int: EINKFB_WHITE || EINKFB_BLACK)
 
 // Deprecated from the HAL & Shim, but still used by microwindows when the legacy eInk driver is around.
 //
@@ -319,7 +366,9 @@ typedef enum progressbar_badge_t progressbar_badge_t;
 #define PROC_EINK_SET_PROGRESSBAR_XY       11   // FBIO_EINK_PROGRESSBAR_SET_XY
 #define PROC_EINK_UPDATE_DISPLAY_SCRN_SLP  12   // FBIO_EINK_SPLASH_SCREEN_SLEEP
 #define PROC_EINK_PROGRESSBAR_BADGE        13   // FBIO_EINK_PROGRESSBAR_BADGE
+#define PROC_EINK_SET_DISPLAY_ORIENTATION  14   // FBIO_EINK_SET_DISPLAY_ORIENTATION
 #define PROC_EINK_RESTORE_DISPLAY          15   // FBIO_EINK_RESTORE_DISPLAY
+#define PROC_EINK_PROGRESSBAR_BACKGROUND   17   // FBIO_EINK_PROGRESSBAR_BACKGROUND
 
 #define PROC_EINK_FAKE_PNLCD_TEST         100   // Programmatically drive FBIO_EINK_FAKE_PNLCD (not implemented)
 #define PROC_EINK_GRAYSCALE_TEST          101   // Fills display with white-to-black ramp at current bit depth

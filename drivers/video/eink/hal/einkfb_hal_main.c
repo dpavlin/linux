@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_main.c -- eInk frame buffer device HAL
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is based on:
  *
@@ -41,9 +41,10 @@ static unsigned char *einkfb 			= NULL;
 static unsigned char *einkfb_vfb		= NULL;
 static unsigned char *einkfb_buf		= NULL;
 static struct platform_device *einkfb_device	= NULL;
+static struct fb_info *einkfb_fbinfo		= NULL;
 static unsigned long einkfb_jif_on		= 0;
-static unsigned long einkfb_align               = 0;
-static bool einkfb_restore                      = false;
+static unsigned long einkfb_align		= 0;
+static bool einkfb_restore			= false;
 
 static int einkfb_hw_shutdown_mode		= DONT_SHUTDOWN;
 static int einkfb_hw_bringup_mode		= DONT_BRINGUP;
@@ -99,8 +100,6 @@ static struct miscdevice einkfb_events_dev	=
 	&einkfb_events_ops
 };
 
-FB_DEFIO();
-
 #ifndef MODULE
 int __INIT_CODE einkfb_setup(char *options)
 {
@@ -152,6 +151,8 @@ void einkfb_get_info(struct einkfb_info *info)
 		info->vfb    = einkfb_vfb;
 		info->buf    = einkfb_buf;
 		info->dev    = einkfb_device;
+		info->fbinfo = einkfb_fbinfo;
+		info->events = &einkfb_events_dev;
 		
 		info->jif_on = einkfb_jif_on;
 		info->align  = einkfb_align;
@@ -165,9 +166,36 @@ void einkfb_get_info(struct einkfb_info *info)
 
 EXPORT_SYMBOL(einkfb_get_info);
 
+void einkfb_set_res_info(struct fb_info *info, int xres, int yres)
+{
+	einkfb_xres = xres;
+	einkfb_yres = yres;
+	
+	if ( info )
+	{
+		bool swap_height_width = false;
+		
+		if ( (info->var.yres == xres) && (info->var.xres == yres) )
+			swap_height_width = true;
+		
+		info->var.xres = info->var.xres_virtual = xres;
+		info->var.yres = info->var.yres_virtual = yres;
+		
+		if ( swap_height_width )
+		{
+			u32 saved_height = info->var.height;
+			
+			info->var.height = info->var.width;
+			info->var.width  = saved_height;
+		}
+		
+		info->fix.line_length = BPP_SIZE(xres, einkfb_bpp);
+	}
+}
+
 void einkfb_set_fb_restore(bool fb_restore)
 {
-        einkfb_restore = fb_restore;
+	einkfb_restore = fb_restore;
 }
 
 void einkfb_set_jif_on(unsigned long jif_on)
@@ -178,6 +206,23 @@ void einkfb_set_jif_on(unsigned long jif_on)
 void einkfb_set_reboot_behavior(reboot_behavior_t behavior)
 {
 	einkfb_reboot_behavior = behavior;
+
+	// Truly leave the screen (and controller's state) as is once we
+	// get this message.
+	//
+	if ( reboot_screen_asis == behavior )
+	{
+		// We're going to be locking everyone out once the as-is
+		// flag is set.  So, let's ensure that our locks are
+		// in order now.
+		//
+		if ( !EINKFB_LOCK_READY_NOW() )
+			EINFFB_LOCK_RELEASE();
+		
+		set_eink_init_display_flag(EINK_INIT_DISPLAY_ASIS);
+	}
+	else
+		set_eink_init_display_flag(0);
 }
 
 reboot_behavior_t einkfb_get_reboot_behavior(void)
@@ -201,6 +246,8 @@ static unsigned long einkfb_set_byte_alignment(unsigned long byte_alignment)
 
 static bool HAL_HW_INIT(struct fb_info *info, bool bringup_mode)
 {
+	einkfb_set_reboot_behavior(reboot_screen_clear);
+	
 	if ( hal_ops.hal_hw_init )
 	{
 		if ( EINKFB_SUCCESS == EINKFB_LOCK_ENTRY() )
@@ -264,7 +311,7 @@ struct fb_info* einkfb_probe(struct platform_device *dev)
 	/*
 	 * Get the module's variable & fixed screeninfo.
 	 */
-	if (EINKFB_FAILURE == HAL_SW_INIT(&var, &fix))
+	if ( EINKFB_FAILURE == HAL_SW_INIT(&var, &fix) )
 		return NULL;
 	
 	/*
@@ -305,7 +352,6 @@ struct fb_info* einkfb_probe(struct platform_device *dev)
 	info->pseudo_palette = NULL;		/* info->par */
 	info->par = NULL;
 	info->flags = FBINFO_FLAG_DEFAULT;
-	FB_DEFIO_INIT();
 	
 	if (fb_alloc_cmap(&info->cmap, 256, 0) < 0)
 		goto err3;
@@ -315,19 +361,19 @@ struct fb_info* einkfb_probe(struct platform_device *dev)
 	einkfb_yres  = info->var.yres;
 	einkfb_vfb   = einkfb + info->screen_size;
 	einkfb_buf   = einkfb_vfb + info->screen_size;
-	einkfb_align = einkfb_set_byte_alignment(einkfb_bpp);
 
 	einkfb_hw_bringup_mode_actual = HAL_HW_INIT(info, einkfb_hw_bringup_mode);
+	einkfb_align = einkfb_set_byte_alignment(einkfb_bpp);
 
 	if (register_framebuffer(info) < 0)
 		goto err4;
 
 	BLANK_INIT();
 	
+	einkfb_fbinfo = info;
 	return info;
 
 err4:
-	FB_DEFIO_EXIT();
 	HAL_HW_DONE(einkfb_hw_shutdown_mode);
 	fb_dealloc_cmap(&info->cmap);
 	err++; // err = 5
@@ -353,7 +399,6 @@ static void einkfb_remove(struct fb_info *info)
 {
 	BLANK_DONE();
 	unregister_framebuffer(info);
-	FB_DEFIO_EXIT();
 	HAL_HW_DONE(einkfb_hw_shutdown_mode);
 	fb_dealloc_cmap(&info->cmap);
 	framebuffer_release(info);
@@ -455,6 +500,10 @@ static int einkfb_reboot(struct notifier_block *self, unsigned long u, void *v)
 	//
 	POWER_OVERRIDE_BEGIN();
 	
+	// Force the display back into portrait mode before rebooting.
+	//
+	EINKFB_IOCTL(FBIO_EINK_SET_DISPLAY_ORIENTATION, orientation_portrait);
+	
 	// Override the requested reboot behavior if we must.
 	//
 	switch ( u )
@@ -464,7 +513,7 @@ static int einkfb_reboot(struct notifier_block *self, unsigned long u, void *v)
 		case SYS_RESTART:
 		break;
 		
-		// On actual shutdowns (or halts), don't put up the splash
+		// On actual shutdowns (or halts), don't put up the splash screen
 		// if it's been requested; just clear the screen instead.
 		//
 		default:

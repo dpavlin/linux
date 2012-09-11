@@ -18,10 +18,14 @@
 #include <asm/arch/pxa-regs.h>
 #include <linux/pn_lcd.h>
 
+#define SCREEN_SAVER_BPP				EINKFB_2BPP
+
 #define SCREEN_SAVER_PATH_SYS_RO			"/opt/var/screen_saver/"
 #define SCREEN_SAVER_PATH_SYS_RW			SCREEN_SAVER_PATH_SYS_RO
 #define PNLCD_SYS_IOCTL(c, a)				\
 	pnlcd_sys_ioctl(c, a)		
+
+#define kobject_uevent_env(k, K, e)			((e) == (e))
 
 #else   // -------------------------------- Mario (Linux 2.6.22) Build
 
@@ -32,15 +36,19 @@
 
 #include "pn_lcd.h"
 
+#define SCREEN_SAVER_BPP				EINKFB_2BPP
+
 #define SCREEN_SAVER_PATH_SYS_RO			"/opt/eink/images/"
 #define SCREEN_SAVER_PATH_SYS_RW			"/var/local/eink/"
 #define PNLCD_SYS_IOCTL(c, a)				\
-	(get_pnlcd_ioctl() ? (*get_pnlcd_ioctl())((unsigned int)c, (unsigned long)a)	\
-                           : einkfb_pnlcd_ioctl_stub((unsigned int)c, (unsigned long)a))
+	(get_pnlcd_ioctl()	? (*get_pnlcd_ioctl())((unsigned int)c, (unsigned long)a)	\
+			   	: einkfb_pnlcd_ioctl_stub((unsigned int)c, (unsigned long)a))
 
 extern int einkfb_pnlcd_ioctl_stub(unsigned int cmd, unsigned long arg);
 
 #endif  // --------------------------------
+
+#define FRAMEWORK_OR_DIAGS_RUNNING()			(FRAMEWORK_RUNNING() || running_diags)
 
 enum update_type
 {
@@ -85,6 +93,8 @@ struct system_screen_t
 				footer_width,
 				body_width,
 				
+				header_offset,
+				footer_offset,
 				body_offset;
 		
 	splash_screen_type	which_screen;
@@ -92,6 +102,8 @@ struct system_screen_t
 	fx_type			which_fx;
 };
 typedef struct system_screen_t system_screen_t;
+
+#define INIT_SYSTEM_SCREEN_T() { NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 
 #define splash_screen_activity_begin			1
 #define splash_screen_activity_end			0
@@ -101,6 +113,7 @@ typedef struct system_screen_t system_screen_t;
 
 extern splash_screen_type splash_screen_up;
 extern bool power_level_initiated_call;
+extern int running_diags;
 
 // From einkfb_shim.c
 //
@@ -127,7 +140,7 @@ extern bool einkfb_shim_override_power_lockout(unsigned int cmd, unsigned long f
 extern bool einkfb_shim_enforce_power_lockout(void);
 extern char *einkfb_shim_get_power_string(void);
 
-extern bool einkfb_shim_platform_splash_screen_dispatch(splash_screen_type);
+extern bool einkfb_shim_platform_splash_screen_dispatch(splash_screen_type which_screen, int yres);
 
 extern void einkfb_shim_platform_init(struct einkfb_info *info);
 extern void einkfb_shim_platform_done(struct einkfb_info *info);

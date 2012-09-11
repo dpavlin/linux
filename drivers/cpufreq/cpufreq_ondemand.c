@@ -18,6 +18,7 @@
 #include <linux/jiffies.h>
 #include <linux/kernel_stat.h>
 #include <linux/mutex.h>
+#include <linux/delay.h>
 
 /*
  * dbs is used in this file as a shortform for demandbased switching
@@ -446,13 +447,11 @@ static void do_dbs_timer(struct work_struct *work)
 
 	delay -= jiffies % delay;
 
-	if (lock_policy_rwsem_write(cpu) < 0)
+	if (!dbs_info->enable)
 		return;
 
-	if (!dbs_info->enable) {
-		unlock_policy_rwsem_write(cpu);
+	if (lock_policy_rwsem_write(cpu) < 0)
 		return;
-	}
 
 	/* Common NORMAL_SAMPLE setup */
 	dbs_info->sample_type = DBS_NORMAL_SAMPLE;
@@ -491,6 +490,8 @@ static inline void dbs_timer_exit(struct cpu_dbs_info_s *dbs_info)
 {
 	dbs_info->enable = 0;
 	cancel_rearming_delayed_work(&dbs_info->work);
+
+	mdelay(500);
 }
 
 static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
@@ -561,6 +562,7 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 		dbs_timer_init(this_dbs_info);
 
 		mutex_unlock(&dbs_mutex);
+		mdelay(500);
 		break;
 
 	case CPUFREQ_GOV_STOP:

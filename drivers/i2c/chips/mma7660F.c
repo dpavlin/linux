@@ -30,6 +30,7 @@
 #include <asm/hardware.h>
 #include <asm/io.h>
 #include <asm/delay.h>
+#include <asm/arch/board_id.h>
 
 #include <asm/arch-mxc/mx31_pins.h>
 #include <asm/arch/gpio.h>
@@ -57,6 +58,17 @@ static struct miscdevice mma7660F_dev = { MISC_DYNAMIC_MINOR,
 
 static char device_orientation = DEVICE_INIT_ORIENTATION;
 static int mma7660F_reads_OK = 0;
+static bool accel_locked = false;
+static bool mma7660F_v1p1 = false;
+static signed char calibration_regs[5];
+static bool calibration_done = false;
+static int x_shift = 0;
+static int y_shift = 0;
+static int z_shift = 0;
+static int x_total = 0;
+static int y_total = 0;
+static int z_total = 0;
+static int xyz_samples = 0;
 
 // Proc entry structure
 #define ACCEL_PROC_FILE "accelerometer"
@@ -65,7 +77,9 @@ static struct proc_dir_entry *proc_entry;
 
 // Workqueue
 static struct delayed_work mma7660F_tq_d;
+static struct delayed_work mma7660F_version_tq_d;
 static void detect_mma7660F_pos(struct work_struct *);
+static void detect_mma7660F_version(struct work_struct *);
 
 // The following array contains information for the MMA7660F Accelerometer
 // lines for each different hardware revision.
@@ -125,23 +139,10 @@ module_param(debug, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(debug, "Enable debugging; 0=off, any other value=on (default is off)");
 
 // Sampling constants and globals
-#define DEFAULT_ACCEL_SAMPLING_RATE    SR_AMSR_AM8
+#define DEFAULT_ACCEL_SAMPLING_RATE    SR_AMSR_AM16
 static unsigned char accel_sampling_rate = DEFAULT_ACCEL_SAMPLING_RATE;
 #define DEFAULT_ACCEL_TILT_DEBOUNCE    SR_FILT_6
 static unsigned char accel_tilt_debounce = DEFAULT_ACCEL_TILT_DEBOUNCE;
-
-// Shake and Tap constants and globals
-//#define DEFAULT_ACCEL_PULSE_THRESHOLD  0x0B
-#define DEFAULT_ACCEL_PULSE_THRESHOLD  0x09
-#define DEFAULT_ACCEL_PULSE_DEBOUNCE   0x07
-static int shake_enabled = 0;   // Default is disabled
-static int shake_x_enabled = 0; // Default is disabled; use proc entry to enable
-static int shake_y_enabled = 0; // Default is disabled; use proc entry to enable
-static int shake_z_enabled = 0; // Default is disabled; use proc entry to enable
-static int tap_enabled = 0;     // Default is disabled
-static int tap_x_enabled = 0;   // Default is disabled; use proc entry to enable
-static int tap_y_enabled = 0;   // Default is disabled; use proc entry to enable
-static int tap_z_enabled = 0;   // Default is disabled; use proc entry to enable
 
 /*
  * Set the log mask depending on the debug level
@@ -234,9 +235,9 @@ static int write_mma7660F_reg(unsigned char reg_addr, char wr_data)
    ret_code = mma7660F_i2c_client_xfer(ACCEL_I2C_ADDRESS, &mma7660F_reg_addr,
               ACCEL_REG_ADDR_LEN, mma7660F_wr_data, ACCEL_REG_DATA_LEN, 
               MXC_I2C_FLAG_WRITE);
-   LLOG_DEBUG3("Wrote 0x%X to register 0x%X; ret_code = 0x%X\n", mma7660F_wr_data[0], mma7660F_reg_addr, ret_code);
+   LLOG_DEBUG3("Wrote 0x%02X to register 0x%02X; ret_code = 0x%02X\n", mma7660F_wr_data[0], mma7660F_reg_addr, ret_code);
    if (ret_code < 0) {
-      LLOG_ERROR("write_err", "", "Attempted writing 0x%X to MMA7660F register 0x%X; failed with ret_code = 0x%X\n", mma7660F_wr_data[0], mma7660F_reg_addr, ret_code);
+      LLOG_ERROR("write_err", "", "Attempted writing 0x%02X to MMA7660F register 0x%02X; failed with ret_code = 0x%X\n", mma7660F_wr_data[0], mma7660F_reg_addr, ret_code);
    }
 
    return ret_code;
@@ -264,13 +265,13 @@ static int read_mma7660F_regs(unsigned char reg_addr, char *rd_buff, int count)
    ret_code = mma7660F_i2c_client_xfer(ACCEL_I2C_ADDRESS, &mma7660F_reg_addr,
               ACCEL_REG_ADDR_LEN, rd_buff, count, MXC_I2C_FLAG_READ);
    if ((ret_code < 0) && (debug > 0)) {
-      LLOG_ERROR("read_fail" ,"", "Attempted reading from MMA7660F register 0x%X; failed with ret_code = 0x%X\n", mma7660F_reg_addr, ret_code);
+      LLOG_ERROR("read_fail" ,"", "Attempted reading from MMA7660F register 0x%02X; failed with ret_code = 0x%X\n", mma7660F_reg_addr, ret_code);
    }
    else {
       // Read successful
       if (debug > 3) {
          for (i=0; i<count; i++) {
-            LLOG_DEBUG3("Read 0x%X from register 0x%X; ret_code = 0x%X\n", rd_buff[i], mma7660F_reg_addr+i, ret_code);
+            LLOG_DEBUG3("Read 0x%02X from register 0x%02X; ret_code = 0x%X\n", rd_buff[i], mma7660F_reg_addr+i, ret_code);
          }
       }
    }
@@ -286,71 +287,23 @@ static int read_mma7660F_regs(unsigned char reg_addr, char *rd_buff, int count)
 void init_mma7660F(void)
 {
    unsigned char interrupts = 0;
-   unsigned char pulse_det = 0;
    unsigned char sample_rates = 0;
 
    write_mma7660F_reg(ACCEL_MODE_REG, 0); // Sleep mode so we can modify params
 
    // Interrupt on any position change detected
-   interrupts = INTSU_FBINT | INTSU_PLINT; 
+   interrupts = INTSU_FBINT | INTSU_PLINT;
 
    // Initialize sample rates for orientation detection
    sample_rates = accel_tilt_debounce | accel_sampling_rate; 
 
-   // Interrupt on shake if one or more axes are enabled
-   shake_enabled = 0;
-   if (shake_x_enabled != 0) {
-      interrupts |= INTSU_SHINTX;
-      shake_enabled = 1;
-   }
-   if (shake_y_enabled != 0) {
-      interrupts |= INTSU_SHINTY;
-      shake_enabled = 1;
-   }
-   if (shake_z_enabled != 0) {
-      interrupts |= INTSU_SHINTZ;
-      shake_enabled = 1;
-   }
-
-   // Setup tap detection if enabled
-   pulse_det = DEFAULT_ACCEL_PULSE_THRESHOLD;
-   tap_enabled = 0;
-   if (tap_x_enabled != 0) {
-      interrupts |= INTSU_PDINT;
-      pulse_det &= ~(SR_PDET_XDA);
-      tap_enabled = 1;
-   }
-   else {
-      pulse_det |= SR_PDET_XDA;
-   }
-   if (tap_y_enabled != 0) {
-      interrupts |= INTSU_PDINT;
-      pulse_det &= ~(SR_PDET_YDA);
-      tap_enabled = 1;
-   }
-   else {
-      pulse_det |= SR_PDET_YDA;
-   }
-   if (tap_z_enabled != 0) {
-      interrupts |= INTSU_PDINT;
-      pulse_det &= ~(SR_PDET_ZDA);
-      tap_enabled = 1;
-   }
-   else {
-      pulse_det |= SR_PDET_ZDA;
-   }
-
-   // If tap is enabled, set the correspoding sample rate
-   if (tap_enabled != 0) {
-      sample_rates &= ~(SR_AMSR);
-      sample_rates |= SR_AMSR_AMPD;
-   }
-
    // Write the MMA7660F registers with the setup data
    write_mma7660F_reg(ACCEL_INTSU_REG, interrupts); 
    write_mma7660F_reg(ACCEL_SR_REG, sample_rates); 
-   write_mma7660F_reg(ACCEL_PDET_REG, pulse_det); 
-   write_mma7660F_reg(ACCEL_PD_REG, DEFAULT_ACCEL_PULSE_DEBOUNCE); 
+
+   // Disable pulse detection
+   write_mma7660F_reg(ACCEL_PDET_REG, (SR_PDET_XDA | SR_PDET_YDA |
+                      SR_PDET_ZDA)); 
 
    // Put device in active mode, Note: INT line is open-drain because we
    // are enabling the GPIO internal pullup resistor
@@ -380,63 +333,36 @@ static void report_orientation(char orientation)
 {
    switch (orientation) {
    case DEVICE_UNKNOWN:
-      LLOG_WARN("orient_unknown", "", "Device orientation UNKNOWN\n");
+      LLOG_WARN("orient_unknown", "", "*** Device orientation UNKNOWN\n");
       break;
    case DEVICE_UP:
       report_event(ORIENTATION_STRING_UP);
+      LLOG_DEBUG0("*** Device orientation is now UP\n");
       break;
    case DEVICE_DOWN:
       report_event(ORIENTATION_STRING_DOWN);
+      LLOG_DEBUG0("*** Device orientation is now DOWN\n");
       break;
    case DEVICE_LEFT:
       report_event(ORIENTATION_STRING_LEFT);
+      LLOG_DEBUG0("*** Device orientation is now LEFT\n");
       break;
    case DEVICE_RIGHT:
       report_event(ORIENTATION_STRING_RIGHT);
+      LLOG_DEBUG0("*** Device orientation is now RIGHT\n");
       break;
    case DEVICE_FACE_UP:
       report_event(ORIENTATION_STRING_FACE_UP);
+      LLOG_DEBUG0("*** Device orientation is now FACE_UP\n");
       break;
    case DEVICE_FACE_DOWN:
       report_event(ORIENTATION_STRING_FACE_DOWN);
-      break;
-   case DEVICE_FREE_FALL:
-      report_event(ORIENTATION_STRING_FREE_FALL);
+      LLOG_DEBUG0("*** Device orientation is now FACE_DOWN\n");
       break;
    default:
       LLOG_WARN("bad_val_orient", "", "INVALID ORIENTATION VALUE PASSED\n");
       break;
    };
-   if (debug > 0) {
-      switch (orientation) {
-      case DEVICE_UNKNOWN:
-         LLOG_DEBUG0("Device orientation is now UNKNOWN\n");
-         break;
-      case DEVICE_UP:
-         LLOG_DEBUG0("Device orientation is now UP\n");
-         break;
-      case DEVICE_DOWN:
-         LLOG_DEBUG0("Device orientation is now DOWN\n");
-         break;
-      case DEVICE_LEFT:
-         LLOG_DEBUG0("Device orientation is now LEFT\n");
-         break;
-      case DEVICE_RIGHT:
-         LLOG_DEBUG0("Device orientation is now RIGHT\n");
-         break;
-      case DEVICE_FACE_UP:
-         LLOG_DEBUG0("Device orientation is now FACE_UP\n");
-         break;
-      case DEVICE_FACE_DOWN:
-         LLOG_DEBUG0("Device orientation is now FACE_DOWN\n");
-         break;
-      case DEVICE_FREE_FALL:
-         LLOG_DEBUG0("Device orientation is now FREE_FALL\n");
-         break;
-      default:
-         break;
-      };
-   }
 }
 
 
@@ -509,135 +435,249 @@ char adjust_pos(char position)
 
 
 /*
- * Read the relevant registers of the MMA7660F and determine the
- * device's orientation.
+ * Read the x,y, and z registers of the MMA7660F and determine the
+ * device's orientation regardless of status of the tilt register.
  */
 
-unsigned char prev_tilt_status = 0;
-
-static void detect_mma7660F_pos(struct work_struct *work)
+static int xyz_orientation(signed char *calculated_tilt)
 {
-   signed char tilt_status;
-   unsigned char new_tilt_status;
-   char position = DEVICE_UNKNOWN;
+   signed char acc_data[3];
+   char orientation = DEVICE_UNKNOWN;
+   int err;
    int timeout;
 
-   // Read the tilt status register until data is valid or timeout
+   // Read the x,y, and z registers until data is valid or timeout
 
-   tilt_status = TILT_ALERT;
+   err = XOUT_ALERT;
    timeout = 10;  // Number of times to retry reading register
-   while ( ((tilt_status & TILT_ALERT) != 0) && (timeout-- > 0)) {
-      read_mma7660F_regs(ACCEL_TILT_REG, &tilt_status, 1);
+   while ( (err != 0) && (timeout-- > 0)) {
+      err = read_mma7660F_regs(ACCEL_XOUT_REG, acc_data, 3);
+      if (err >= 0) {
+         err = ((acc_data[0] | acc_data[1] | acc_data[2]) & XOUT_ALERT);
+      }
       schedule();  // Relax CPU use
    }
-   if ( timeout <= 0) {
-      if (debug > 1) {
-         LLOG_ERROR("tilt_rd_fail", "", "Could not read MMA7660F Tilt Status register - exiting...\n");
+   if ((err != 0) || (timeout <= 0)) {
+      LLOG_ERROR("xyz_rd_fail", "", "Could not read MMA7660F x,y,z registers.\n");
+      return orientation;
+   }
+
+   // Determine orientation from x,y, and z readings
+   // Note: in Tron, 32 counts equals 1.5g
+#define ONE_G      21
+#define POINT_25_G  5
+#define POINT_80_G 17
+
+   acc_data[0] &= XOUT_DATA_MASK;
+   if (acc_data[0] >= 0x20) {
+      acc_data[0] |= ~(XOUT_DATA_MASK); // Sign extension for negative
+   }
+   acc_data[1] &= YOUT_DATA_MASK;
+   if (acc_data[1] >= 0x20) {
+      acc_data[1] |= ~(YOUT_DATA_MASK); // Sign extension for negative
+   }
+   acc_data[2] &= ZOUT_DATA_MASK;
+   if (acc_data[2] >= 0x20) {
+      acc_data[2] |= ~(ZOUT_DATA_MASK); // Sign extension for negative
+   }
+   LLOG_DEBUG2("x = %d; y = %d; z = %d\n", acc_data[0], acc_data[1], acc_data[2]);
+   // Keep statistics
+   x_total += acc_data[0];
+   y_total += acc_data[1];
+   z_total += acc_data[2];
+   xyz_samples += 1;
+
+   // We use the same algorithm that Freescale uses to set the tilt register
+   *calculated_tilt = 0;
+   if ( (abs(acc_data[2]) < POINT_80_G) && 
+        (abs(acc_data[0]) > abs(acc_data[1])) &&
+        ( (abs(acc_data[0]) > POINT_25_G) ||
+          (abs(acc_data[1]) > POINT_25_G) )  &&
+        (acc_data[0] < 0)  ) {
+      orientation = DEVICE_UP;
+      *calculated_tilt |= TILT_POLA_UP;
+      LLOG_DEBUG2("xyz logic = DEVICE_UP\n");
+   }
+   if ( (abs(acc_data[2]) < POINT_80_G) && 
+        (abs(acc_data[0]) > abs(acc_data[1])) &&
+        ( (abs(acc_data[0]) > POINT_25_G) ||
+          (abs(acc_data[1]) > POINT_25_G) )  &&
+        (acc_data[0] > 0)  ) {
+      LLOG_DEBUG2("xyz logic = DEVICE_DOWN\n");
+      *calculated_tilt |= TILT_POLA_DOWN;
+      if (orientation == DEVICE_UNKNOWN) {
+         orientation = DEVICE_DOWN;
       }
-      return;
+   }
+   if ( (abs(acc_data[2]) < POINT_80_G) && 
+        (abs(acc_data[1]) > abs(acc_data[0])) &&
+        ( (abs(acc_data[0]) > POINT_25_G) ||
+          (abs(acc_data[1]) > POINT_25_G) )  &&
+        (acc_data[1] < 0)  ) {
+      LLOG_DEBUG2("xyz logic = DEVICE_LEFT\n");
+      *calculated_tilt |= TILT_POLA_LEFT;
+      if (orientation == DEVICE_UNKNOWN) {
+         orientation = DEVICE_LEFT;
+      }
+   }
+   if ( (abs(acc_data[2]) < POINT_80_G) && 
+        (abs(acc_data[1]) > abs(acc_data[0])) &&
+        ( (abs(acc_data[0]) > POINT_25_G) ||
+          (abs(acc_data[1]) > POINT_25_G) )  &&
+        (acc_data[1] > 0)  ) {
+      LLOG_DEBUG2("xyz logic = DEVICE_RIGHT\n");
+      *calculated_tilt |= TILT_POLA_RIGHT;
+      if (orientation == DEVICE_UNKNOWN) {
+         orientation = DEVICE_RIGHT;
+      }
+   }
+   if (acc_data[2] < -POINT_25_G) {
+      LLOG_DEBUG2("xyz logic = DEVICE_FACE_UP\n");
+      *calculated_tilt |= TILT_BAFR_BACK;
+      if (orientation == DEVICE_UNKNOWN) {
+         orientation = DEVICE_FACE_UP;
+      }
+   }
+   if (acc_data[2] > POINT_25_G) {
+      LLOG_DEBUG2("xyz logic = DEVICE_FACE_DOWN\n");
+      *calculated_tilt |= TILT_BAFR_FRONT;
+      if (orientation == DEVICE_UNKNOWN) {
+         orientation = DEVICE_FACE_DOWN;
+      }
    }
 
-   // Only consider newly-set tilt status bits
-   new_tilt_status = (unsigned char)tilt_status;
-
-   // If tap is enabled and detected, send notification
-   if ( (tap_enabled != 0) && ((new_tilt_status & TILT_PULSE) != 0) ) {
-      report_event(ORIENTATION_STRING_TAP);
-      schedule();
-      LLOG_DEBUG1("TRON detected TAP\n");
-   }
-
-   // If shake is enabled and detected, send notification
-   if ( (shake_enabled != 0) && ((new_tilt_status & TILT_SHAKE) != 0) ) {
-      report_event(ORIENTATION_STRING_SHAKE);
-      schedule();
-      LLOG_DEBUG1("TRON detected SHAKE\n");
-   }
-
-
-   switch (new_tilt_status & TILT_POLA) {
-      case TILT_POLA_UP:
-         LLOG_DEBUG1("TRON is UP\n");
-         break;
-      case TILT_POLA_DOWN:
-         LLOG_DEBUG1("TRON is DOWN\n");
-         break;
-      case TILT_POLA_LEFT:
-         LLOG_DEBUG1("TRON is LEFT\n");
-         break;
-      case TILT_POLA_RIGHT:
-         LLOG_DEBUG1("TRON is RIGHT\n");
-         break;
-      default:
-         LLOG_DEBUG1("TRON is u/d/l/r UNKNOWN\n");
-         break;
-   }
-   switch (new_tilt_status & TILT_BAFR) {
-      case TILT_BAFR_FRONT:
-         LLOG_DEBUG1("TRON is FACE DOWN\n");
-         break;
-      case TILT_BAFR_BACK:
-         LLOG_DEBUG1("TRON is FACE UP\n");
-         break;
-      default:
-         LLOG_DEBUG1("TRON is face u/d UNKNOWN\n");
-         break;
-   }
-
-   if ( ((new_tilt_status ^ prev_tilt_status) & TILT_POLA) == 0) {
-      // No change in u/d/l/r orientation
-      tilt_status &= ~(TILT_POLA);
-   }
-   if ( ((new_tilt_status ^ prev_tilt_status) & TILT_BAFR) == 0) {
-      // No change in front/back orientation
-      tilt_status &= ~(TILT_BAFR);
-   }
-   prev_tilt_status = new_tilt_status;  // Save for next time
-
-   LLOG_DEBUG1("new_tilt_status = 0x%x\n", new_tilt_status);
-   LLOG_DEBUG1("tilt_status = 0x%x\n", tilt_status);
-
-   // Get the device position and adjust for rotation
-   if ( (tilt_status & TILT_POLA) == TILT_POLA_UP) {
-      position = adjust_pos(DEVICE_UP);
-   }
-   else if ( (tilt_status & TILT_POLA) == TILT_POLA_DOWN) {
-      position = adjust_pos(DEVICE_DOWN);
-   }
-   else if ( (tilt_status & TILT_POLA) == TILT_POLA_LEFT) {
-      position = adjust_pos(DEVICE_LEFT);
-   }
-   else if ( (tilt_status & TILT_POLA) == TILT_POLA_RIGHT) {
-      position = adjust_pos(DEVICE_RIGHT);
-   }
-   else if ( (tilt_status & TILT_BAFR) == TILT_BAFR_FRONT) {
-      position = DEVICE_FACE_DOWN;
-   }
-   else if ( (tilt_status & TILT_BAFR) == TILT_BAFR_BACK) {
-      position = DEVICE_FACE_UP;
-   }
+   // Adjust for rotation
+   orientation = adjust_pos(orientation);
 
    // Correct position if MMA7660F is loaded on the back side of the board
    if (flip != 0) {
-      switch (position) {
+      switch (orientation) {
       case DEVICE_LEFT:
-         position = DEVICE_RIGHT;
+         orientation = DEVICE_RIGHT;
       break;
       case DEVICE_RIGHT:
-         position = DEVICE_LEFT;
+         orientation = DEVICE_LEFT;
       break;
       case DEVICE_FACE_UP:
-         position = DEVICE_FACE_DOWN;
+         orientation = DEVICE_FACE_DOWN;
       break;
       case DEVICE_FACE_DOWN:
-         position = DEVICE_FACE_UP;
+         orientation = DEVICE_FACE_UP;
+      break;
+      default:
       break;
       }
    }
 
-   if (position != DEVICE_UNKNOWN) {
-      device_orientation = position;
-      report_orientation(device_orientation);
+   return orientation;
+}
+
+
+/*
+ * Determine if the chip version is 1.1 or later
+ * The algorithm is simple: if the orientation has not been updated by the
+ * time this routine is executed, we assume that the chip did not interrupt
+ * after initialization; therefore it is a v1.1; otherwise it's v1.2 or later.
+ */
+
+static void detect_mma7660F_version(struct work_struct *work)
+{
+   if (device_orientation == DEVICE_INIT_ORIENTATION) {
+      LLOG_INFO("ver_1p1", "", "Freescale MMA7660F chip detected as v1.1\n");
+      mma7660F_v1p1 = true;
+   }
+   else {
+      LLOG_INFO("ver_1p2", "", "Freescale MMA7660F chip detected as v1.2 or later\n");
+      mma7660F_v1p1 = false;
+   }
+}
+
+
+/*
+ * Determine the device's orientation and report if changed.
+ */
+
+static void detect_mma7660F_pos(struct work_struct *work)
+{
+   char position = DEVICE_UNKNOWN;
+   signed char acc_data[1];
+   int err;
+   signed char calculated_tilt;
+
+   err = read_mma7660F_regs(ACCEL_TILT_REG, acc_data, 1);
+   if (err >= 0) {
+      LLOG_DEBUG2("Tilt register = 0x%02X\n", acc_data[0]);
+      if ((acc_data[0] & TILT_SHAKE) != 0) {
+         LLOG_DEBUG2("TILT says SHAKE\n");
+      }
+      switch (acc_data[0] & TILT_POLA) {
+         case TILT_POLA_UP:
+            LLOG_DEBUG2("TILT says UP\n");
+            break;
+         case TILT_POLA_DOWN:
+            LLOG_DEBUG2("TILT says DOWN\n");
+            break;
+         case TILT_POLA_LEFT:
+            LLOG_DEBUG2("TILT says LEFT\n");
+            break;
+         case TILT_POLA_RIGHT:
+            LLOG_DEBUG2("TILT says RIGHT\n");
+            break;
+         default:
+            LLOG_DEBUG2("TILT says u/d/l/r UNKNOWN\n");
+            break;
+      }
+      switch (acc_data[0] & TILT_BAFR) {
+         case TILT_BAFR_FRONT:
+            LLOG_DEBUG2("TILT says FACE DOWN\n");
+            break;
+         case TILT_BAFR_BACK:
+            LLOG_DEBUG2("TILT says FACE UP\n");
+            break;
+         default:
+            LLOG_DEBUG2("TILT says face u/d UNKNOWN\n");
+            break;
+      }
+
+   }
+   else {
+      LLOG_DEBUG2("Error reading tilt register\n");
+   }
+
+   if (((acc_data[0] & TILT_SHAKE) != 0) && !mma7660F_v1p1) {
+      // Shake bit is set; if chip is not v1.1, do not check or report
+      // orientation and reset MMA7660F to clear the tilt register
+      write_mma7660F_reg(ACCEL_MODE_REG, 0); // Sleep mode
+      LLOG_DEBUG0("Resetting mma7660F because shake bit was set.\n");
+      write_mma7660F_reg(ACCEL_MODE_REG, MODE_ACTIVE); 
+   }
+   else {
+      position = xyz_orientation(&calculated_tilt);
+      LLOG_DEBUG2("calculated_tilt = 0x%02X\n", calculated_tilt);
+      if (((acc_data[0] & (TILT_BAFR | TILT_POLA)) != calculated_tilt) &&
+          !mma7660F_v1p1) {
+         // Calculated tilt does not correspond to value from tilt register;
+         // If chip is not v1.1, reset it to clear the tilt register
+         // and do not report orientation.
+         write_mma7660F_reg(ACCEL_MODE_REG, 0); // Sleep mode
+         LLOG_DEBUG0("Resetting mma7660F because TILT and calculated_tilt did not match.\n");
+         write_mma7660F_reg(ACCEL_MODE_REG, MODE_ACTIVE); 
+      }
+      else if (device_orientation != position) {
+         // If chip is not v1.1, reset it to clear the tilt register
+         if (!mma7660F_v1p1) {
+            write_mma7660F_reg(ACCEL_MODE_REG, 0); // Sleep mode
+         }
+         // Report new orientation
+         device_orientation = position;
+         report_orientation(device_orientation);
+         if (!mma7660F_v1p1) {
+            write_mma7660F_reg(ACCEL_MODE_REG, MODE_ACTIVE); 
+         }
+      }
+      else {
+         LLOG_DEBUG0("Not reporting device orientation because it did not change.\n");
+      }
    }
 }
 
@@ -651,10 +691,103 @@ static irqreturn_t mma7660F_irq (int irq, void *data, struct pt_regs *r)
 {
    LLOG_DEBUG2("Received INT IRQ from mma7660F.\n");
 
-   // Schedule work function to read device status with no delay
+   // Schedule work function to read device status.
    schedule_delayed_work(&mma7660F_tq_d, 0);
 
    return IRQ_HANDLED;
+}
+
+
+/*!
+ * This function calibrates the mma7660F version 1.2 found in Nell DVT
+ * units.  It should not be called for any other versions.
+ */
+static int mma7660F_calibrate(int delta_x, int delta_y, int delta_z)
+{
+   signed char acc_data[5];
+   int err = 0;
+   int x_offset, y_offset, z_offset;
+   int count;
+
+   // Put device in factory test mode
+   err |= write_mma7660F_reg(ACCEL_MODE_REG, 0);
+   err |= write_mma7660F_reg(0x20, 0x01);
+   err |= write_mma7660F_reg(0x20, 0x02);
+   err |= read_mma7660F_regs(0x20, acc_data, 1);
+   err |= (acc_data[0] != 0x03);
+
+   // Put device in active mode and read offset registers
+   err |= write_mma7660F_reg(ACCEL_MODE_REG, 0x01);
+   err |= read_mma7660F_regs(0x31, acc_data, 5);
+
+   // If new offset register values have not been previously calculated, do it
+
+   if (!calibration_done) {
+      x_offset = ((acc_data[0] >> 7) & 0x0001) | (acc_data[1] << 1) |
+                 ((acc_data[2] & 0x01) << 9);
+      LLOG_DEBUG2("x offset read = %d\n", x_offset);
+      if ((acc_data[2] & 0x02) != 0) {
+         x_offset = -x_offset;
+      }
+      LLOG_DEBUG2("x offset after sign check = %d\n", x_offset);
+      x_offset += (delta_x * (-2));
+      LLOG_DEBUG2("x offset after shift added = %d\n", x_offset);
+      if (x_offset < 0) {
+         x_offset = (-(x_offset)) | 0x0400;
+      }
+      LLOG_DEBUG2("x offset after shift added and sign checked = %d\n", x_offset);
+   
+      y_offset = ((acc_data[2] >> 2) & 0x003F) | ((acc_data[3] & 0x0F) << 6);
+      LLOG_DEBUG2("y offset read = %d\n", y_offset);
+      if ((acc_data[3] & 0x10) != 0) {
+         y_offset = -y_offset;
+      }
+      LLOG_DEBUG2("y offset after sign check = %d\n", y_offset);
+      y_offset += (delta_y * (-2));
+      LLOG_DEBUG2("y offset after shift added = %d\n", y_offset);
+      if (y_offset < 0) {
+         y_offset = (-(y_offset)) | 0x0400;
+      }
+      LLOG_DEBUG2("y offset after shift added and sign checked = %d\n", y_offset);
+   
+      z_offset = ((acc_data[3] >> 5) & 0x0007) | ((acc_data[4] & 0x7F) << 3);
+      LLOG_DEBUG2("z offset read = %d\n", z_offset);
+      if ((acc_data[4] & 0x80) != 0) {
+         z_offset = -z_offset;
+      }
+      LLOG_DEBUG2("z offset after sign check = %d\n", z_offset);
+      z_offset += (delta_z * (-2));
+      LLOG_DEBUG2("z offset after shift added = %d\n", z_offset);
+      if (z_offset < 0) {
+         z_offset = (-(z_offset)) | 0x0400;
+      }
+      LLOG_DEBUG2("z offset after shift added and sign checked = %d\n", z_offset);
+
+      calibration_regs[0] = (acc_data[0] & 0x7F) | (((unsigned char)(x_offset & 0x0001)) << 7);
+      calibration_regs[1] = (unsigned char)((x_offset & 0x01FE) >> 1);
+      calibration_regs[2] = (unsigned char)((x_offset & 0x0600) >> 9) |
+                    (((unsigned char)(y_offset & 0x003F)) << 2);
+      calibration_regs[3] = (unsigned char)((y_offset & 0x07C0) >> 6) |
+                    (((unsigned char)(z_offset & 0x0007)) << 5);
+      calibration_regs[4] = (unsigned char)((z_offset & 0x07F8) >> 3);
+
+      calibration_done = true;
+   }
+   else {
+      LLOG_DEBUG2("Using previously calculated calibration register values\n");
+   }
+
+   // Write new offset register values only if different from values read
+   for (count = 0; count < 5; count++) {
+      if (acc_data[count] != calibration_regs[count]) {
+         err |= write_mma7660F_reg(0x22, 0x01);
+         err |= write_mma7660F_reg((count+0x31), calibration_regs[count]);
+         err |= write_mma7660F_reg(0x22, 0x00);
+      }
+   }
+
+   return err;
+
 }
 
 
@@ -664,16 +797,22 @@ static irqreturn_t mma7660F_irq (int irq, void *data, struct pt_regs *r)
  */
 void mma7660F_sleep(void)
 {
-   LLOG_DEBUG1("Disabling IRQ and putting accelerometer in standby mode...\n");
+   if (!accel_locked) {
+      // Only perform locking functions if accelerometer is not locked
+      LLOG_DEBUG1("Disabling IRQ and putting accelerometer in standby mode...\n");
 
-   // Stop any pending delayed work items
-   cancel_delayed_work(&mma7660F_tq_d);
+      // Disable IRQ line
+      disable_irq(INT_IRQ);
 
-   // Disable IRQ line
-   disable_irq(INT_IRQ);
+      // Stop any pending delayed work items
+      cancel_rearming_delayed_work(&mma7660F_tq_d);
+      cancel_rearming_delayed_work(&mma7660F_version_tq_d);
 
-   // Put Freescale MMA7660F Accelerometer in standby mode
-   write_mma7660F_reg(ACCEL_MODE_REG, 0);
+      // Put Freescale MMA7660F Accelerometer in standby mode
+      write_mma7660F_reg(ACCEL_MODE_REG, 0);
+
+      accel_locked = true;
+   }
 }
 
 
@@ -683,15 +822,19 @@ void mma7660F_sleep(void)
  */
 void mma7660F_wake(void)
 {
-   LLOG_DEBUG1("Enabling IRQ and waking mma7660F\n");
+   if (accel_locked) {
+      // Only perform locking functions if accelerometer is locked
+      LLOG_DEBUG1("Enabling IRQ and waking mma7660F\n");
 
-   // Enable IRQ line
-   enable_irq(INT_IRQ);
+      // Enable IRQ line
+      enable_irq(INT_IRQ);
 
-   init_mma7660F();
+      // Initialize the MMA7660F; an interrupt will be generated when
+      // the first measurement is available
+      init_mma7660F();
 
-   // Schedule work function to read initial device status after a 2-sec delay
-   schedule_delayed_work(&mma7660F_tq_d, (2 * HZ));
+      accel_locked = false;
+   }
 }
 
 
@@ -736,12 +879,17 @@ int mma7660F_proc_read( char *page, char **start, off_t off,
                       int count, int *eof, void *data )
 {
    int len;
+   int orientation;
+   signed char calculated_tilt;
 
    if (off > 0) {
      *eof = 1;
      return 0;
    }
-   switch (device_orientation) {
+
+   orientation = xyz_orientation(&calculated_tilt);
+
+   switch (orientation) {
    case DEVICE_UNKNOWN:
       len = sprintf(page, "%s\n", PROC_ORIENTATION_STRING_UNKNOWN);
       break;
@@ -763,9 +911,6 @@ int mma7660F_proc_read( char *page, char **start, off_t off,
    case DEVICE_FACE_DOWN:
       len = sprintf(page, "%s\n", PROC_ORIENTATION_STRING_FACE_DOWN);
       break;
-   case DEVICE_FREE_FALL:
-      len = sprintf(page, "%s\n", PROC_ORIENTATION_STRING_FREE_FALL);
-      break;
    default:
       len = sprintf(page, "%s\n", PROC_ORIENTATION_STRING_INVALID);
       break;
@@ -785,10 +930,13 @@ ssize_t mma7660F_proc_write( struct file *filp, const char __user *buff,
    int acc_data_int;
    unsigned int reg_addr_int;
    unsigned char reg_addr;
-   unsigned char shake_or_tap;
-   unsigned char axis;
    unsigned int new_hold_time;
+   unsigned int new_sample_rate;
    unsigned int calculated_debounce;
+   char *x_sign = " ";
+   char *y_sign = " ";
+   char *z_sign = " ";
+   int x_rnd, y_rnd, z_rnd;
 
    if (len > PROC_CMD_LEN) {
       LLOG_ERROR("proc_len", "", "mma7455L command is too long!\n");
@@ -855,6 +1003,113 @@ ssize_t mma7660F_proc_write( struct file *filp, const char __user *buff,
    else if ( !strncmp(command, "unlock", 6) ) {
       mma7660F_wake();
       LLOG_INFO("unlock", "", "status=unlocked\n");
+   }
+   else if ( !strncmp(command, "calibrate", 9) ) {
+      calibration_done = false; // Change flag since we're forcing calibration
+      sscanf(command, "calibrate %d,%d,%d", &x_shift, &y_shift, &z_shift);
+      err = mma7660F_calibrate(x_shift, y_shift, z_shift);
+      if (err == 0) {
+         LLOG_INFO("calibrated", "", "MMA7660F calibrated\n");
+      }
+      else {
+         LLOG_ERROR("not_calibrated", "", "Calibration failed!\n");
+      }
+   }
+   else if ( !strncmp(command, "xyz_start", 9) ) {
+      // Start xyz data collection
+      LLOG_INFO("xyz_start", "", "starting X,Y,Z data collection\n");
+      write_mma7660F_reg(ACCEL_MODE_REG, 0);  // Standby MMA7660F
+      write_mma7660F_reg(ACCEL_INTSU_REG, 0x10);  // Interrupt at each measr.
+      x_total = 0; y_total = 0; z_total = 0; xyz_samples = 0;
+      write_mma7660F_reg(ACCEL_MODE_REG, 0x01);  // Wake up MMA7660F
+   }
+   else if ( !strncmp(command, "xyz_end", 7) ) {
+      // End xyz data collection and report results
+      write_mma7660F_reg(ACCEL_MODE_REG, 0);  // Standby MMA7660F
+      if (xyz_samples == 0) { // No samples taken; we don't want to divide by 0
+         LLOG_WARN("xyz_zero", "", "stopped X,Y,Z data collection. ***ZERO*** samples taken. X,Y,Z averages = 0.0,0.0,0.0\n");
+         LLOG_WARN("xyz_rounded_zero", "", "***ZERO*** X,Y,Z rounded averages = 0,0,0\n");
+      }
+      else {
+         if ( (x_total < 0) && ( (x_total/xyz_samples) == 0) ) {
+            x_sign = "-";
+         }
+         else {
+            x_sign = "";
+         }
+         if ( (y_total < 0) && ( (y_total/xyz_samples) == 0) ) {
+            y_sign = "-";
+         }
+         else {
+            y_sign = "";
+         }
+         if ( (z_total < 0) && ( (z_total/xyz_samples) == 0) ) {
+            z_sign = "-";
+         }
+         else {
+            z_sign = "";
+         }
+         LLOG_INFO("xyz_end", "", "stopped X,Y,Z data collection. %d samples taken. X,Y,Z averages = %s%1d.%1d,%s%1d.%1d,%s%1d.%1d\n", xyz_samples, x_sign, x_total/xyz_samples, (abs(x_total) % xyz_samples)*10/xyz_samples, y_sign, y_total/xyz_samples, (abs(y_total) % xyz_samples)*10/xyz_samples, z_sign, z_total/xyz_samples, (abs(z_total) % xyz_samples)*10/xyz_samples);
+         if ( abs(x_total/xyz_samples) <= 10 ) {
+            // Normal rounding
+            x_rnd = (x_total+(x_total > 0 ? 1 : -1)*(xyz_samples/2))/xyz_samples;
+         }
+         else {
+            // Rounding towards 21.3 counts, which is 1g
+            x_rnd = (x_total+(x_total > 0 ? 1 : -1)*(xyz_samples/5))/xyz_samples;
+         }
+         if ( abs(y_total/xyz_samples) <= 10 ) {
+            // Normal rounding
+            y_rnd = (y_total+(y_total > 0 ? 1 : -1)*(xyz_samples/2))/xyz_samples;
+         }
+         else {
+            // Rounding towards 21.3 counts, which is 1g
+            y_rnd = (y_total+(y_total > 0 ? 1 : -1)*(xyz_samples/5))/xyz_samples;
+         }
+         if ( abs(z_total/xyz_samples) <= 10 ) {
+            // Normal rounding
+            z_rnd = (z_total+(z_total > 0 ? 1 : -1)*(xyz_samples/2))/xyz_samples;
+         }
+         else {
+            // Rounding towards 21.3 counts, which is 1g
+            z_rnd = (z_total+(z_total > 0 ? 1 : -1)*(xyz_samples/5))/xyz_samples;
+         }
+         LLOG_INFO("xyz_rounded", "", "X,Y,Z rounded averages = %d,%d,%d\n", x_rnd, y_rnd, z_rnd);
+      }
+      init_mma7660F();  // Re-start MMA7660F in normal mode of operation
+   }
+   else if ( !strncmp(command, "sample", 6) ) {
+      // Requested to change sampling rate
+      sscanf(command, "sample %d", &new_sample_rate);
+      switch (new_sample_rate) {
+      case 1:
+         accel_sampling_rate = SR_AMSR_AM1;
+         break;
+      case 2:
+         accel_sampling_rate = SR_AMSR_AM2;
+         break;
+      case 4:
+         accel_sampling_rate = SR_AMSR_AM4;
+         break;
+      case 8:
+         accel_sampling_rate = SR_AMSR_AM8;
+         break;
+      case 16:
+         accel_sampling_rate = SR_AMSR_AM16;
+         break;
+      case 32:
+         accel_sampling_rate = SR_AMSR_AM32;
+         break;
+      case 64:
+         accel_sampling_rate = SR_AMSR_AM64;
+         break;
+      default:
+         LLOG_WARN("bad_sample", "", "MMA7660F sampling rate value %d is not allowed; valid values are: 1,2,4,8,16,32, and 64\n", new_sample_rate);
+         return(len);
+         break;
+      }
+      init_mma7660F();  // Update mma7660F registers with new values
+      LLOG_INFO("sample", "", "New MMA7660F sampling rate set to %d samples/sec\n", new_sample_rate);
    }
    else if ( !strncmp(command, "hold", 4) ) {
       sscanf(command, "hold %d", &new_hold_time);
@@ -927,104 +1182,6 @@ ssize_t mma7660F_proc_write( struct file *filp, const char __user *buff,
       }
       init_mma7660F();  // Update mma7660F registers with new values
       LLOG_INFO("hold", "", "hold time=%d msec\n", new_hold_time);
-   }
-   else if ( !strncmp(command, "enable", 6) ) {
-      // Requested to enable shake or tap
-      sscanf(command, "enable %c %c", &shake_or_tap, &axis);
-      if ( (shake_or_tap == 's') || (shake_or_tap == 'S') ) {
-         switch(axis) {
-         case 'x':
-            shake_x_enabled = 1;
-            LLOG_INFO("shake_x_en", "", "Enabling shake detection on X axis\n");
-            break;
-         case 'y':
-            shake_y_enabled = 1;
-            LLOG_INFO("shake_y_en", "", "Enabling shake detection on Y axis\n");
-            break;
-         case 'z':
-            shake_z_enabled = 1;
-            LLOG_INFO("shake_z_en", "", "Enabling shake detection on Z axis\n");
-            break;
-         default:
-            LLOG_ERROR("bad_en_shake_axis", "", "ERROR - shake axis must be x, y, or z\n");
-            return(len);
-            break;
-         }
-         init_mma7660F();
-      }
-      else if ( (shake_or_tap == 't') || (shake_or_tap == 'T') ) {
-         switch(axis) {
-         case 'x':
-            tap_x_enabled = 1;
-            LLOG_INFO("tap_x_en", "", "Enabling tap detection on X axis\n");
-            break;
-         case 'y':
-            tap_y_enabled = 1;
-            LLOG_INFO("tap_y_en", "", "Enabling tap detection on Y axis\n");
-            break;
-         case 'z':
-            tap_z_enabled = 1;
-            LLOG_INFO("tap_z_en", "", "Enabling tap detection on Z axis\n");
-            break;
-         default:
-            LLOG_ERROR("bad_en_tap_axis", "", "ERROR - tap axis must be x, y, or z\n");
-            return(len);
-            break;
-         }
-         init_mma7660F();
-      }
-      else {
-         LLOG_ERROR("bad_enable", "", "ERROR - must specify either s for shake or t for tap\n");
-      }
-   }
-   else if ( !strncmp(command, "disable", 6) ) {
-      // Requested to disable shake or tap
-      sscanf(command, "disable %c %c", &shake_or_tap, &axis);
-      if ( (shake_or_tap == 's') || (shake_or_tap == 'S') ) {
-         switch(axis) {
-         case 'x':
-            shake_x_enabled = 0;
-            LLOG_INFO("shake_x_dis", "", "Disabling shake detection on X axis\n");
-            break;
-         case 'y':
-            shake_y_enabled = 0;
-            LLOG_INFO("shake_y_dis", "", "Disabling shake detection on Y axis\n");
-            break;
-         case 'z':
-            shake_z_enabled = 0;
-            LLOG_INFO("shake_z_dis", "", "Disabling shake detection on Z axis\n");
-            break;
-         default:
-            LLOG_ERROR("bad_dis_shake_axis", "", "ERROR - Usage - disable s|t x|y|z \n");
-            return(len);
-            break;
-         }
-         init_mma7660F();
-      }
-      else if ( (shake_or_tap == 't') || (shake_or_tap == 'T') ) {
-         switch(axis) {
-         case 'x':
-            tap_x_enabled = 0;
-            LLOG_INFO("tap_x_dis", "", "Disabling tap detection on X axis\n");
-            break;
-         case 'y':
-            tap_y_enabled = 0;
-            LLOG_INFO("tap_y_dis", "", "Disabling tap detection on Y axis\n");
-            break;
-         case 'z':
-            tap_z_enabled = 0;
-            LLOG_INFO("tap_z_dis", "", "Disabling tap detection on Z axis\n");
-            break;
-         default:
-            LLOG_ERROR("bad_dis_tap_axis", "", "ERROR - tap axis must be x, y, or z\n");
-            return(len);
-            break;
-         }
-         init_mma7660F();
-      }
-      else {
-         LLOG_ERROR("bad_disable", "", "ERROR - must specify either s for shake or t for tap\n");
-      }
    }
    else if ( !strncmp(command, "debug", 5) ) {
       // Requested to set debug level
@@ -1106,8 +1263,9 @@ static int __devinit mma7660F_probe(struct platform_device *pdev)
 
    LLOG_INFO("lines_done", "", "GPIO and IRQ have been set up\n");
 
-   // Initialize the work item
+   // Initialize the work items
    INIT_DELAYED_WORK(&mma7660F_tq_d, detect_mma7660F_pos);
+   INIT_DELAYED_WORK(&mma7660F_version_tq_d, detect_mma7660F_version);
 
    // Register the device file
    error = misc_register(&mma7660F_dev);
@@ -1116,11 +1274,21 @@ static int __devinit mma7660F_probe(struct platform_device *pdev)
       return error;
    }
 
-   // Initialize the MMA7660F
+   // Initialize semaphore 
+   accel_locked = false;
+
+   // Initialize the MMA7660F; an interrupt will be generated when
+   // the first measurement is available, if the chip is rev 1.2 or later
    init_mma7660F();
 
-   // Schedule work function to read initial device status after a 2-sec delay
-   schedule_delayed_work(&mma7660F_tq_d, (2 * HZ));
+   // Assume that the MMA7660F is a version later than 1.1, and schedule
+   // a work routine to execute in 1 sec.  If the accelerometer has not
+   // interrupted with a measurement by then, we assume that it is v1.1
+   // The implications are that on v1.1 we will not reset the MMA7660F
+   // during normal operation because this version of the chip does not
+   // generate interrupts when the orientation goes from "unknown" to "known"
+   mma7660F_v1p1 = false;
+   schedule_delayed_work(&mma7660F_version_tq_d, (HZ*1));
 
    LLOG_INFO("dev_initd", "", "MMA7660F device has been initialized\n");
 

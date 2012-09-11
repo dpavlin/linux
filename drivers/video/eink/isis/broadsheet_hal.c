@@ -108,6 +108,7 @@ static bs_flash_select eink_rom_select  = bs_flash_waveform;
 static bool eink_rom_select_locked      = false;
 static int  eink_ram_select             = 0;
 static bool eink_ram_select_locked      = false;
+static int broadsheet_num_ram_banks     = BROADSHEET_NUM_RAM_BANKS;
 
 static unsigned long broadsheet_size    = BROADSHEET_SIZE;
 static unsigned long scratchfb_size     = SCRATCHFB_SIZE;
@@ -630,21 +631,9 @@ static void broadsheet_watchdog_thread_body(void)
         //
         if ( !BS_STILL_READY() && (EINKFB_SUCCESS == EINKFB_LOCK_ENTRY()) )
         {
-            // If we were forcing the hardware not to be ready, unforce it now.
-            // Forcing the hardware not to be ready is for debugging purposes,
-            // and we treat it as a one-shot.
-            //
-            force_hw_not_ready = false;
-            
             bs_sw_init(FULL_BRINGUP_CONTROLLER, DONT_BRINGUP_PANEL);
             bs_cmd_ld_img_upd_data(fx_update_partial, UPD_DATA_RESTORE);
             EINKFB_LOCK_EXIT();
-            
-            // If Broadsheet's still not ready after we've tried to bring it
-            // back up, tell the eInk HAL that we're in real trouble.
-            //
-            if ( !BS_STILL_READY() )
-                EINKFB_NEEDS_RESET();
         }
         
         // Do a panel update repair if it hasn't already been done.
@@ -815,7 +804,7 @@ int broadsheet_get_ram_select(void)
 
 void broadsheet_set_ram_select(int ram_select)
 {
-    if ( !eink_ram_select_locked && IN_RANGE(ram_select, 0, (BROADSHEET_NUM_RAM_BANKS-1)) )
+    if ( !eink_ram_select_locked && IN_RANGE(ram_select, 0, (broadsheet_num_ram_banks-1)) )
         eink_ram_select = ram_select;
 }
 
@@ -900,8 +889,8 @@ void broadsheet_prime_watchdog_timer(bool delay_timer)
 
 static bool broadsheet_sw_init(struct fb_var_screeninfo *var, struct fb_fix_screeninfo *fix)
 {
+    u32 xres_hw, xres_sw, yres_hw, yres_sw;
     bool result = EINKFB_FAILURE;
-    bs_resolution_t res;
     
     // If we're overridden with a value other than portrait or landscape, switch us
     // back to the default.
@@ -919,8 +908,10 @@ static bool broadsheet_sw_init(struct fb_var_screeninfo *var, struct fb_fix_scre
 
     // Initalize enough of the hardware to ascertain the resolution we need to set up for.
     //
-    bs_sw_init_controller(FULL_BRINGUP_CONTROLLER, bs_orientation, &res);
-    scratchfb_size = BPP_SIZE((res.x_hw*res.y_hw), EINKFB_8BPP);
+    bs_sw_init_controller(FULL_BRINGUP_CONTROLLER, bs_orientation, &xres_hw, &xres_sw, &yres_hw, &yres_sw);
+    scratchfb_size = BPP_SIZE((xres_hw*yres_hw), EINKFB_8BPP);
+    
+    broadsheet_num_ram_banks = broadsheet_get_ram_size()/BROADSHEET_RAM_BANK_SIZE;
     
     // TODO:  Call einkfb_malloc() when it automatically handles
     //        vmalloc vs. kmalloc.
@@ -939,20 +930,17 @@ static bool broadsheet_sw_init(struct fb_var_screeninfo *var, struct fb_fix_scre
 
             case EINKFB_2BPP:
             case EINKFB_4BPP:
-                broadsheet_size                 = BPP_SIZE((res.x_sw*res.y_sw), bs_bpp);
+                broadsheet_size                 = BPP_SIZE((xres_sw*yres_sw), bs_bpp);
 
                 broadsheet_var.bits_per_pixel   = bs_bpp;
                 
                 broadsheet_fix.smem_len         = broadsheet_size;
-                broadsheet_fix.line_length      = BPP_SIZE(res.x_sw, bs_bpp);
+                broadsheet_fix.line_length      = BPP_SIZE(xres_sw, bs_bpp);
             break;
         }
         
-        broadsheet_var.xres = broadsheet_var.xres_virtual = res.x_sw;
-        broadsheet_var.yres = broadsheet_var.yres_virtual = res.y_sw;
-        
-        broadsheet_var.width  = res.x_mm;
-        broadsheet_var.height = res.y_mm;
+        broadsheet_var.xres = broadsheet_var.xres_virtual = xres_sw;
+        broadsheet_var.yres = broadsheet_var.yres_virtual = yres_sw;
 
         *var = broadsheet_var;
         *fix = broadsheet_fix;
@@ -984,7 +972,7 @@ static bool broadsheet_hw_init(struct fb_info *info, bool full)
 static void broadsheet_hw_done(bool full)
 {
     broadsheet_stop_watchdog_timer();
-    bs_sw_done();
+    bs_sw_done(DEALLOC);
 }
 
 static void broadsheet_create_proc_entries(void)
@@ -1007,9 +995,6 @@ static void broadsheet_create_proc_entries(void)
 
     einkfb_proc_hardwarefb = einkfb_create_proc_entry(EINKFB_PROC_HARDWAREFB, EINKFB_PROC_CHILD_R,
         hardwarefb_read, NULL);
-
-    einkfb_proc_eink_rom = einkfb_create_proc_entry(EINKFB_PROC_EINK_ROM, EINKFB_PROC_CHILD_RW,
-        eink_rom_read, eink_rom_write);
         
     einkfb_proc_eink_ram = einkfb_create_proc_entry(EINKFB_PROC_EINK_RAM, EINKFB_PROC_CHILD_RW,
         eink_ram_read, eink_ram_write);
@@ -1017,6 +1002,10 @@ static void broadsheet_create_proc_entries(void)
     einkfb_proc_eink_reg = einkfb_create_proc_entry(EINKFB_PROC_EINK_REG, EINKFB_PROC_CHILD_W,
         NULL, eink_reg_write);
 
+    if ( broadsheet_supports_flash() )
+        einkfb_proc_eink_rom = einkfb_create_proc_entry(EINKFB_PROC_EINK_ROM, EINKFB_PROC_CHILD_RW,
+            eink_rom_read, eink_rom_write);
+    
     // Create Broadsheet-specific sysfs entries.
     //
     FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_eink_rom_select);
@@ -1039,9 +1028,11 @@ static void broadsheet_remove_proc_entries(void)
     einkfb_remove_proc_entry(EINKFB_PROC_RECENT_COMMANDS, einkfb_proc_recent_commands);
     einkfb_remove_proc_entry(EINKFB_PROC_TEMPERATURE, einkfb_proc_temperature);
     einkfb_remove_proc_entry(EINKFB_PROC_HARDWAREFB, einkfb_proc_hardwarefb);
-    einkfb_remove_proc_entry(EINKFB_PROC_EINK_ROM, einkfb_proc_eink_rom);
     einkfb_remove_proc_entry(EINKFB_PROC_EINK_RAM, einkfb_proc_eink_ram);
     einkfb_remove_proc_entry(EINKFB_PROC_EINK_REG, einkfb_proc_eink_reg);
+
+    if ( broadsheet_supports_flash() )
+        einkfb_remove_proc_entry(EINKFB_PROC_EINK_ROM, einkfb_proc_eink_rom);
     
     // Remove Broadsheet-specific sysfs entries.
     //
@@ -1175,56 +1166,48 @@ static bool broadsheet_set_display_orientation(orientation_t orientation)
 {
     bool rotate = false;
     
-    // If Broadsheet isn't still in its ready state when we're attempting
-    // a rotation, tell the eInk HAL that we're in real trouble.
-    //
-    if ( !BS_STILL_READY() )
-        EINKFB_NEEDS_RESET();
-    else
+    switch ( orientation )
     {
-        switch ( orientation )
-        {
-            case orientation_portrait:
-                if ( !IS_PORTRAIT() )
-                {
-                    bs_orientation = EINK_ORIENT_PORTRAIT;
-                    bs_upside_down = false;
-                    rotate = true;
-                }
-            break;
-            
-            case orientation_portrait_upside_down:
-                if ( !IS_PORTRAIT_UPSIDE_DOWN() )
-                {
-                    bs_orientation = EINK_ORIENT_PORTRAIT;
-                    bs_upside_down = true;
-                    rotate = true;
-                }
-            break;
-            
-            case orientation_landscape:
-                if ( !IS_LANDSCAPE() )
-                {
-                    bs_orientation = EINK_ORIENT_LANDSCAPE;
-                    bs_upside_down = false;
-                    rotate = true;
-                }
-            break;
-            
-            case orientation_landscape_upside_down:
-                if ( !IS_LANDSCAPE_UPSIDE_DOWN() )
-                {
-                    bs_orientation = EINK_ORIENT_LANDSCAPE;
-                    bs_upside_down = true;
-                    rotate = true;
-                }
-            break;
-        }
+        case orientation_portrait:
+            if ( !IS_PORTRAIT() )
+            {
+                bs_orientation = EINK_ORIENT_PORTRAIT;
+                bs_upside_down = false;
+                rotate = true;
+            }
+        break;
         
-        if ( rotate )
-            bs_sw_init_panel(DONT_BRINGUP_PANEL);
+        case orientation_portrait_upside_down:
+            if ( !IS_PORTRAIT_UPSIDE_DOWN() )
+            {
+                bs_orientation = EINK_ORIENT_PORTRAIT;
+                bs_upside_down = true;
+                rotate = true;
+            }
+        break;
+        
+        case orientation_landscape:
+            if ( !IS_LANDSCAPE() )
+            {
+                bs_orientation = EINK_ORIENT_LANDSCAPE;
+                bs_upside_down = false;
+                rotate = true;
+            }
+        break;
+        
+        case orientation_landscape_upside_down:
+            if ( !IS_LANDSCAPE_UPSIDE_DOWN() )
+            {
+                bs_orientation = EINK_ORIENT_LANDSCAPE;
+                bs_upside_down = true;
+                rotate = true;
+            }
+        break;
     }
-
+    
+    if ( rotate )
+        bs_sw_init_panel(DONT_BRINGUP_PANEL);
+    
     return ( rotate );
 }
 

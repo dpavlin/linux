@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_mxc.c --
  *  eInk frame buffer device HAL broadsheet hw
  *
- *      Copyright (C) 2005-2009 Lab126
+ *      Copyright (C) 2005-2008 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -383,7 +383,9 @@ bool bs_hw_init(void)
         einkfb_print_crit("Failed IRQ request for Broadsheet HIRQ line; request status = %d\n", rqstatus);
         result = false;
     }
+#endif
 
+     // Set up GPIO pins
     if (mxc_request_gpio(BROADSHEET_HIRQ_LINE)) {
         einkfb_print_crit("Could not obtain GPIO pin for HIRQ\n");
         result = false;
@@ -392,8 +394,14 @@ bool bs_hw_init(void)
         // Set HIRQ pin as input
         mxc_set_gpio_direction(BROADSHEET_HIRQ_LINE, 1);
     }
-#endif
-
+    if (mxc_request_gpio(BROADSHEET_HRDY_LINE)) {
+        einkfb_print_crit("Could not obtain GPIO pin for HRDY\n");
+        result = false;
+    }
+    else {
+        // Set HRDY pin as input
+        mxc_set_gpio_direction(BROADSHEET_HRDY_LINE, 1);
+    }
 #ifdef CONFIG_MACH_MARIO_MX
     if (mxc_request_gpio(BROADSHEET_RST_LINE)) {
         einkfb_print_crit("Could not obtain GPIO pin for RST\n");
@@ -405,15 +413,6 @@ bool bs_hw_init(void)
         mxc_set_gpio_dataout(BROADSHEET_RST_LINE, 0);
     }
 #endif
-
-    if (mxc_request_gpio(BROADSHEET_HRDY_LINE)) {
-        einkfb_print_crit("Could not obtain GPIO pin for HRDY\n");
-        result = false;
-    }
-    else {
-        // Set HRDY pin as input
-        mxc_set_gpio_direction(BROADSHEET_HRDY_LINE, 1);
-    }
 
 #ifdef CONFIG_MACH_MX31ADS
     // Enable the level translator for the two GPIO inputs (HIRQ and HRDY)
@@ -482,13 +481,15 @@ bool bs_hw_test(void)
     return ( result );
 }
 
-void bs_hw_done(void)
+void bs_hw_done(bool dealloc)
 {
-#ifdef USE_BS_IRQ
-    disable_irq(BROADSHEET_HIRQ_IRQ);
-    free_irq(BROADSHEET_HIRQ_IRQ, NULL);
-    mxc_free_gpio(BROADSHEET_HIRQ_LINE);
-#endif
+    if ( !(broadsheet_ignore_hw_ready() || broadsheet_force_hw_not_ready()) )
+    {
+        // Wait until any pending operations are done before shutting down.
+        //
+        einkfb_debug("Waiting for HRDY before shutting down...\n");
+        wait_for_ready();
+    }
 
 #ifdef CONFIG_MACH_MX31ADS
     // Reset the level translator for the two GPIO inputs (HIRQ and HRDY)
@@ -499,6 +500,12 @@ void bs_hw_done(void)
     mxc_free_gpio(BROADSHEET_RST_LINE);
 #endif
 
+#ifdef USE_BS_IRQ
+    disable_irq(BROADSHEET_HIRQ_IRQ);
+    free_irq(BROADSHEET_HIRQ_IRQ, NULL);
+#endif
+
+    mxc_free_gpio(BROADSHEET_HIRQ_LINE);
     mxc_free_gpio(BROADSHEET_HRDY_LINE);
 
     einkfb_debug("Released Broadsheet GPIO pins and IRQs\n");

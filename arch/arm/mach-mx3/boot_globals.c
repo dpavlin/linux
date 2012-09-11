@@ -732,3 +732,18 @@ fb_apply_fx_t get_fb_apply_fx(void)
 
 EXPORT_SYMBOL(set_fb_apply_fx);
 EXPORT_SYMBOL(get_fb_apply_fx);
+
+// drivemode_online
+
+void set_drivemode_online(int drivemode_online)
+{
+    get_boot_globals()->globals.drivemode_online = drivemode_online;
+}
+
+int get_drivemode_online(void)
+{
+    return get_boot_globals()->globals.drivemode_online;
+}
+
+EXPORT_SYMBOL(set_drivemode_online);
+EXPORT_SYMBOL(get_drivemode_online);

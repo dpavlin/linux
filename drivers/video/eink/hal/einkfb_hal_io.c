@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal_io.c -- eInk frame buffer device HAL I/O
  *
- *      Copyright (C) 2005-2007 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -123,6 +123,31 @@ static update_area_t *einkfb_set_area_data(unsigned long flag, update_area_t *up
     return ( result );
 }
 
+static void einkfb_invert_area_data(update_area_t *update_area)
+{
+    int xstart = update_area->x1, xend = update_area->x2,
+        ystart = update_area->y1, yend = update_area->y2,
+        
+        xres = xend - xstart,
+        yres = yend - ystart,
+        
+        buffer_size = 0,
+        i;
+        
+    u8  *buffer = update_area->buffer;
+        
+    struct einkfb_info info;
+    einkfb_get_info(&info);
+    
+    buffer_size = BPP_SIZE((xres * yres), info.bpp);
+    
+    for ( i = 0; i < buffer_size; i++ )
+    {
+        buffer[i] = ~buffer[i];
+        EINKFB_SCHEDULE_BLIT(i);
+    }
+}
+
 static char unknown_cmd_string[32];
 
 char *einkfb_get_cmd_string(unsigned int cmd)
@@ -151,6 +176,14 @@ char *einkfb_get_cmd_string(unsigned int cmd)
 
         case FBIO_EINK_GET_REBOOT_BEHAVIOR:
             cmd_string = "get_reboot_behavior";
+        break;
+
+        case FBIO_EINK_SET_DISPLAY_ORIENTATION:
+            cmd_string = "set_display_orientation";
+        break;
+        
+        case FBIO_EINK_GET_DISPLAY_ORIENTATION:
+            cmd_string = "get_display_orientation";
         break;
 
         // Supported by Shim.
@@ -195,6 +228,10 @@ char *einkfb_get_cmd_string(unsigned int cmd)
             cmd_string = "progressbar_badge";
         break;
         
+        case FBIO_EINK_PROGRESSBAR_BACKGROUND:
+            cmd_string = "progressbar_background";
+        break;
+        
         // Unknown and/or unsupported.
         //
         default:
@@ -212,17 +249,20 @@ char *einkfb_get_cmd_string(unsigned int cmd)
     #pragma mark -
 #endif
 
+#define IOCTL_TIMING "ioctl_timing"
+
 int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int cmd, unsigned long arg)
 {
     bool done = !EINKFB_IOCTL_DONE, bad_arg = false;
     unsigned long start_time = jiffies, stop_time;
+    orientation_t old_orientation;
     int result = EINKFB_SUCCESS;
 
     unsigned long local_arg = arg;
     unsigned int local_cmd = cmd;
     
-    einkfb_debug_ioctl("%s(0x%08lX), start = %lu\n", einkfb_get_cmd_string(cmd),
-        arg, start_time);
+    einkfb_debug_ioctl("%s(0x%08lX)\n", einkfb_get_cmd_string(cmd), arg);
+    EINKFB_PRINT_PERF_REL(IOCTL_TIMING, 0UL, einkfb_get_cmd_string(cmd));
 
     // If there's a hook, give it the pre-command call.
     //
@@ -247,6 +287,7 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
                 if ( update_area )
                 {
                     fx_type saved_fx = update_area->which_fx;
+                    bool flash_area = false;
                     
                     // If there's a hook, give it the beginning in-situ call.
                     //
@@ -257,10 +298,26 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
                     // Update the display with the area data, preserving and
                     // normalizing which_fx as we go.
                     //
+                    if ( fx_flash == update_area->which_fx )
+                    {
+                        einkfb_invert_area_data(update_area);
+                        saved_fx = fx_update_full;
+                        flash_area = true;
+                    }
+                    
                     update_area->which_fx = UPDATE_AREA_MODE(saved_fx);
                     einkfb_update_display_area(update_area);
-                    update_area->which_fx = saved_fx;
                     
+                    if ( flash_area )
+                    {
+                        update_area->which_fx = fx_update_partial;
+                        einkfb_invert_area_data(update_area);
+                        
+                        einkfb_update_display_area(update_area);
+                    }
+                    
+                    update_area->which_fx = saved_fx;
+
                     // If there's a hook, give it the ending in-situ call.
                     //
                     if ( einkfb_ioctl_hook )
@@ -291,6 +348,37 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
                     goto failure;
             break;
             
+            case FBIO_EINK_SET_DISPLAY_ORIENTATION:
+                old_orientation = einkfb_get_display_orientation();
+                
+                if ( einkfb_set_display_orientation((orientation_t)local_arg) )
+                {
+                    orientation_t new_orientation = einkfb_get_display_orientation();
+                    
+                    if ( !ORIENTATION_SAME(old_orientation, new_orientation) )
+                    {
+                        struct einkfb_info hal_info;
+                        einkfb_get_info(&hal_info);
+                        
+                        if ( !info )
+                            info = hal_info.fbinfo;
+
+                        if ( info )
+                            einkfb_set_res_info(info, info->var.yres, info->var.xres);
+                    }
+                }
+            break;
+            
+            case FBIO_EINK_GET_DISPLAY_ORIENTATION:
+                if ( local_arg )
+                {
+                    old_orientation = einkfb_get_display_orientation();
+                    
+                    einkfb_memcpy(EINKFB_IOCTL_TO_USER, flag, (orientation_t *)local_arg,
+                        &old_orientation, sizeof(orientation_t));
+                }
+            break;
+            
             failure:
                 bad_arg = true;
             default:
@@ -314,10 +402,11 @@ int einkfb_ioctl_dispatch(unsigned long flag, struct fb_info *info, unsigned int
     }
     
     stop_time = jiffies;
-    
-    einkfb_debug_ioctl("result = %d, stop = %lu, elapsed = %ums\n", result, stop_time, 
-        jiffies_to_msecs(stop_time - start_time));
 
+    einkfb_debug_ioctl("result = %d\n", result);
+    EINKFB_PRINT_PERF_ABS(IOCTL_TIMING, (unsigned long)jiffies_to_msecs(stop_time - start_time),
+        einkfb_get_cmd_string(cmd));
+    
     return ( result );
 }
 

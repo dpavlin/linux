@@ -32,6 +32,18 @@
 
 #define APOLLO_SIZE     BPP_SIZE((XRES*YRES), BPP)
 
+#define IS_PORTRAIT()                           \
+    (APOLLO_ORIENTATION_270 == apollo_get_orientation())
+
+#define IS_PORTRAIT_UPSIDE_DOWN()               \
+    (APOLLO_ORIENTATION_90  == apollo_get_orientation())
+    
+#define IS_LANDSCAPE()                          \
+    (APOLLO_ORIENTATION_180 == apollo_get_orientation())
+    
+#define IS_LANDSCAPE_UPSIDE_DOWN()              \
+   (APOLLO_ORIENTATION_0    == apollo_get_orientation())
+
 static struct fb_var_screeninfo apollo_var __INIT_DATA =
 {
     .xres               = XRES,
@@ -532,21 +544,98 @@ einkfb_power_level apollo_get_power_level(void)
     return ( power_level );
 }
 
+static bool apollo_set_display_orientation(orientation_t orientation)
+{
+    u8 apollo_orientation;
+    bool rotate = false;
+    
+    switch ( orientation )
+    {
+        case orientation_portrait:
+            if ( !IS_PORTRAIT() )
+            {
+                apollo_orientation = APOLLO_ORIENTATION_270;
+                rotate = true;
+            }
+        break;
+        
+        case orientation_portrait_upside_down:
+            if ( !IS_PORTRAIT_UPSIDE_DOWN() )
+            {
+                apollo_orientation = APOLLO_ORIENTATION_90;
+                rotate = true;
+            }
+        break;
+        
+        case orientation_landscape:
+            if ( !IS_LANDSCAPE() )
+            {
+                apollo_orientation = APOLLO_ORIENTATION_180;
+                rotate = true;
+            }
+        break;
+        
+        case orientation_landscape_upside_down:
+            if ( !IS_LANDSCAPE_UPSIDE_DOWN() )
+            {
+                apollo_orientation = APOLLO_ORIENTATION_0;
+                rotate = true;
+            }
+        break;
+    }
+    
+    if ( rotate )
+        apollo_set_orientation(apollo_orientation);
+        
+    return ( rotate );
+}
+
+static orientation_t apollo_get_display_orientation(void)
+{
+    u8 apollo_orientation = apollo_get_orientation();
+    orientation_t orientation;
+   
+    switch ( apollo_orientation )
+    {
+        case APOLLO_ORIENTATION_270:
+        default:
+            orientation = orientation_portrait;
+        break;
+        
+        case APOLLO_ORIENTATION_90:
+            orientation = orientation_portrait_upside_down;
+        break;
+        
+        case APOLLO_ORIENTATION_180:
+            orientation = orientation_landscape;
+        break;
+        
+        case APOLLO_ORIENTATION_0:
+            orientation = orientation_landscape_upside_down;
+        break;
+    }
+    
+    return ( orientation );
+}
+
 static struct einkfb_hal_ops_t apollo_hal_ops =
 {
-    .hal_sw_init             = apollo_sw_init,
+    .hal_sw_init                 = apollo_sw_init,
     
-    .hal_hw_init             = apollo_hw_init,
-    .hal_hw_done             = apollo_hw_done,
+    .hal_hw_init                 = apollo_hw_init,
+    .hal_hw_done                 = apollo_hw_done,
     
-    .hal_create_proc_entries = apollo_create_proc_entries,
-    .hal_remove_proc_entries = apollo_remove_proc_entries,
+    .hal_create_proc_entries     = apollo_create_proc_entries,
+    .hal_remove_proc_entries     = apollo_remove_proc_entries,
     
-    .hal_update_display      = apollo_update_display,
-    .hal_update_area         = apollo_update_area,
+    .hal_update_display          = apollo_update_display,
+    .hal_update_area             = apollo_update_area,
     
-    .hal_set_power_level     = apollo_set_power_level,
-    .hal_get_power_level     = apollo_get_power_level
+    .hal_set_power_level         = apollo_set_power_level,
+    .hal_get_power_level         = apollo_get_power_level,
+
+    .hal_set_display_orientation = apollo_set_display_orientation,
+    .hal_get_display_orientation = apollo_get_display_orientation
 };
 
 static __INIT_CODE int apollo_hal_init(void)

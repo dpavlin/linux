@@ -47,6 +47,7 @@
 #include <linux/delay.h>
 #ifdef CONFIG_MACH_MARIO_MX
 #include <net/mwan.h>
+#include <asm/arch/pmic_rtc.h>
 #endif
 #include <asm/io.h>
 #include <asm/arch/mxc_pm.h>
@@ -63,6 +64,9 @@
 extern void clk_disable(struct clk *clk);
 extern int clk_enable(struct clk *clk);
 extern struct clk *clk_get(struct device *dev, const char *id);
+#ifdef CONFIG_MACH_MARIO_MX
+extern atomic_t lab126_mario_perf_log;
+#endif
 
 /*
  * TODO: whatta save?
@@ -159,6 +163,15 @@ static int mx31_pm_prepare(suspend_state_t state)
  */
 static int mx31_pm_finish(suspend_state_t state)
 {
+#ifdef CONFIG_MACH_MARIO_MX
+	struct timeval tv;
+	int print_perf = 0;
+
+	if (unlikely(atomic_read(&lab126_mario_perf_log))) {
+		pmic_rtc_get_time(&tv);
+		print_perf = 1;
+	}
+#endif
 	pmic_power_regulator_set_lp_mode(REGU_VIOLO, LOW_POWER_DISABLED);
 	pmic_power_regulator_set_lp_mode(REGU_VIOHI, LOW_POWER_DISABLED);
 
@@ -174,6 +187,11 @@ static int mx31_pm_finish(suspend_state_t state)
 	pmic_write_reg(REG_POWER_MISCELLANEOUS, (1 << 12), (1 << 12));
 	mdelay(100);
 
+#ifdef CONFIG_MACH_MARIO_MX
+	if (unlikely(print_perf)) {
+		printk(KERN_DEBUG "pm: P def:pmfinish:id=pmFinish,time=%lu000,type=absolute:received interrupt\n", tv.tv_sec);
+	}
+#endif
 	return 0;
 }
 

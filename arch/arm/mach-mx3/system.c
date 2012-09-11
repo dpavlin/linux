@@ -303,6 +303,9 @@ void arch_reset(char mode)
 #ifdef CONFIG_MACH_MARIO_MX
 	struct timeval pmic_time;
 
+	if (in_atomic())
+		mxc_wd_reset();
+
 	pmic_rtc_get_time(&pmic_time);
 	pmic_time.tv_sec += 5;
 	pmic_rtc_set_time_alarm(&pmic_time);
@@ -339,7 +342,7 @@ int __init mxc_check_oops(void)
 
 	if ( (oops_buffer[0] == 'O') && (oops_buffer[1] == 'O') &&
 		(oops_buffer[2] == 'P') && (oops_buffer[3] == 'S') ) {
-			printk ("Kernel Crash Start\n");
+			printk(KERN_ERR "boot: I def:oops::Kernel Crash Start\n");
 			printk ("%s", oops_buffer);
 			memcpy((void *)oops_buffer, (oops_start + 1024), 1023);
 			printk ("%s", oops_buffer);
@@ -347,7 +350,7 @@ int __init mxc_check_oops(void)
 			printk ("%s", oops_buffer);
 			memcpy((void *)oops_buffer, (oops_start + 3072), 1023);
 			printk ("%s", oops_buffer);
-			printk ("\nKernel Crash End\n");
+			printk ("\nboot: I def:oops::Kernel Crash End\n");
 	}
 
 	memset(oops_start, 0, OOPS_SAVE_SIZE);

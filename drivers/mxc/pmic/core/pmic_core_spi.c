@@ -37,6 +37,10 @@
 
 #include <asm/arch/pmic_external.h>
 #include <asm/arch/pmic_status.h>
+#ifdef CONFIG_MACH_MARIO_MX
+#include <asm/div64.h>
+#include <asm/atomic.h>
+#endif
 #include "pmic.h"
 
 /*
@@ -44,6 +48,9 @@
  */
 static pmic_version_t mxc_pmic_version;
 unsigned int active_events[MAX_ACTIVE_EVENTS];
+#ifdef CONFIG_MACH_MARIO_MX
+extern atomic_t lab126_mario_perf_log;
+#endif
 
 /* 
  * Static functions 
@@ -125,10 +132,22 @@ static void pmic_pdev_unregister(void)
  */
 static irqreturn_t pmic_irq_handler(int irq, void *dev_id)
 {
+#ifdef CONFIG_MACH_MARIO_MX
+	struct timeval tv;
+	s64 timestamp;
+#endif
 	disable_irq(67);
 
 	/* prepare a task */
 	schedule_work(&pmic_ws);
+#ifdef CONFIG_MACH_MARIO_MX
+	if (unlikely(atomic_read(&lab126_mario_perf_log))) {
+		do_gettimeofday(&tv);
+		timestamp = timeval_to_ns(&tv);
+		do_div(timestamp, NSEC_PER_MSEC);
+		printk(KERN_DEBUG "pmic_core_spi: P def:intr:id=pmicIntr,time=%lld,type=absolute:received interrupt\n", timestamp);
+	}
+#endif
 
 	return IRQ_HANDLED;
 }

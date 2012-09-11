@@ -1,22 +1,23 @@
 #include "apollo.h"
 #include "apollo_waveform.c"
 
-static char *apollo_base_map = NULL;
+static char *apollo_base_map  = NULL;
 
-static reg_addr_t reg_GPSR1  = NULL;
-static reg_addr_t reg_GPSR2  = NULL;
+static reg_addr_t reg_GPSR1   = NULL;
+static reg_addr_t reg_GPSR2   = NULL;
 
-static reg_addr_t reg_GPCR1  = NULL;
-static reg_addr_t reg_GPCR2  = NULL;
+static reg_addr_t reg_GPCR1   = NULL;
+static reg_addr_t reg_GPCR2   = NULL;
 
-static reg_addr_t reg_GPLR1  = NULL;
-static reg_addr_t reg_GPLR2  = NULL;
+static reg_addr_t reg_GPLR1   = NULL;
+static reg_addr_t reg_GPLR2   = NULL;
 
-static reg_addr_t reg_GPDR1  = NULL;
-static reg_addr_t reg_GPDR2  = NULL;
+static reg_addr_t reg_GPDR1   = NULL;
+static reg_addr_t reg_GPDR2   = NULL;
 
-static int apollo_init_comm  = 0;
-static int apollo_standby    = 0; // Workaround for PVI-6001A.
+static int apollo_init_comm   = 0;
+static int apollo_standby     = 0; // Workaround for PVI-6001A.
+static u8  apollo_orientation = APOLLO_ORIENTATION_270;
 
 #ifndef APOLLO_UNIVERSAL_BUILD
 static void apollo_preprocess_command(apollo_preprocess_command_t *apollo_preprocess_command,
@@ -261,7 +262,6 @@ void apollo_send_command(apollo_command_t *apollo_command)
     }
     
     if (apollo_command->buffer_size && apollo_command->buffer) {
-      fb_apply_fx_t fb_apply_fx = get_fb_apply_fx();
       u8 data, white = 0;
 
       n = apollo_command->buffer_size;
@@ -274,10 +274,6 @@ void apollo_send_command(apollo_command_t *apollo_command)
             apollo_preprocess_command.xres, apollo_preprocess_command.yres);
         } else {
           data = apollo_command->buffer[i];
-        }
-
-        if (fb_apply_fx) {
-            data = fb_apply_fx(data, i);
         }
 
         apollo_write_data(data);
@@ -612,11 +608,7 @@ void apollo_init(unsigned long bpp) {
 
       // Back to normal init sequence.
       //
-      apollo_command.command  = APOLLO_SET_ORIENTATION_CMD;
-      apollo_command.type     = APOLLO_WRITE_ONLY;
-      apollo_command.num_args = 1;
-      apollo_command.args[0]  = APOLLO_ORIENTATION_270;
-      apollo_send_command(&apollo_command);
+      apollo_set_orientation(APOLLO_ORIENTATION_270);
     
       apollo_command.command  = APOLLO_SET_DEPTH_CMD;
       apollo_command.type     = APOLLO_WRITE_ONLY;
@@ -728,5 +720,34 @@ void apollo_override_fpl(apollo_fpl_t *fpl) {
     fpl->adhesive_run_number = panel_id->adhesive_run_number;
     
     fpl->overridden          = 1;
+  }
+}
+
+u8 apollo_get_orientation(void) {
+    return apollo_orientation;
+}
+
+void apollo_set_orientation(u8 orientation) {
+  int set_orientation = 0;
+  
+  switch(orientation) {
+    case APOLLO_ORIENTATION_0:
+    case APOLLO_ORIENTATION_90:
+    case APOLLO_ORIENTATION_180:
+    case APOLLO_ORIENTATION_270:
+      set_orientation = 1;
+      break;
+  }
+
+  if (set_orientation) {
+    apollo_command_t apollo_command = { 0 };
+    
+    apollo_command.command  = APOLLO_SET_ORIENTATION_CMD;
+    apollo_command.type     = APOLLO_WRITE_ONLY;
+    apollo_command.num_args = 1;
+    apollo_command.args[0]  = orientation;
+    apollo_send_command(&apollo_command);
+    
+    apollo_orientation = orientation;
   }
 }

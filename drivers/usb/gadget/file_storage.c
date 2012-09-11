@@ -243,6 +243,7 @@
 #include <linux/usb/ch9.h>
 #include <linux/usb_gadget.h>
 #include <asm/arch/board_id.h>
+#include <asm/arch/boot_globals.h>
 
 #include "gadget_chips.h"
 
@@ -2328,6 +2329,8 @@ static int do_start_stop(struct fsg_dev *fsg)
 			return -EINVAL;
 		}
 	}
+	
+	set_drivemode_online(test_bit(ONLINE, &fsg->atomic_bitflags));
 #endif
 	return 0;
 }
@@ -3332,6 +3335,8 @@ static int do_set_config(struct fsg_dev *fsg, u8 new_config)
 			if (!test_and_set_bit(ONLINE, &fsg->atomic_bitflags) &&
 			    kobject_uevent(&fsg->gadget->dev.parent->kobj, KOBJ_ONLINE))
 				printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+		
+			set_drivemode_online(test_bit(ONLINE, &fsg->atomic_bitflags));
 		}
 	}
 	return rc;
@@ -3808,7 +3813,7 @@ static void /* __init_or_exit */ fsg_unbind(struct usb_gadget *gadget)
 			curlun->registered = 0;
 		}
 	}
-	
+
 	if (fsg->curlun != NULL) {
 		fsg->curlun->prevent_medium_removal = 0;
 		if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
@@ -4184,6 +4189,8 @@ static void fsg_suspend(struct usb_gadget *gadget)
 		if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
 		    kobject_uevent_atomic(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE))
 			printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+
+		set_drivemode_online(test_bit(ONLINE, &fsg->atomic_bitflags));
 	}
 
 	set_bit(SUSPENDED, &fsg->atomic_bitflags);
@@ -4257,6 +4264,7 @@ static int __init fsg_init(void)
 
 #ifdef CONFIG_MACH_MARIO_MX
 	device_desc.idProduct = mod_data.product = fsg_get_did();
+	set_drivemode_online(0);
 #endif
 
 	if ((rc = fsg_alloc()) != 0)

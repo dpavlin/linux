@@ -61,6 +61,8 @@
 #include <asm/irq.h>
 #include <asm/system.h>
 #include <asm/dma.h>
+#include <asm/arch/pmic_external.h>
+#include <asm/arch/pmic_power.h>
 
 #include "arcotg_udc.h"
 #include <asm/arch/arc_otg.h>
@@ -2265,8 +2267,12 @@ static DECLARE_DELAYED_WORK(arcotg_device_reset_work, arcotg_udc_device_reset);
 
 static void arcotg_udc_device_reset(struct work_struct *unused)
 {
-	if (atomic_read(&port_reset_counter) == 3)
+	if (atomic_read(&port_reset_counter) == 3) {
+		/* Clear out MEMA */
+		pmic_write_reg(REG_MEMORY_A, 0, 0xffffffff);
+		pmic_write_reg(REG_MEMORY_A, (1 << 1), (1 << 1));
 		kernel_restart(NULL);
+	}
 }
 
 static inline void reset_queues(struct arcotg_udc *udc)

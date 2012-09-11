@@ -81,6 +81,20 @@ MODULE_PARM_DESC(timer_margin, "initial watchdog timeout (in seconds)");
 
 static unsigned dev_num = 0;
 
+/*
+ * TESTING ONLY
+ *
+ * Provide a way to increase the timeout when running stress tests
+ */
+
+static ssize_t
+show_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, char *buf);
+
+static ssize_t
+store_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, const char *buf, size_t count);
+
+static DEVICE_ATTR(mxc_wdt_timeout, 0666, show_mxc_wdt_timeout, store_mxc_wdt_timeout);
+
 static void mxc_wdt_ping(u32 base)
 {
 	/* issue the service sequence instructions */
@@ -235,6 +249,32 @@ mxc_wdt_ioctl(struct inode *inode, struct file *file,
 	}
 }
 
+static ssize_t
+show_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", timer_margin);
+}
+
+static ssize_t
+store_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int new_margin;
+
+	if (sscanf(buf, "%d", &new_margin) != 1)
+		return -EINVAL;
+
+	if (new_margin > 127)
+		new_margin = 127;
+
+	mxc_wdt_adjust_timeout(new_margin);
+	mxc_wdt_disable(wdt_base_reg);
+	mxc_wdt_set_timeout(wdt_base_reg);
+	mxc_wdt_enable(wdt_base_reg);
+	mxc_wdt_ping(wdt_base_reg);
+	
+	return count;
+}
+
 static struct file_operations mxc_wdt_fops = {
 	.owner = THIS_MODULE,
 	.write = mxc_wdt_write,
@@ -284,6 +324,7 @@ static int __init mxc_wdt_probe(struct platform_device *pdev)
 	pr_info("MXC Watchdog # %d Timer: initial timeout %d sec\n", dev_num,
 		timer_margin);
 
+	ret = device_create_file(&pdev->dev, &dev_attr_mxc_wdt_timeout);
 	return 0;
 
       fail:
@@ -305,6 +346,7 @@ static int __exit mxc_wdt_remove(struct platform_device *pdev)
 	misc_deregister(&mxc_wdt_miscdev);
 	release_resource(mem);
 	pr_info("MXC Watchdog # %d removed\n", dev_num);
+	device_remove_file(&pdev->dev, &dev_attr_mxc_wdt_timeout);
 	return 0;
 }
 

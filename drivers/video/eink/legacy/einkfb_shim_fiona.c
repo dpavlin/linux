@@ -250,7 +250,7 @@ char *einkfb_shim_get_power_string(void)
 	#pragma mark -
 #endif
 
-bool einkfb_shim_platform_splash_screen_dispatch(which_screen)
+bool einkfb_shim_platform_splash_screen_dispatch(splash_screen_type which_screen, int yres)
 {
 	return ( false );
 }

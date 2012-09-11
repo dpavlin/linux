@@ -129,9 +129,9 @@ config FB_SYS_FOPS
        default n
 
 config FB_DEFERRED_IO
-	bool
+	bool "Enable Deferred IO"
 	depends on FB
-	default y
+	default n
 
 config FB_SVGALIB
 	tristate

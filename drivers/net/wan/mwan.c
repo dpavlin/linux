@@ -16,10 +16,9 @@
 #include <asm/arch/board_id.h>
 
 
-extern void gpio_wan_init(void *callback);
-extern void gpio_wan_exit(void *callback);
-extern void gpio_wan_power(int enable);
-extern void gpio_wan_usbhc1_pwr(int enable);
+// DTP module hardware-specific settings
+#undef USE_DTP_SLEEP_MODE
+#undef USE_DTP_RFE_PULLUP
 
 
 #undef DEBUG
@@ -33,18 +32,26 @@ extern void gpio_wan_usbhc1_pwr(int enable);
 #define log_info(format, arg...) printk("mwan: I %s:" format, __func__, ## arg)
 #define log_err(format, arg...) printk("mwan: E %s:" format, __func__, ## arg)
 
-#define VERSION			"0.8.5"
+#define VERSION			"1.1.4"
 
 #define PROC_WAN		"wan"
 #define PROC_WAN_POWER		"power"
 #define PROC_WAN_ENABLE		"enable"
+#define PROC_WAN_TYPE		"type"
+#define PROC_WAN_USB		"usb"
 
 static struct proc_dir_entry *proc_wan_parent;
 static struct proc_dir_entry *proc_wan_power;
 static struct proc_dir_entry *proc_wan_enable;
+static struct proc_dir_entry *proc_wan_type;
+static struct proc_dir_entry *proc_wan_usb;
 
 static wan_status_t wan_status = WAN_OFF;
-static int wan_enable = 0;
+static int modem_type = MODEM_TYPE_UNKNOWN;
+
+static int wan_rf_enable_state = 0;
+static int wan_usb_enable_state = 0;
+static int wan_on_off_state = 0;
 
 
 #define WAN_STRING_CLASS	"wan"
@@ -60,7 +67,7 @@ static struct class *wan_class = NULL;
 static struct class_device *wan_class_dev = NULL;
 static int wan_major = 0;
 
-static unsigned long tph_last_seconds = 0;
+static time_t tph_last_seconds = 0;
 
 // standard network deregistration time definition:
 //   2s -- maximum time required between the start of power down and that of IMSI detach
@@ -74,19 +81,55 @@ static unsigned long tph_last_seconds = 0;
 #define WAKE_EVENT_INTERVAL	10
 
 
+static time_t modem_off_seconds = -1;
+
+#define DTP_ON_DELAY_SEC	5	// DTP WAN power-up boot delay
+#define DTP_OFF_DELAY_SEC	3	// DTP WAN power-down supercap discharge delay
+
+
+static inline int
+get_wan_on_off(
+	void)
+{
+	return wan_on_off_state;
+}
+
+
 static void
-set_wan_rf_enable(
+set_wan_on_off(
 	int enable)
 {
-	extern void gpio_wan_rf_enable(int);
+	extern void gpio_wan_power(int);
 
-	if (enable != wan_enable) {
-		log_debug("swe:enable=%d:setting WAN RF enable state\n", enable);
+	enable = enable != 0;	// (ensure that "enable" is a boolean)
 
-		gpio_wan_rf_enable(enable);
+	if (modem_type == MODEM_TYPE_AD_DTP) {
+		if (!enable) {
+			modem_off_seconds = CURRENT_TIME_SEC.tv_sec;
 
-		wan_enable = enable;
+		} else if (modem_off_seconds > 0) {
+			long wait_seconds = (modem_off_seconds + DTP_OFF_DELAY_SEC) - CURRENT_TIME_SEC.tv_sec;
+
+			if (wait_seconds < 0) {
+				modem_off_seconds = wait_seconds = 0;
+
+			} else if (wait_seconds > 0) {
+				if (wait_seconds > DTP_OFF_DELAY_SEC) {
+					wait_seconds = DTP_OFF_DELAY_SEC;
+				}
+
+				log_info("wpd:wait=%ld:modem power on delay\n", wait_seconds);
+
+				ssleep(wait_seconds);
+			}
+		}
 	}
+
+	log_debug("pow:enable=%d:setting WAN hardware power state\n", enable);
+
+	gpio_wan_power(enable);
+
+	wan_on_off_state = enable;
 }
 
 
@@ -94,7 +137,47 @@ static inline int
 get_wan_rf_enable(
 	void)
 {
-	return wan_enable;
+	return wan_rf_enable_state;
+}
+
+
+static void
+set_wan_rf_enable(
+	int enable)
+{
+	extern void gpio_wan_rf_enable(int);
+
+	if (enable != get_wan_rf_enable()) {
+		log_debug("swe:enable=%d:setting WAN RF enable state\n", enable);
+
+		gpio_wan_rf_enable(enable);
+
+		wan_rf_enable_state = enable;
+	}
+}
+
+
+static inline int
+get_wan_usb_enable(
+	void)
+{
+	return wan_usb_enable_state;
+}
+
+
+static void
+set_wan_usb_enable(
+	int enable)
+{
+	extern void gpio_wan_usb_enable(int);
+
+	if (enable != get_wan_usb_enable()) {
+		log_debug("swu:enable=%d:setting WAN USB enable state\n", enable);
+
+		gpio_wan_usb_enable(enable);
+
+		wan_usb_enable_state = enable;
+	}
 }
 
 
@@ -109,18 +192,36 @@ set_wan_power(
 	}
 
 	// ignore any spurious WAKE line events during module power processing
-	tph_last_seconds = get_seconds();
+	tph_last_seconds = CURRENT_TIME_SEC.tv_sec;
 
 	switch (new_status) {
 
 		case WAN_ON :
-			log_debug("pow:status=%d:powering on WAN module\n", new_status);
+#ifdef USE_DTP_SLEEP_MODE
+			if (get_wan_on_off() == 0 || modem_type != MODEM_TYPE_AD_DTP) {
+#endif
+				// bring up WAN_ON_OFF
+				set_wan_on_off(1);
+#ifdef USE_DTP_SLEEP_MODE
+			}
+#endif
 
-			// power up the WAN
-			gpio_wan_power(1);
+			if (modem_type == MODEM_TYPE_AD_DTP || modem_type == MODEM_TYPE_UNKNOWN) {
+				// pause following power-on before bringing up the RF_ENABLE line (use 1s per DTP spec)
+				ssleep(1);
 
-			// enable the WAN RF subsystem
+			} else {
+				// pause for 100ms for all other modem types
+				msleep(100);
+			}
+
+			// bring up WAN_RF_ENABLE
 			set_wan_rf_enable(1);
+
+			if (modem_type == MODEM_TYPE_AD_DTP || modem_type == MODEM_TYPE_UNKNOWN) {
+				// (if modem is unknown, it could be a DTP, so must delay as well)
+				ssleep(DTP_ON_DELAY_SEC);
+			}
 			break;
 
 		default :
@@ -130,7 +231,7 @@ set_wan_power(
 
 		case WAN_OFF :
 		case WAN_OFF_KILL :
-			// disable the WAN RF subsystem
+			// bring down WAN_RF_ENABLE
 			set_wan_rf_enable(0);
 
 			if (new_status != WAN_OFF_KILL) {
@@ -138,10 +239,14 @@ set_wan_power(
 				msleep(NETWORK_DEREG_TIME);
 			}
 
-			log_debug("pow:status=%d:powering off WAN module\n", new_status);
-
-			// power off the WAN
-			gpio_wan_power(0);
+#ifdef USE_DTP_SLEEP_MODE
+			if (new_status == WAN_OFF_KILL || modem_type != MODEM_TYPE_AD_DTP) {
+#endif
+				// bring down WAN_ON_OFF
+				set_wan_on_off(0);
+#ifdef USE_DTP_SLEEP_MODE
+			}
+#endif
 
 			new_status = WAN_OFF;
 			break;
@@ -153,6 +258,30 @@ set_wan_power(
 	wan_set_power_status(wan_status);
 
 	return 0;
+}
+
+
+static void
+init_modem_type(
+	int type)
+{
+	extern void gpio_wan_cfg_rf_enable(int);
+
+	if (modem_type != type) {
+		log_info("smt:type=%d:setting modem type\n", type);
+
+		modem_type = type;
+#ifdef USE_DTP_RFE_PULLUP
+		if (modem_type != MODEM_TYPE_AD_DTP) {
+#endif
+			//log_info("srg::reconfiguring RF_ENABLE as open-drain\n");
+
+			// reconfigure WAN_RF_ENABLE line to be open drain
+			gpio_wan_cfg_rf_enable(1);
+#ifdef USE_DTP_RFE_PULLUP
+		}
+#endif
+	}
 }
 
 
@@ -179,7 +308,7 @@ proc_power_write(
         void *data)
 {
 	char lbuf[16];
-	wan_status_t new_wan_status, prev_wan_status = wan_status;
+	unsigned char op;
 
 	memset(lbuf, 0, sizeof(lbuf));
 
@@ -187,18 +316,34 @@ proc_power_write(
 		return -EFAULT;
 	}
 
-	if (lbuf[0] == '2') {
-		// turn off, skipping deregistration
-		set_wan_power(WAN_OFF_KILL);
+	op = lbuf[0];
+	if (op >= '0' && op <= '9') {
+		wan_status_t new_wan_status = (wan_status_t)(op - '0'), prev_wan_status = wan_status;
+
+		switch (new_wan_status) {
+
+			case WAN_OFF :
+			case WAN_ON :
+				// perform normal on/off power handling
+				if ((new_wan_status == WAN_ON && prev_wan_status == WAN_OFF) ||
+				    (new_wan_status == WAN_OFF && prev_wan_status == WAN_ON)) {
+					set_wan_power(new_wan_status);
+				}
+				break;
+
+
+			case WAN_OFF_KILL :
+				set_wan_power(new_wan_status);
+				break;
+
+			default :
+		                log_err("req_err:request=%d:unknown power request\n", new_wan_status);
+				break;
+
+		}
 
 	} else {
-		// perform normal on/off power handling
-		new_wan_status = lbuf[0] == '0' ? WAN_OFF : WAN_ON;
-
-		if ((new_wan_status == WAN_ON && prev_wan_status == WAN_OFF) ||
-		    (new_wan_status == WAN_OFF && prev_wan_status == WAN_ON)) {
-			set_wan_power(new_wan_status);
-		}
+		log_err("req_err:request='%c':unknown power request\n", op);
 	}
 
 	return count;
@@ -241,6 +386,85 @@ proc_enable_write(
 }
 
 
+static int
+proc_type_read(
+	char *page,
+	char **start,
+	off_t off,
+	int count,
+	int *eof,
+	void *data)
+{
+	*eof = 1;
+
+	return sprintf(page, "%d\n", modem_type);
+}
+
+
+static int
+proc_type_write(
+        struct file *file,
+        const char __user *buf,
+        unsigned long count,
+        void *data)
+{
+	char lbuf[16], ch;
+
+	memset(lbuf, 0, sizeof(lbuf));
+
+	if (copy_from_user(lbuf, buf, 1)) {
+		return -EFAULT;
+	}
+
+	ch = lbuf[0];
+	if (ch >= '0' && ch <= '9') {
+		init_modem_type(ch - '0');
+
+	} else {
+		log_err("type_err:type=%c:invalid type\n", ch);
+
+	}
+
+	return count;
+}
+
+
+static int
+proc_usb_read(
+	char *page,
+	char **start,
+	off_t off,
+	int count,
+	int *eof,
+	void *data)
+{
+	*eof = 1;
+
+	return sprintf(page, "%d\n", get_wan_usb_enable());
+}
+
+
+static int
+proc_usb_write(
+	struct file *file,
+	const char __user *buf,
+	unsigned long count,
+	void *data)
+{
+	char lbuf[16];
+
+	memset(lbuf, 0, sizeof(lbuf));
+
+	if (copy_from_user(lbuf, buf, 1)) {
+		return -EFAULT;
+	}
+
+	set_wan_usb_enable(lbuf[0] != '0');
+
+	return count;
+}
+
+
 static void
 wan_tph_notify(
 	void)
@@ -256,7 +480,7 @@ wan_tph_event_handler(
 	unsigned long tph_cur_seconds, tph_delta;
 
 	// the module may generate extraneous TPH events; filter out these extra events
-	tph_cur_seconds = get_seconds();
+	tph_cur_seconds = CURRENT_TIME_SEC.tv_sec;
 
 	tph_delta = (tph_last_seconds <= tph_cur_seconds) ?
 			(tph_cur_seconds - tph_last_seconds) : 
@@ -276,6 +500,8 @@ static int
 wan_init(
 	void)
 {
+	extern void gpio_wan_init(void *);
+	extern void gpio_wan_exit(void *);
 	int ret;
 
 	gpio_wan_init(wan_tph_event_handler);
@@ -325,6 +551,8 @@ static void
 wan_exit(
 	void)
 {
+	extern void gpio_wan_exit(void *);
+
 	wan_set_power_status(WAN_INVALID);
 
 	gpio_wan_exit(wan_tph_event_handler);
@@ -348,11 +576,11 @@ mwan_init(
 
 	// create the "/proc/wan" parent directory
 	proc_wan_parent = create_proc_entry(PROC_WAN, S_IFDIR | S_IRUGO | S_IXUGO, NULL);
-	if (proc_wan_parent) {
+	if (proc_wan_parent != NULL) {
 
 		// create the "/proc/wan/power" entry
 		proc_wan_power = create_proc_entry(PROC_WAN_POWER, S_IWUSR | S_IRUGO, proc_wan_parent);
-		if (proc_wan_power) {
+		if (proc_wan_power != NULL) {
 			proc_wan_power->data = NULL;
 			proc_wan_power->read_proc = proc_power_read;
 			proc_wan_power->write_proc = proc_power_write;
@@ -360,10 +588,26 @@ mwan_init(
 
 		// create the "/proc/wan/enable" entry
 		proc_wan_enable = create_proc_entry(PROC_WAN_ENABLE, S_IWUSR | S_IRUGO, proc_wan_parent);
-		if (proc_wan_enable) {
+		if (proc_wan_enable != NULL) {
 			proc_wan_enable->data = NULL;
 			proc_wan_enable->read_proc = proc_enable_read;
 			proc_wan_enable->write_proc = proc_enable_write;
+		}
+
+		// create the "/proc/wan/type" entry
+		proc_wan_type = create_proc_entry(PROC_WAN_TYPE, S_IWUSR | S_IRUGO, proc_wan_parent);
+		if (proc_wan_type != NULL) {
+			proc_wan_type->data = NULL;
+			proc_wan_type->read_proc = proc_type_read;
+			proc_wan_type->write_proc = proc_type_write;
+		}
+
+		// create the "/proc/wan/usb" entry
+		proc_wan_usb = create_proc_entry(PROC_WAN_USB, S_IWUSR | S_IRUGO, proc_wan_parent);
+		if (proc_wan_usb != NULL) {
+			proc_wan_usb->data = NULL;
+			proc_wan_usb->read_proc = proc_usb_read;
+			proc_wan_usb->write_proc = proc_usb_write;
 		}
 
 	} else {
@@ -384,11 +628,13 @@ mwan_exit(
 	void)
 {
 	if (proc_wan_parent != NULL) {
+		remove_proc_entry(PROC_WAN_USB, proc_wan_parent);
+		remove_proc_entry(PROC_WAN_TYPE, proc_wan_parent);
 		remove_proc_entry(PROC_WAN_ENABLE, proc_wan_parent);
 		remove_proc_entry(PROC_WAN_POWER, proc_wan_parent);
 		remove_proc_entry(PROC_WAN, NULL);
 
-		proc_wan_enable = proc_wan_power = proc_wan_parent = NULL;
+		proc_wan_usb = proc_wan_type = proc_wan_enable = proc_wan_power = proc_wan_parent = NULL;
         }
 
 	wan_exit();
@@ -402,5 +648,4 @@ MODULE_DESCRIPTION("Mario WAN hardware driver");
 MODULE_AUTHOR("Lab126");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(VERSION);
-
 

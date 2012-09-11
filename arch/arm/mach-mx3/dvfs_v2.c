@@ -332,13 +332,33 @@ void pmic_voltage_init(void)
 {
 	t_regulator_voltage volt;
 	unsigned int reg;
+	unsigned int reg_memory_a;
 
 	reg = __raw_readl(MXC_CCM_RCSR);
-	printk(KERN_ERR "RCSR register - %x\n", reg);
 
 	if (reg & 0x2) {
-		printk(KERN_ERR "Previous reset was a watchdog ... rebooting\n");
+		/* Clear out MEMA */
+		pmic_write_reg(REG_MEMORY_A, 0, 0xffffffff);
+		/* Turn on bit #0 */
+		pmic_write_reg(REG_MEMORY_A, (1 << 0), (1 << 0));
+
+		printk(KERN_ERR "boot: I def:wdrbt::Previous reset was a watchdog ... rebooting\n");
 		kernel_restart(NULL);
+	}
+
+	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << 0));
+
+	if (reg_memory_a & 0x1) {
+		/* Clear out MEMA */
+		pmic_write_reg(REG_MEMORY_A, 0, 0xffffffff);
+		printk(KERN_ERR "boot: I def:wdrst::Watchdog Reset Encountered\n");
+	}
+
+	pmic_read_reg(REG_MEMORY_A, &reg_memory_a, (1 << 1));
+	if (reg_memory_a & 0x2) {
+		/* Clear out MEMA */
+		pmic_write_reg(REG_MEMORY_A, 0, 0xffffffff);
+		printk(KERN_ERR "boot: I def:usbhost::USB Host Detection restart\n");
 	}
 
 	/* Enable 4 mc13783 output voltages */

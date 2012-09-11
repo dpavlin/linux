@@ -11,7 +11,7 @@
 #include "einkfb_hal.h"
 
 #if PRAGMAS
-    #pragma mark Definitions
+    #pragma mark Definitions & Globals
     #pragma mark -
 #endif
 
@@ -151,6 +151,7 @@ static DECLARE_MUTEX(einkfb_lock);
 
 struct vfb_blit_t
 {
+    bool buffers_equal;
     u8 *src, *dst;
 };
 typedef struct vfb_blit_t vfb_blit_t;
@@ -158,10 +159,14 @@ typedef struct vfb_blit_t vfb_blit_t;
 static void einkfb_vfb_blit(int x, int y, int rowbytes, int bytes, void *data)
 {
     vfb_blit_t *vfb_blit = (vfb_blit_t *)data;
-    vfb_blit->dst[(rowbytes * y) + x] = vfb_blit->src[bytes];
+    int dst_bytes  = (rowbytes * y) + x;
+    u8  old_pixels = vfb_blit->dst[dst_bytes];
+    
+    vfb_blit->dst[dst_bytes] = vfb_blit->src[bytes];
+    vfb_blit->buffers_equal &= old_pixels == vfb_blit->dst[dst_bytes];
 }
 
-static void einkfb_update_vfb_area(update_area_t *update_area)
+static bool einkfb_update_vfb_area(update_area_t *update_area)
 {
     // If we get here, the update_area has already been validated.  So, all we
     // need to do is blit things into the virtual framebuffer at the right
@@ -175,9 +180,6 @@ static void einkfb_update_vfb_area(update_area_t *update_area)
     vfb_blit_t vfb_blit;
     
     struct einkfb_info info;
-    einkfb_event_t event;
-    
-    einkfb_init_event(&event);
     einkfb_get_info(&info);
     
     area_xres  = update_area->x2 - update_area->x1;
@@ -196,55 +198,96 @@ static void einkfb_update_vfb_area(update_area_t *update_area)
     
     // Blit the area data into the virtual framebuffer.
     //
+    vfb_blit.buffers_equal = true;
     vfb_blit.src = area_start;
     vfb_blit.dst = fb_start;
     
     einkfb_blit(x_start, x_end, y_start, y_end, einkfb_vfb_blit, (void *)&vfb_blit);
 
-    // Say that an update-display event has occurred.
+    // Say that an update-display event has occurred if the buffers aren't equal.
     //
-    event.update_mode = update_area->which_fx;
-    event.x1 = update_area->x1; event.x2 = update_area->x2;
-    event.y1 = update_area->y1; event.y2 = update_area->y2;
-    event.event = einkfb_event_update_display_area;
+    if ( !vfb_blit.buffers_equal )
+    {
+        einkfb_event_t event; einkfb_init_event(&event);
+        
+        event.update_mode = update_area->which_fx;
+        event.x1 = update_area->x1; event.x2 = update_area->x2;
+        event.y1 = update_area->y1; event.y2 = update_area->y2;
+        event.event = einkfb_event_update_display_area;
+        
+        einkfb_post_event(&event);
+    }
     
-    einkfb_post_event(&event);
+    return ( vfb_blit.buffers_equal );
 }
 
-static void einkfb_update_vfb(fx_type update_mode)
+static bool einkfb_update_vfb(fx_type update_mode)
 {
-    fb_apply_fx_t fb_apply_fx = get_fb_apply_fx();
-    struct einkfb_info info;
-    einkfb_event_t event;
+    bool buffers_equal = true;
     
-    einkfb_init_event(&event);
+    struct einkfb_info info;
     einkfb_get_info(&info);
     
     // Copy the real framebuffer into the virtual framebuffer if we're
     // not doing a restore.
     //
-    if ( !EINKFB_RESTORE(info) )
+    if ( EINKFB_RESTORE(info) )
+    {
+        // On restores, say that the buffers aren't equal to force
+        // an update.
+        //
+        buffers_equal = false;
+    }
+    else
     {    
+        fb_apply_fx_t fb_apply_fx = get_fb_apply_fx();
+        int i, len;
+
         if ( fb_apply_fx )
         {
-            int i;
+            u8 old_pixels, *vfb = info.vfb, *fb = info.start;
+            len = info.size;
             
-            for ( i = 0; i < info.size; i++ )
+            for ( i = 0; i < len; i++ )
             {
-                info.vfb[i] = fb_apply_fx(info.start[i], i);
+                old_pixels = vfb[i];
+                vfb[i] = fb_apply_fx(fb[i], i);
+                
+                buffers_equal &= old_pixels == vfb[i];
                 EINKFB_SCHEDULE_BLIT(i+1);
             }
         }
         else
-            EINKFB_MEMCPYK(info.vfb, info.start, info.size);
+        {
+            u32 old_pixels, *vfb = (u32 *)info.vfb, *fb = (u32 *)info.start;
+            len = info.size >> 2;
+            
+            for ( i = 0; i < len; i++ )
+            {
+                old_pixels = vfb[i];
+                vfb[i] = fb[i];
+                
+                buffers_equal &= old_pixels == vfb[i];
+            }
+            
+            if ( EINKFB_MEMCPY_MIN < i )
+                EINKFB_SCHEDULE();
+        }
     }
 
-    // Say that an update-display event has occurred.
+    // Say that an update-display event has occurred if the buffers aren't equal.
     //
-    event.event = einkfb_event_update_display;
-    event.update_mode = update_mode;
+    if ( !buffers_equal )
+    {
+        einkfb_event_t event; einkfb_init_event(&event);
 
-    einkfb_post_event(&event);
+        event.event = einkfb_event_update_display;
+        event.update_mode = update_mode;
+    
+        einkfb_post_event(&event);
+    }
+    
+    return ( buffers_equal );
 }
 
 #if PRAGMAS
@@ -353,26 +396,33 @@ int einkfb_lock_entry(char *function_name)
 {
     int result = EINKFB_FAILURE;
     
-    einkfb_debug_lock("%s: getting power lock...\n", function_name);
-
-    if ( EINKFB_LOCK_READY() )
+    if ( EINK_DISPLAY_ASIS() )
     {
-        einkfb_debug_lock("%s: got lock, getting power...\n", function_name);
-        result = einkfb_begin_power_on_activity();
-
-        if ( EINKFB_SUCCESS == result )
-        {
-            einkfb_debug_lock("%s: got power...\n", function_name);
-        }
-        else
-        {
-            einkfb_debug_lock("%s: could not get power, releasing lock\n", function_name);
-            EINFFB_LOCK_RELEASE();
-        }
+        einkfb_debug_power("%s: display asis, ignoring call\n", function_name);
     }
     else
     {
-        einkfb_debug_lock("%s: could not get lock, bailing\n", function_name);
+        einkfb_debug_lock("%s: getting power lock...\n", function_name);
+    
+        if ( EINKFB_LOCK_READY() )
+        {
+            einkfb_debug_lock("%s: got lock, getting power...\n", function_name);
+            result = einkfb_begin_power_on_activity();
+    
+            if ( EINKFB_SUCCESS == result )
+            {
+                einkfb_debug_lock("%s: got power...\n", function_name);
+            }
+            else
+            {
+                einkfb_debug_lock("%s: could not get power, releasing lock\n", function_name);
+                EINFFB_LOCK_RELEASE();
+            }
+        }
+        else
+        {
+            einkfb_debug_lock("%s: could not get lock, bailing\n", function_name);
+        }
     }
 
 	return ( result );
@@ -380,13 +430,20 @@ int einkfb_lock_entry(char *function_name)
 
 void einkfb_lock_exit(char *function_name)
 {
-    einkfb_end_power_on_activity();
-    EINFFB_LOCK_RELEASE();
-
-    einkfb_debug_lock("%s released power, released lock\n", function_name);
+    if ( EINK_DISPLAY_ASIS() )
+    {
+        einkfb_debug_power("%s: display asis, ignoring call\n", function_name);
+    }
+    else
+    {
+        einkfb_end_power_on_activity();
+        EINFFB_LOCK_RELEASE();
+    
+        einkfb_debug_lock("%s released power, released lock\n", function_name);
+    }
 }
 
-int einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_ready_t hardware_ready, void *data)
+int einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_ready_t hardware_ready, void *data, bool interruptible)
 {
     int result = EINKFB_SUCCESS;
     
@@ -401,9 +458,16 @@ int einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_read
         // of jiffies have occurred.
         //
         while ( !(*hardware_ready)(data) && time_before_eq(jiffies, stop_time) )
-            schedule_timeout_interruptible(min(timeout++, EINKFB_TIMEOUT_MAX));
+        {
+            timeout = min(timeout++, EINKFB_TIMEOUT_MAX);
+            
+            if ( interruptible )
+                schedule_timeout_interruptible(timeout);
+            else
+                schedule_timeout(timeout);
+        }
 
-        if ( !(*hardware_ready)(data) && time_after(jiffies, stop_time) )
+        if ( time_after(jiffies, stop_time) )
         {
            einkfb_print_crit("Timed out waiting for the hardware to become ready!\n");
            result = EINKFB_FAILURE;
@@ -619,12 +683,14 @@ unsigned char einkfb_stretch_nybble(unsigned char nybble, unsigned long bpp)
 
 void einkfb_display_grayscale_ramp(void)
 {
+    int row, num_rows, row_bytes, row_size, row_height, height, adj_count, adj_start;
+    u8 row_gray, *gray_table = NULL, *row_start = NULL;
     struct einkfb_info info;
-    u8 *gray_table = NULL;
-    int i, j, k, m, n;
 
     einkfb_get_info(&info);
     
+    // Get the table that translates pixels into bytes per bit depth.
+    //
     switch ( info.bpp )
     {
         case EINKFB_1BPP:
@@ -640,23 +706,51 @@ void einkfb_display_grayscale_ramp(void)
         break;
     }
     
-    // Cycle through the framebuffer, filling it with all possible
-    // grays at the current bit depth.
+    // Divide the display into the appropriate number of rows.
     //
-    for ( i = j = k = 0, m = (1 << info.bpp), n = info.size; i < n; i++ )
-    {
-        info.start[i] = gray_table ? gray_table[j] : (u8)j;
-            
-        if ( 0 == (++k % (n/m)) )
-        {
-            k = 0;
-            j++;
-        }
-
-        EINKFB_SCHEDULE_BLIT(i+1);
-    }
+    row_bytes = BPP_SIZE(info.xres, info.bpp);
+    num_rows  = 1 << info.bpp;
+    row_start = info.start;
     
-    // Now, display the ramp.
+    // In order to run the rows to the end, we need to adjust
+    // row_height adj_count times.  We do this by "centering"
+    // adj_count to the num_rows.  We're zero-based (i), so we
+    // don't add 1 to adj_start here
+    //
+    row_height = info.yres / num_rows;
+    adj_count  = info.yres % num_rows;
+    adj_start  = adj_count ? (num_rows - adj_count) >> 1 : 0;
+    
+    for ( row = 0; row < num_rows; row++ )
+    {
+        // Determine height.
+        //
+        height = row_height;
+        
+        // Quit adjusting height when/if adj_count is zero or
+        // less (as noted above, adj_count is "centered" to
+        // num_rows).
+        //
+        if ( 0 < adj_count )
+        {
+            if ( row >= adj_start )
+            {
+                adj_count--;
+                height++;
+            }
+        }
+        
+        // Blit the appropriate gray into the framebuffer for
+        // this row.
+        //
+        row_gray = gray_table ? gray_table[row] : (u8)row;
+        row_size = row_bytes * height;
+        
+        einkfb_memset(row_start, row_gray, row_size);
+        row_start += row_size;
+    }
+
+    // Now, update the display with our grayscale ramp.
     //
     einkfb_update_display(fx_update_full);
 }
@@ -667,36 +761,155 @@ void einkfb_display_grayscale_ramp(void)
     #pragma mark -
 #endif
 
+#define UPDATE_TIMING_TOTL_TYPE 0
+#define UPDATE_TIMING_VIRT_TYPE 1
+#define UPDATE_TIMING_REAL_TYPE 2
+
+#define UPDATE_TIMING_ID_LEN    32
+
+#define UPDATE_TIMING           "update_timing_%s"
+#define UPDATE_TIMING_TOTL_NAME "totl"
+#define UPDATE_TIMING_VIRT_NAME "virt"
+#define UPDATE_TIMING_REAL_NAME "real"
+
+#define UPDATE_TIMING_AREA      "area"
+#define UPDATE_TIMING_DISP      "disp"
+
+static void einkfb_print_update_timing(unsigned long time, int which, char *kind)
+{
+    char *name = NULL, id[UPDATE_TIMING_ID_LEN];
+
+    sprintf(id, UPDATE_TIMING, kind);
+    
+    switch ( which )
+    {
+        case UPDATE_TIMING_VIRT_TYPE:
+            name = UPDATE_TIMING_VIRT_NAME;
+        goto relative_common;
+        
+        case UPDATE_TIMING_REAL_TYPE:
+            name = UPDATE_TIMING_REAL_NAME;
+        /* goto relative_common; */
+        
+        relative_common:
+            EINKFB_PRINT_PERF_REL(id, time, name);
+        break;
+        
+        case UPDATE_TIMING_TOTL_TYPE:
+            EINKFB_PRINT_PERF_ABS(id, time, UPDATE_TIMING_TOTL_NAME);
+        break;
+    }
+}
+
 void einkfb_update_display_area(update_area_t *update_area)
 {
     if ( update_area )
     {
+        unsigned long strt_time = jiffies, virt_strt = strt_time, virt_stop,
+                      real_strt = 0, real_stop = 0, stop_time;
+        
         // Update the virtual display.
         //
-        einkfb_update_vfb_area(update_area);
+        bool buffers_equal = einkfb_update_vfb_area(update_area);
+        virt_stop = jiffies;
         
-        // Update the real display.
+        // Update the real display if the buffer actually changed.
         //
-        if ( hal_ops.hal_update_area && (EINKFB_SUCCESS == EINKFB_LOCK_ENTRY()) )
+        if ( !buffers_equal && hal_ops.hal_update_area && (EINKFB_SUCCESS == EINKFB_LOCK_ENTRY()) )
         {
+            real_strt = jiffies;
             hal_ops.hal_update_area(update_area);
+            real_stop = jiffies;
+            
             EINKFB_LOCK_EXIT();
+        }
+        
+        stop_time = jiffies;
+        
+        if ( buffers_equal )
+            einkfb_debug("buffers equal; hardware not accessed\n");
+            
+        if ( EINKFB_PERF() )
+        {
+            einkfb_print_update_timing(jiffies_to_msecs(virt_stop - virt_strt),
+                UPDATE_TIMING_VIRT_TYPE, UPDATE_TIMING_AREA);
+            
+            if ( real_strt )
+                einkfb_print_update_timing(jiffies_to_msecs(real_stop - real_strt),
+                    UPDATE_TIMING_REAL_TYPE, UPDATE_TIMING_AREA);
+        
+            einkfb_print_update_timing(jiffies_to_msecs(stop_time - strt_time),
+                UPDATE_TIMING_TOTL_TYPE, UPDATE_TIMING_AREA);
         }
     }
 }
 
 void einkfb_update_display(fx_type update_mode)
 {
+    unsigned long strt_time = jiffies, virt_strt = strt_time, virt_stop,
+                  real_strt = 0, real_stop = 0,  stop_time;
+
     // Update the virtual display.
     //
-    einkfb_update_vfb(update_mode);
+    bool buffers_equal  = einkfb_update_vfb(update_mode),
+         cancel_restore = false;
 
-    // Update the real display.
+    virt_stop = jiffies;
+
+    // If the buffers aren't the same, check to see whether we're doing a restore.
     //
-    if ( hal_ops.hal_update_display && (EINKFB_SUCCESS == EINKFB_LOCK_ENTRY()) )
+    if ( !buffers_equal )
     {
+        struct einkfb_info info;
+        einkfb_get_info(&info);
+        
+        // If we're not doing a restore but we applied an FX, force a restore so
+        // that the module doesn't have to apply the FX.
+        //
+        if ( !EINKFB_RESTORE(info) )
+        {
+            fb_apply_fx_t fb_apply_fx = get_fb_apply_fx();
+            
+            if ( fb_apply_fx )
+            {
+                einkfb_set_fb_restore(true);
+                cancel_restore = true;
+            }
+        }
+    }
+    
+    // Update the real display if the buffer actually changed.
+    //
+    if ( !buffers_equal && hal_ops.hal_update_display && (EINKFB_SUCCESS == EINKFB_LOCK_ENTRY()) )
+    {
+        real_strt = jiffies;
         hal_ops.hal_update_display(update_mode);
+        real_stop = jiffies;
+        
         EINKFB_LOCK_EXIT();
+    }
+
+    stop_time = jiffies;
+
+    // Take us out of restore mode if we put ourselves there.
+    //
+    if ( cancel_restore )
+        einkfb_set_fb_restore(false);
+
+    if ( buffers_equal )
+        einkfb_debug("buffers equal; hardware not accessed\n");
+
+    if ( EINKFB_PERF() )
+    {
+        einkfb_print_update_timing(jiffies_to_msecs(virt_stop - virt_strt),
+            UPDATE_TIMING_VIRT_TYPE, UPDATE_TIMING_DISP);
+        
+        if ( real_strt )
+            einkfb_print_update_timing(jiffies_to_msecs(real_stop - real_strt),
+                UPDATE_TIMING_REAL_TYPE, UPDATE_TIMING_DISP);
+    
+        einkfb_print_update_timing(jiffies_to_msecs(stop_time - strt_time),
+            UPDATE_TIMING_TOTL_TYPE, UPDATE_TIMING_DISP);
     }
 }
 
@@ -722,6 +935,64 @@ void einkfb_clear_display(fx_type update_mode)
     
     einkfb_update_display(update_mode);
 }
+
+#if PRAGMAS
+    #pragma mark -
+    #pragma mark Orientation Utilities
+    #pragma mark -
+#endif
+
+bool einkfb_set_display_orientation(orientation_t orientation)
+{
+    bool result = false;
+    
+    if ( hal_ops.hal_set_display_orientation && (EINKFB_SUCCESS == EINKFB_LOCK_ENTRY()) )
+    {
+        result = hal_ops.hal_set_display_orientation(orientation);
+        EINKFB_LOCK_EXIT();
+        
+        // Post a rotate event if setting display orientation succeeded.
+        //
+        if ( result )
+        {
+            einkfb_event_t event;
+            einkfb_init_event(&event);
+            
+            event.event = einkfb_event_rotate_display;
+            event.orientation = orientation;
+            
+            einkfb_post_event(&event);
+        }
+    }
+
+    return ( result );
+}
+
+orientation_t einkfb_get_display_orientation(void)
+{
+    orientation_t orientation = orientation_portrait;
+
+    if ( hal_ops.hal_get_display_orientation && (EINKFB_SUCCESS == EINKFB_LOCK_ENTRY()) )
+    {
+        orientation = hal_ops.hal_get_display_orientation();
+        EINKFB_LOCK_EXIT();
+    }
+    else
+    {
+        struct einkfb_info info; einkfb_get_info(&info);
+        
+        if ( EINK_ORIENT_LANDSCAPE == ORIENTATION(info.xres, info.yres) )
+            orientation = orientation_landscape;
+    }
+
+    return ( orientation );
+}
+
+#if PRAGMAS
+    #pragma mark -
+    #pragma mark Exports
+    #pragma mark -
+#endif
 
 EXPORT_SYMBOL(einkfb_lock_ready);
 EXPORT_SYMBOL(einkfb_lock_release);

@@ -162,6 +162,33 @@ enum KeyState {
 };
 
 /*!
+ * This enum represents the ALT state machine to process the special	
+ * ALT+key mappings in Nell
+ */
+enum AltState {
+
+	/*!
+	 * ALT is up and nothing is pending
+	 */
+	AltStateStart,
+
+	/*!
+	 * ALT has just been pushed down
+	 */
+	AltStateFirstDown,
+
+	/*!
+	 * ALT is being held down
+	 */
+	AltStateDown,
+
+	/*!
+	 * ALT is up after being down with no other keys pressed in between
+	 */
+	AltStateSticky
+};
+
+/*!
  * Keypad Private Data Structure
  */
 typedef struct keypad_priv {

@@ -58,8 +58,10 @@ static int mma7455L_reads_OK = 0;
 
 // Proc entry structure
 #define ACCEL_PROC_FILE "accelerometer"
+#define CALIBRATION_PROC_FILE "calibration"
 #define PROC_CMD_LEN 50
 static struct proc_dir_entry *proc_entry;
+static struct proc_dir_entry *calib_proc_entry;
 
 // Workqueue
 static struct delayed_work mma7455L_tq_d;
@@ -770,6 +772,36 @@ static irqreturn_t mma7455L_irq (int irq, void *data, struct pt_regs *r)
 /*!
  * This function puts the MMA7455L device in low-power mode/state,
  * and it disables interrupts from the input lines.
+ */
+void mma7455L_sleep(void)
+{
+   // Stop any pending delayed work items
+   cancel_delayed_work(&mma7455L_tq_d);
+
+   // Put Freescale MMA7455L Accelerometer in standby mode
+   sleep_mma7455L();
+
+   // Update the state variable
+   polling_state = POLL_SLEEP;
+}
+
+
+/*!
+ * This function brings the MMA7455L device back from low-power state.
+ */
+void mma7455L_wake(void)
+{
+   // Update the state variable
+   polling_state = POLL_SLEEP;
+
+   // Schedule work function to read initial device status after a delay
+   schedule_delayed_work(&mma7455L_tq_d, (first_sampling_time * HZ)/1000);
+}
+
+
+/*!
+ * This function puts the MMA7455L device in low-power mode/state,
+ * and it disables interrupts from the input lines.
  * @param   pdev  the device structure used to give information on MMA7455L
  *                to suspend
  * @param   state the power state the device is entering
@@ -779,20 +811,10 @@ static irqreturn_t mma7455L_irq (int irq, void *data, struct pt_regs *r)
 static int mma7455L_suspend(struct platform_device *pdev, pm_message_t state)
 {
    if (debug > 1) {
-      printk("<1>[mma7455L_suspend] Stopping work queue and disabling IRQs...\n");
+      printk("<1>[mma7455L_suspend] Stopping work queue...\n");
    }
 
-   // Stop any pending delayed work items
-   cancel_delayed_work(&mma7455L_tq_d);
-
-   // Disable IRQ line
-   //disable_irq(INT1_DRDY_IRQ);
-
-   // Put Freescale MMA7455L Accelerometer in standby mode
-   sleep_mma7455L();
-
-   // Update the state variable
-   polling_state = POLL_SLEEP;
+   mma7455L_sleep();
 
    return 0;
 }
@@ -810,22 +832,33 @@ static int mma7455L_suspend(struct platform_device *pdev, pm_message_t state)
 static int mma7455L_resume(struct platform_device *pdev)
 {
    if (debug > 1) {
-      printk("<1>[mma7455L_resume] Enabling IRQs...\n");
+      printk("<1>[mma7455L_resume] Enabling device...\n");
    }
 
-   // Update the state variable
-   polling_state = POLL_SLEEP;
-
-   // Schedule work function to read initial device status after a delay
-   schedule_delayed_work(&mma7455L_tq_d, (first_sampling_time * HZ)/1000);
-   //disable_irq(INT1_DRDY_IRQ);
+   mma7455L_wake();
 
    return 0;
 }
 
 
 /*
- * This function returns the current state of the fiveway device
+ * This function returns the calibration data
+ */
+int calibration_proc_read( char *page, char **start, off_t off,
+                      int count, int *eof, void *data )
+{
+   int len;
+
+   if (off > 0) {
+     *eof = 1;
+     return 0;
+   }
+   len = sprintf(page, "echo %d > /sys/module/mma7455L/parameters/x_offset\necho %d > /sys/module/mma7455L/parameters/y_offset\necho %d > /sys/module/mma7455L/parameters/z_offset\n", x_offset, y_offset, z_offset);
+   return len;
+}
+
+/*
+ * This function returns the current state of the mma7455L device
  */
 int mma7455L_proc_read( char *page, char **start, off_t off,
                       int count, int *eof, void *data )
@@ -875,14 +908,16 @@ ssize_t mma7455L_proc_write( struct file *filp, const char __user *buff,
 {
    char command[PROC_CMD_LEN];
    int  err;
+   signed char acc_buff[3];
    signed char acc_data;
    int acc_data_int;
+   int timeout;
    unsigned int reg_addr_int;
    unsigned char reg_addr;
 
    if (len > PROC_CMD_LEN) {
-      //LLOG_ERROR("proc_len", "", "Fiveway: command is too long!\n");
-      printk("<1>Fiveway: command is too long!\n");
+      //LLOG_ERROR("proc_len", "", "mma7455L: command is too long!\n");
+      printk("<1>mma7455L: command is too long!\n");
       return -ENOSPC;
    }
 
@@ -917,6 +952,49 @@ ssize_t mma7455L_proc_write( struct file *filp, const char __user *buff,
          printk("<1>Wrote 0x%2X to MMA7455L register 0x%02X\n", acc_data, reg_addr);
       }
    }
+   else if ( !strncmp(command, "lock", 4) ) {
+      mma7455L_sleep();
+      //LLOG_INFO("lock", "", "status=locked\n");
+      printk("mma7455L status=locked\n");
+   }
+   else if ( !strncmp(command, "unlock", 6) ) {
+      mma7455L_wake();
+      //LLOG_INFO("unlock", "", "status=unlocked\n");
+      printk("mma7455L status=unlocked\n");
+   }
+   else if ( !strncmp(command, "calibrate", 9) ) {
+      // Calibrate accelerometer assuming device is flat
+      mma7455L_sleep();  // Stop polling
+      // Put accelerometer in measurement mode with no interrupts generated
+      write_mma7455L_reg(ACCEL_MCTL_REG, MEASUREMENT_MODE |
+                         MEASUREMENT_RANGE_2G | MCTL_DRPD);
+      // Wait for measurement data to be ready
+      acc_data = 0;
+      timeout = 10000;
+      while (((acc_data & STATUS_DRDY) == 0 ) && (timeout-- > 0)) {
+         read_mma7455L_regs(ACCEL_STATUS_REG, &acc_data, 1);
+      }
+      if (timeout <= 0) {
+         printk("<1>Timed out waiting for measurement data\n");
+      }
+      else {
+         // Read x,y, and z data and compute offsets
+         read_mma7455L_regs(ACCEL_XOUT8_REG, acc_buff, 3);
+         x_offset = -(acc_buff[0]);
+         y_offset = -(acc_buff[1]);
+         if (flip == 0) {
+            z_offset = 0x3f-(acc_buff[2]);
+         }
+         else {
+            z_offset = -0x3f-(acc_buff[2]);
+         }
+         printk("x = %d, x_offset = %d\ny = %d, y_offset = %d\n z = %d, z_offset = %d\n", acc_buff[0], x_offset, acc_buff[1], y_offset, acc_buff[2], z_offset);
+         //LLOG_INFO("calibrate", "", "mma7455L is calibrated\n");
+         printk("mma7455L is calibrated\n");
+      }
+      mma7455L_sleep();  // Put device in low power state
+      mma7455L_wake();   // Resume polling
+   }
    else if ( !strncmp(command, "debug", 5) ) {
       // Requested to set debug level
       sscanf(command, "debug %d", &debug);
@@ -924,8 +1002,8 @@ ssize_t mma7455L_proc_write( struct file *filp, const char __user *buff,
       //set_debug_log_mask(debug);
    }
    else {
-      //LLOG_ERROR("proc_cmd", "", "Unrecognized fiveway command\n");
-      printk("<1>Unrecognized fiveway command\n");
+      //LLOG_ERROR("proc_cmd", "", "Unrecognized mma7455L command\n");
+      printk("<1>Unrecognized mma7455L command\n");
    }
 
    return len;
@@ -949,7 +1027,7 @@ static int __devinit mma7455L_probe(struct platform_device *pdev)
    int error;
 
    printk("<1>[mma7455L_probe] Starting...\n");
-   /* Create proc entry */
+   /* Create proc entries */
    proc_entry = create_proc_entry(ACCEL_PROC_FILE, 0644, NULL);
    if (proc_entry == NULL) {
       printk(KERN_INFO "mma7455L: Couldn't create proc entry\n");
@@ -958,6 +1036,14 @@ static int __devinit mma7455L_probe(struct platform_device *pdev)
       proc_entry->read_proc = mma7455L_proc_read;
       proc_entry->write_proc = mma7455L_proc_write;
       proc_entry->owner = THIS_MODULE;
+   }
+   calib_proc_entry = create_proc_entry(CALIBRATION_PROC_FILE, 0444, NULL);
+   if (calib_proc_entry == NULL) {
+      printk(KERN_INFO "mma7455L: Couldn't create calibration proc entry\n");
+      return -ENOMEM;
+   } else {
+      calib_proc_entry->read_proc = calibration_proc_read;
+      calib_proc_entry->owner = THIS_MODULE;
    }
 
    // Initialize the array that contains the information for the

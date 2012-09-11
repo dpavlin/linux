@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/legacy/einkfb_shim_mario.c -- eInk framebuffer device platform compatibility
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -308,7 +308,11 @@ void einkfb_shim_sleep_screen(unsigned int cmd, splash_screen_type which_screen)
 	if ( FBIO_EINK_SPLASH_SCREEN_SLEEP == cmd )
 	{
 		POWER_OVERRIDE_END();
-		einkfb_shim_suspend_resume_hook(EINKFB_SUSPEND);
+		
+		if ( splash_screen_exit == which_screen )
+			einkfb_shim_suspend_resume_hook(EINKFB_RESUME);
+		else
+			einkfb_shim_suspend_resume_hook(EINKFB_SUSPEND);
 	}
 }
 
@@ -318,6 +322,11 @@ void einkfb_shim_power_op_complete(void)
 
 void einkfb_shim_power_off_screen(void)
 {
+	POWER_OVERRIDE_BEGIN();
+	clear_screen(fx_update_full);
+	
+	POWER_OVERRIDE_END();
+	einkfb_shim_suspend_resume_hook(EINKFB_SUSPEND);
 }
 
 bool einkfb_shim_override_power_lockout(unsigned int cmd, unsigned long flag)
@@ -341,9 +350,9 @@ char *einkfb_shim_get_power_string(void)
 	#pragma mark -
 #endif
 
-bool einkfb_shim_platform_splash_screen_dispatch(which_screen)
+bool einkfb_shim_platform_splash_screen_dispatch(splash_screen_type which_screen, int yres)
 {
-	system_screen_t system_screen;
+	system_screen_t system_screen = INIT_SYSTEM_SCREEN_T();
 	bool handled = true;
 	
 	switch ( which_screen )
@@ -361,18 +370,20 @@ bool einkfb_shim_platform_splash_screen_dispatch(which_screen)
 		break;
 		
 		case splash_screen_usb_recovery_util:
-			system_screen.picture_header_len = picture_usb_header_recovery_util_len;
-			system_screen.picture_header = picture_usb_header_recovery_util;
-			system_screen.header_width = USB_HEADER_WIDTH_RECOVERY_UTIL;
+			system_screen.picture_header_len = PICTURE_USB_RECOVERY_UTIL_HEADER_LEN(yres);
+			system_screen.picture_header = PICTURE_USB_RECOVERY_UTIL_HEADER(yres);
+			system_screen.header_offset = USB_RECOVERY_UTIL_OFFSET_HEADER(yres);
+			system_screen.header_width = USB_RECOVERY_UTIL_WIDTH_HEADER(yres);
 									
-			system_screen.picture_footer_len = picture_usb_footer_recovery_util_len;
-			system_screen.picture_footer = picture_usb_footer_recovery_util;
-			system_screen.footer_width = USB_FOOTER_WIDTH_RECOVERY_UTIL;
+			system_screen.picture_footer_len = PICTURE_USB_RECOVERY_UTIL_FOOTER_LEN(yres);
+			system_screen.picture_footer = PICTURE_USB_RECOVERY_UTIL_FOOTER(yres);
+			system_screen.footer_offset = USB_RECOVERY_UTIL_OFFSET_FOOTER(yres);
+			system_screen.footer_width = USB_RECOVERY_UTIL_WIDTH_FOOTER(yres);
 
-			system_screen.picture_body_len = picture_usb_body_recovery_util_len;
-			system_screen.picture_body = picture_usb_body_recovery_util;
-			system_screen.body_offset = USB_BODY_OFFSET_RECOVERY_UTIL;
-			system_screen.body_width = USB_BODY_WIDTH_RECOVERY_UTIL;
+			system_screen.picture_body_len = PICTURE_USB_RECOVERY_UTIL_BODY_LEN(yres);
+			system_screen.picture_body = PICTURE_USB_RECOVERY_UTIL_BODY(yres);
+			system_screen.body_offset = USB_RECOVERY_UTIL_OFFSET_BODY(yres);
+			system_screen.body_width = USB_RECOVERY_UTIL_WIDTH_BODY(yres);
 			
 			system_screen.which_screen = which_screen;
 			system_screen.to_screen = update_screen;
@@ -382,18 +393,20 @@ bool einkfb_shim_platform_splash_screen_dispatch(which_screen)
 		break;
 		
 		case splash_screen_usb_framework:
-			system_screen.picture_header_len = picture_usb_header_framework_len;
-			system_screen.picture_header = picture_usb_header_framework;
-			system_screen.header_width = USB_HEADER_WIDTH_FRAMEWORK;
+			system_screen.picture_header_len = PICTURE_USB_FRAMEWORK_HEADER_LEN(yres);
+			system_screen.picture_header = PICTURE_USB_FRAMEWORK_HEADER(yres);
+			system_screen.header_offset = USB_FRAMEWORK_OFFSET_HEADER(yres);
+			system_screen.header_width = USB_FRAMEWORK_WIDTH_HEADER(yres);
 									
-			system_screen.picture_footer_len = picture_usb_footer_framework_len;
-			system_screen.picture_footer = picture_usb_footer_framework;
-			system_screen.footer_width = USB_FOOTER_WIDTH_FRAMEWORK;
+			system_screen.picture_footer_len = PICTURE_USB_FRAMEWORK_FOOTER_LEN(yres);
+			system_screen.picture_footer = PICTURE_USB_FRAMEWORK_FOOTER(yres);
+			system_screen.footer_offset = USB_FRAMEWORK_OFFSET_FOOTER(yres);
+			system_screen.footer_width = USB_FRAMEWORK_WIDTH_FOOTER(yres);
 
-			system_screen.picture_body_len = picture_usb_body_framework_len;
-			system_screen.picture_body = picture_usb_body_framework;
-			system_screen.body_offset = USB_BODY_OFFSET_FRAMEWORK;
-			system_screen.body_width = USB_BODY_WIDTH_FRAMEWORK;
+			system_screen.picture_body_len = PICTURE_USB_FRAMEWORK_BODY_LEN(yres);
+			system_screen.picture_body = PICTURE_USB_FRAMEWORK_BODY(yres);
+			system_screen.body_offset = USB_FRAMEWORK_OFFSET_BODY(yres);
+			system_screen.body_width = USB_FRAMEWORK_WIDTH_BODY(yres);
 			
 			system_screen.which_screen = which_screen;
 			system_screen.to_screen = update_screen;
@@ -403,20 +416,45 @@ bool einkfb_shim_platform_splash_screen_dispatch(which_screen)
 		break;
 		
 		case splash_screen_lowbatt:
-			system_screen.picture_header_len = picture_lowbatt_header_len;
-			system_screen.picture_header = picture_lowbatt_header;
-			system_screen.header_width = LOWBATT_HEADER_WIDTH;
+			system_screen.picture_header_len = PICTURE_LOWBATT_HEADER_LEN(yres);
+			system_screen.picture_header = PICTURE_LOWBATT_HEADER(yres);
+			system_screen.header_offset = LOWBATT_OFFSET_HEADER(yres);
+			system_screen.header_width = LOWBATT_WIDTH_HEADER(yres);
 			
-			system_screen.picture_footer_len = picture_lowbatt_footer_len;
-			system_screen.picture_footer = picture_lowbatt_footer;
-			system_screen.footer_width = LOWBATT_FOOTER_WIDTH;
+			system_screen.picture_footer_len = PICTURE_LOWBATT_FOOTER_LEN(yres);
+			system_screen.picture_footer = PICTURE_LOWBATT_FOOTER(yres);
+			system_screen.footer_offset = LOWBATT_OFFSET_FOOTER(yres);
+			system_screen.footer_width = LOWBATT_WIDTH_FOOTER(yres);
 			
-			system_screen.picture_body_len = picture_lowbatt_body_len;
-			system_screen.picture_body = picture_lowbatt_body;
-			system_screen.body_offset = LOWBATT_BODY_OFFSET;
-			system_screen.body_width = LOWBATT_BODY_WIDTH;
+			system_screen.picture_body_len = PICTURE_LOWBATT_BODY_LEN(yres);
+			system_screen.picture_body = PICTURE_LOWBATT_BODY(yres);
+			system_screen.body_offset = LOWBATT_OFFSET_BODY(yres);
+			system_screen.body_width = LOWBATT_WIDTH_BODY(yres);
 			
-			system_screen.which_screen = splash_screen_lowbatt;
+			system_screen.which_screen = which_screen;
+			system_screen.to_screen = update_screen;
+			system_screen.which_fx = fx_update_full;
+			
+			display_system_screen(&system_screen);
+		break;
+		
+		case splash_screen_repair_needed:
+			system_screen.picture_header_len = PICTURE_REPAIR_HEADER_LEN(yres);
+			system_screen.picture_header = PICTURE_REPAIR_HEADER(yres);
+			system_screen.header_offset = REPAIR_OFFSET_HEADER(yres);
+			system_screen.header_width = REPAIR_WIDTH_HEADER(yres);
+			
+			system_screen.picture_footer_len = PICTURE_REPAIR_FOOTER_LEN(yres);
+			system_screen.picture_footer = PICTURE_REPAIR_FOOTER(yres);
+			system_screen.footer_offset = REPAIR_OFFSET_FOOTER(yres);
+			system_screen.footer_width = REPAIR_WIDTH_FOOTER(yres);
+			
+			system_screen.picture_body_len = PICTURE_REPAIR_BODY_LEN(yres);
+			system_screen.picture_body = PICTURE_REPAIR_BODY(yres);
+			system_screen.body_offset = REPAIR_OFFSET_BODY(yres);
+			system_screen.body_width = REPAIR_WIDTH_BODY(yres);
+			
+			system_screen.which_screen = which_screen;
 			system_screen.to_screen = update_screen;
 			system_screen.which_fx = fx_update_full;
 			
@@ -465,7 +503,7 @@ void einkfb_shim_platform_init(struct einkfb_info *info)
 		if ( !info->init )
 			clear_screen(fx_update_full);
 		
-		splash_screen_dispatch(splash_screen_logo);
+		splash_screen_dispatch(splash_screen_boot);
 	}
 }
 

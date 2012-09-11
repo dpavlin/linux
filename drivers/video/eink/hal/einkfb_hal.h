@@ -1,7 +1,7 @@
 /*
  *  linux/drivers/video/eink/hal/einkfb_hal.h -- eInk frame buffer device HAL definitions
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/suspend.h>
+#include <linux/syscalls.h>
 #include <linux/timer.h>
 #include <linux/vmalloc.h>
 
@@ -102,10 +103,6 @@ static struct device_driver d =                         \
 	.resume  = einkfb_resume                            \
 }
 
-#define FB_DEFIO_INIT()
-#define FB_DEFIO_EXIT()
-#define FB_DEFIO()
-
 static void einkfb_platform_release(struct device *device)
 {
 }
@@ -124,6 +121,7 @@ static void einkfb_platform_release(struct device *device)
 
 #else   // -------------------------------- Mario (Linux 2.6.22) Build
 
+#include <asm/arch/board_id.h>
 #include <linux/platform_device.h>
 #include <llog.h>
 
@@ -176,24 +174,6 @@ static struct platform_driver d =                       \
     }                                                   \
 }
 
-#define FB_DEFIO_INIT()                                 \
-    info->fbdefio = &EINKFB_DEFIO;                      \
-    fb_deferred_io_init(info)
-    
-#define FB_DEFIO_EXIT()                                 \
-    fb_deferred_io_cleanup(info)
-
-#define FB_DEFIO()                                      \
-static struct fb_deferred_io EINKFB_DEFIO =             \
-{                                                       \
-    .delay       = HZ,                                  \
-    .deferred_io = einkfb_deferred_io                   \
-}
-
-static void einkfb_deferred_io(struct fb_info *info, struct list_head *pagelist)
-{
-}
-
 #define FB_ROUNDUP(a, b) roundup((a), (b))
 
 #endif  // _EINKFB_HAL_MAIN
@@ -221,13 +201,16 @@ static void einkfb_deferred_io(struct fb_info *info, struct list_head *pagelist)
 
 #define EINKFB_NAME             "eink_fb"
 #define EINKFB_EVENTS           "eink_events"
+#define EINKFB_RESET_FILE       "/tmp/.einkfb_reset_file"
 
 #define EINKFB_LOGGING_MASK(m)  (m & einkfb_logging)
 #define EINKFB_DEBUG_FULL       (einkfb_logging_debug | einkfb_logging_debug_full)
 #define EINKFB_DEBUG()          EINKFB_LOGGING_MASK(EINKFB_DEBUG_FULL)
+#define EINKFB_PERF()           EINKFB_LOGGING_MASK(einkfb_logging_perf)
 
 #define einkfb_print(i, f, ...)                                         \
-    printk(EINKFB_NAME ": " i " %s: " f, __FUNCTION__, ##__VA_ARGS__)
+    printk(EINKFB_NAME ": " i " %s:%s:" f,                              \
+        __FUNCTION__, _LSUBCOMP_DEFAULT, ##__VA_ARGS__)
 
 #define EINKFB_PRINT(f, ...)                                            \
     einkfb_print(LLOG_MSG_ID_INFO, f, ##__VA_ARGS__)
@@ -246,6 +229,16 @@ static void einkfb_deferred_io(struct fb_info *info, struct list_head *pagelist)
 #define einkfb_print_info(f, ...)                                       \
     if (EINKFB_LOGGING_MASK(einkfb_logging_info))                       \
         einkfb_print(LLOG_MSG_ID_INFO, f, ##__VA_ARGS__)
+
+#define einkfb_print_perf(f, ...)                                       \
+    if (EINKFB_LOGGING_MASK(einkfb_logging_perf))                       \
+        einkfb_print(LLOG_MSG_ID_PERF, f, ##__VA_ARGS__)
+
+#define EINKFB_PRINT_PERF_REL(i, t, n)                                  \
+    einkfb_print_perf("id=%s,time=%ld,type=relative:%s\n", i, t, n)
+    
+#define EINKFB_PRINT_PERF_ABS(i, t, n)                                  \
+    einkfb_print_perf("id=%s,time=%ld,type=absolute:%s\n", i, t, n)
 
 #define einkfb_print_debug(f, ...)                                      \
     einkfb_print(LLOG_MSG_ID_DEBUG, f,  ##__VA_ARGS__)
@@ -280,6 +273,7 @@ enum einkfb_logging_level
     einkfb_logging_error        = LLOG_LEVEL_ERROR,   // Environment not right.
     einkfb_logging_warn         = LLOG_LEVEL_WARN,    // Oops, some bug.
     einkfb_logging_info         = LLOG_LEVEL_INFO,    // FYI.
+    einkfb_logging_perf         = LLOG_LEVEL_PERF,    // Performance.
 
     einkfb_logging_debug        = LLOG_LEVEL_DEBUG0,  // Miscellaneous general debugging.
     einkfb_logging_debug_lock   = LLOG_LEVEL_DEBUG1,  // Mutex lock/unlock debugging.
@@ -318,8 +312,6 @@ extern unsigned long einkfb_logging;
 
 #define EINKFB_MEMCPY_MIN       ((824 * 1200)/4)
 
-#define ORIENTATION(x, y)       (((y) > (x)) ? EINKFB_ORIENT_PORTRAIT : EINKFB_ORIENT_LANDSCAPE)
-
 #define BPP_BYTE_ALIGN(b)       (8/(b))
 #define BPP_BYTE_ALIGN_DN(r, b) (((r)/BPP_BYTE_ALIGN(b))*BPP_BYTE_ALIGN(b))
 #define BPP_BYTE_ALIGN_UP(r, b) (BPP_BYTE_ALIGN_DN(r, b) + BPP_BYTE_ALIGN(b))
@@ -334,8 +326,8 @@ extern unsigned long einkfb_logging;
 #define EINKFB_WHITE            EINK_WHITE  // For whacking all the pixels in a...
 #define EINKFB_BLACK            EINK_BLACK  // ...byte (8, 4, 2, or 1) at once.
 
-#define EINKFB_ORIENT_LANDSCAPE true
-#define EINKFB_ORIENT_PORTRAIT  false
+#define EINKFB_ORIENT_LANDSCAPE EINK_ORIENT_LANDSCAPE
+#define EINKFB_ORIENT_PORTRAIT  EINK_ORIENT_PORTRAIT
 
 #define EINKFB_FAILURE          true
 #define EINKFB_SUCCESS          false
@@ -375,6 +367,8 @@ extern unsigned long einkfb_logging;
 #define EINKFB_DELAY_TIMER      true
 
 #define EINKFB_FLASHING_ROM()   einkfb_get_flash_mode()
+#define EINKFB_NEEDS_RESET()    einkfb_set_reset(true)
+#define EINKFB_RESETTING()      einkfb_get_reset()
 
 #define STRETCH_HI_NYBBLE(n, b) einkfb_stretch_nybble(((0xF0 & n) >> 4), b)
 #define STRETCH_LO_NYBBLE(n, b) einkfb_stretch_nybble(((0x0F & n) >> 0), b)
@@ -387,11 +381,17 @@ extern unsigned long einkfb_logging;
 #define EINKFB_PROC_SYSFS_RW_NO_LOCK(a0, a1, a2, a3, a4, a5, a7)    \
     einkfb_proc_sysfs_rw(a0, a1, a2, a3, a4, a5, false, a7)
 
+#define einkfb_schedule_timeout_interruptible(t, r, d)              \
+    einkfb_schedule_timeout(t, r, d, true)
+
 #define EINKFB_SCHEDULE_TIMEOUT(t, r)                               \
-    einkfb_schedule_timeout(t, r, NULL)
+    einkfb_schedule_timeout(t, r, NULL, false)
+
+#define EINKFB_SCHEDULE_TIMEOUT_INTERRUPTIBLE(t, r)                 \
+    einkfb_schedule_timeout_interruptible(t, r, NULL)
 
 #define EINKFB_SCHEDULE()                                           \
-    einkfb_schedule_timeout(0, 0, NULL)
+    EINKFB_SCHEDULE_TIMEOUT(0, 0)
 
 #define EINKFB_SCHEDULE_BLIT(b)                                     \
     if ( 0 == ((b) % EINKFB_MEMCPY_MIN) )                           \
@@ -497,6 +497,13 @@ struct einkfb_hal_ops_t
     // properly).
     //
     unsigned long (*hal_byte_alignment)(void);
+    
+    // Optional operation:  On set, the controller should put the display in the specified
+    // orientation and return whether it did so or not.  The get call just returns the current
+    // orientation.
+    //
+    bool (*hal_set_display_orientation)(orientation_t orientation);
+    orientation_t (*hal_get_display_orientation)(void);
 };
 typedef struct einkfb_hal_ops_t einkfb_hal_ops_t;
 
@@ -522,6 +529,8 @@ struct einkfb_info
                            *buf;    // scratch buffer
     
     struct platform_device *dev;    // platform device
+    struct fb_info         *fbinfo; // fb info
+    struct miscdevice      *events; // events
     
     unsigned long          jif_on,  // jiffie tick at last power-on
                            align;   // byte alignment if not based on bpp
@@ -588,6 +597,7 @@ typedef void (*einkfb_blit_t)(int x, int y, int rowbytes, int bytes, void *data)
 extern void einkfb_set_info_hook(einkfb_info_hook_t info_hook);
 extern void einkfb_get_info(struct einkfb_info *info);
 
+extern void einkfb_set_res_info(struct fb_info *info, int xres, int yres);
 extern void einkfb_set_fb_restore(bool fb_restore);
 extern void einkfb_set_jif_on(unsigned long jif_on);
 
@@ -608,7 +618,7 @@ extern void einkfb_lock_release(void);
 extern int  einkfb_lock_entry(char *function_name);
 extern void einkfb_lock_exit(char *function_name);
 
-extern int  einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_ready_t hardware_ready, void *data);
+extern int  einkfb_schedule_timeout(unsigned long hardware_timeout, einkfb_hardware_ready_t hardware_ready, void *data, bool interruptible);
 extern void einkfb_blit(int xstart, int xend, int ystart, int yend, einkfb_blit_t blit, void *data);
 
 extern einkfb_bounds_failure einkfb_get_last_bounds_failure(void);
@@ -623,9 +633,15 @@ extern void einkfb_restore_display(fx_type update_mode);
 
 extern void einkfb_clear_display(fx_type update_mode);
 
+extern bool einkfb_set_display_orientation(orientation_t orientation);
+extern orientation_t einkfb_get_display_orientation(void);
+
 // From einkfb_hal_proc.c
 //
 extern bool einkfb_get_flash_mode(void);
+
+extern bool einkfb_get_reset(void);
+extern void einkfb_set_reset(bool reset);
 
 extern int einkfb_read_which(char *page, unsigned long off, int count, einkfb_read_t which_read, int which_size);
 extern int einkfb_write_which(char *buf, unsigned long count, einkfb_write_t which_write, int which_size);

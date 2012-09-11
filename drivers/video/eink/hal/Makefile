@@ -29,6 +29,11 @@ eink_fb_hal_broads-objs              := ../broadsheet/broadsheet_hal.o  \
                                         ../broadsheet/broadsheet_mxc.o  \
                                         ../broadsheet/broadsheet.o
 
+obj-$(CONFIG_FB_EINK_HAL_ISIS)       += eink_fb_hal_isis.o 
+eink_fb_hal_isis-objs                := ../isis/broadsheet_hal.o        \
+                                        ../isis/broadsheet_mxc.o        \
+                                        ../isis/broadsheet.o
+
 # only for testing!
 
 obj-$(CONFIG_FB_EINK_HAL_BUILTIN_EM) += eink_fb_hal_builtin_em.o

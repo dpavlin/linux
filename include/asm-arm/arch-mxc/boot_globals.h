@@ -2,7 +2,7 @@
  * Globals used to communicate between the bootloader (U-Boot) and the
  * the kernel (Linux) across boot-ups and restarts.
  * 
- * Copyright (C)2006-2007 Lab126, Inc.  All rights reserved.
+ * Copyright (C)2006-2009 Lab126, Inc.  All rights reserved.
  */
 
 #ifndef _BOOT_GLOBALS_H
@@ -60,6 +60,8 @@
 
 #define BOOT_GLOBALS_ACK_FLAG       0
 
+#define EINK_INIT_DISPLAY_ASIS      0x7065656B      // 'keep': Keep whatever is on the display.
+
 #define FREE_SIZE_0                 19              
 #define BUILD_REV_SIZE              252
 #define SCRATCH_SIZE                256
@@ -103,6 +105,7 @@
 #define IN_DEV_MODE()               (0 != get_dev_mode())
 
 #define FB_INITED()                 (BOOT_GLOBALS_FB_INIT_FLAG == get_fb_init_flag())
+#define EINK_DISPLAY_ASIS()         (EINK_INIT_DISPLAY_ASIS == get_eink_init_display_flag())
 
 #define FAKE_PNLCD_IN_USE()         (1 == get_pnlcd_flags()->enable_fake)
 #define FAKE_PNLCD_UPDATE()         (FAKE_PNLCD_IN_USE() && (1 == get_pnlcd_flags()->updating))
@@ -183,7 +186,7 @@ struct mw_flags_t                                   // 4 bytes
     unsigned int    setpixels_debug     :  1;
     unsigned int    setpixels_original  :  1;
     unsigned int    display_upside_down :  1;
-    unsigned int    do_static_rotation  :  1;
+    unsigned int    do_dynamic_rotation :  1;
     unsigned int    de_ghost            :  1;
     unsigned int    reserved            : 18;
 };
@@ -196,11 +199,12 @@ struct rcs_flags_t                                  // 4 bytes
     unsigned int    system_startup      :  1;
     unsigned int    system_shutdown     :  1;
     unsigned int    video_startup       :  1;
-    unsigned int    reserved            : 29;
+    unsigned int    software_update     :  1;
+    unsigned int    reserved            : 28;
 };
 typedef struct rcs_flags_t rcs_flags_t;
 
-#define INIT_RCS_FLAGS_T() { 0, 0, 0, 0 }
+#define INIT_RCS_FLAGS_T() { 0, 0, 0, 0, 0 }
 
 typedef u8 (*fb_apply_fx_t)(u8 data, int i);
 
@@ -251,6 +255,7 @@ struct bg_in_use_t
     fb_apply_fx_t fb_apply_fx;                      // BOOT_GLOBALS_BASE+0x0408
     int           framework_stopped;                // BOOT_GLOBALS_BASE+0x040C
     unsigned long kernel_boot_flag;                 // BOOT_GLOBALS_BASE+0x0410
+    int           drivemode_online;                 // BOOT_GLOBALS_BASE+0x0414        
 };
 typedef struct bg_in_use_t bg_in_use_t;
 
@@ -281,6 +286,9 @@ extern unsigned long get_apollo_init_display_flag(void);
 
 #define set_broadsheet_init_display_flag set_apollo_init_display_flag
 #define get_broadsheet_init_display_flag get_apollo_init_display_flag
+
+#define set_eink_init_display_flag set_apollo_init_display_flag
+#define get_eink_init_display_flag get_apollo_init_display_flag
 
 // dirty_boot_flag
 
@@ -438,5 +446,10 @@ extern rcs_flags_t *get_rcs_flags(void);
 
 extern void set_fb_apply_fx(fb_apply_fx_t fb_apply_fx);
 extern fb_apply_fx_t get_fb_apply_fx(void);
+
+// drivemode_online
+
+extern void set_drivemode_online(int drivemode_online);
+extern int get_drivemode_online(void);
 
 #endif  // _BOOT_GLOBALS_H

@@ -84,10 +84,7 @@ int pmic_read(unsigned int reg_num, unsigned int *reg_val)
 	}
 
 	if (retry_count == 0) {
-		printk(KERN_ERR "pmic_read: request timed out");
-		if (irqs_disabled())
-			printk(KERN_ERR " IRQs also disabled");
-		printk(KERN_ERR "\n");
+		printk(KERN_CRIT "pmic: C def:rdto:irqs_dis=%d:request timed out\n", irqs_disabled());
 		dump_stack();
 	}
 
@@ -131,10 +128,7 @@ int pmic_write(int reg_num, const unsigned int reg_val)
 	}
 
 	if (retry_count == 0) {
-		printk(KERN_ERR "pmic_write: request timed out");
-		if (irqs_disabled())
-			printk(KERN_ERR " IRQs also disabled");
-		printk(KERN_ERR "\n");
+		printk(KERN_CRIT "pmic: C def:wrto:irqs_dis=%d:request timed out\n", irqs_disabled());
 		dump_stack();
 	}
 

@@ -68,9 +68,6 @@ unsigned int logging_mask;
  */
 static struct keypad_priv kpp_dev;
 
-/*! Indicates if the key pad device is enabled. */
-static unsigned int key_pad_enabled;
-
 /*! Input device structure. */
 static struct input_dev *mxckbd_dev = NULL;
 
@@ -86,8 +83,13 @@ static struct clk *kpp_clk;
 /*! This static variable indicates whether a key event is pressed/released. */
 static unsigned short KPress;
 
-/*! This static variable indicates whether the ALT key is being pressed. */
-static unsigned short ALT_pressed = 0;
+/*! This static variable is used for the ALT key state machine. */
+enum AltState ALT_state = AltStateStart;
+
+/*! ALT stickiness timeout in milliseconds. */
+static atomic_t alt_sticky_timeout = ATOMIC_INIT(2000);
+
+static unsigned long sticky_alt_jiffies;
 
 /*! cur_rcmap and prev_rcmap array is used to detect key press and release. */
 static unsigned short *cur_rcmap;	/* max 64 bits (8x8 matrix) */
@@ -101,6 +103,12 @@ static unsigned short KScanRate = (10 * HZ) / 1000;
 static struct keypad_data *keypad;
 
 static void mxc_kp_tq(struct work_struct *);
+
+static ssize_t
+show_alt_timer(struct device *dev, struct device_attribute *attr, char *buf);
+static ssize_t
+store_alt_timer(struct device *dev, struct device_attribute *attr, const char *buf, size_t count);
+static DEVICE_ATTR(alt_timer, 0644, show_alt_timer, store_alt_timer);
 
 /*!
  * These arrays are used to store press and release scancodes.
@@ -189,18 +197,8 @@ extern void gpio_keypad_inactive(void);
 */
 void report_event(struct input_dev *dev, unsigned int type, unsigned int code, int value )
 {
-        if ((!keypad_lock) || (value == 0)) {
-           // Send key event if keypad is not locked, or if the value
-           // reflects a key release.  The latter clause is to prevent
-           // the "shift stuck" problem in Microwindows.
-	   input_event( dev, type, code, value );
-        }
-
-        if (keypad_lock) {
-	   // Do not send uevents if keypad is locked
-	   LLOG_DEBUG0("report_event returning because keypad is locked\n");
-	   return;
-	}
+        // Send key input event
+	input_event( dev, type, code, value );
 
 	// Send uevent so userspace power daemon can monitor
 	// keyboard activity.  NOTE - the keycode is not sent through
@@ -227,8 +225,6 @@ static void input_repeat_key(unsigned long data)
                 return;
 
         report_event(dev, EV_KEY, dev->repeat_key, 2);
-	// Not sure that this is necessary, so it's commented-out for now
-        //input_sync(dev);
 
         // Make sure we have the most recent repeat period - this way
         // it could be changed dynamically during a repeat sequence
@@ -309,6 +305,7 @@ static int mxc_kpp_scan_matrix(void)
 	int col, row;
 	short scancode = 0;
 	unsigned int keycode = 0;
+	unsigned int nell_alt_keycode = 0;
 	int keycnt = 0;		/* How many keys are still pressed */
 
 	/*
@@ -491,35 +488,100 @@ static int mxc_kpp_scan_matrix(void)
 	      for (row = 0; row < kpp_dev.kpp_rows; row++) {
 	         for (col = 0; col < kpp_dev.kpp_cols; col++) {
 	            if ((press_scancode[row][col] != -1)) {
+	               unsigned long end_sticky = msecs_to_jiffies(atomic_read(&alt_sticky_timeout)) + sticky_alt_jiffies;
+
 	               /* Still Down, so add scancode */
 	               scancode = press_scancode[row][col];
 	               // Make sure we have the latest repeat delay
 	               mxckbd_dev->rep[REP_DELAY] = repeat_delay;
-	               // If this is a Nell keyboard, do not send the ALT
-	               // keycode when pressed down; wait for the next key
+	               // Get the keycode from the mapping
                        keycode = mxckpd_keycodes[scancode];
-                       if (keycode == KEY_LEFTALT) {
-	                  // Don't send ALT code right away
-	                  ALT_pressed = 1;
-	               }
-	               else {
-	                  // The key detected is not ALT
-	                  if (ALT_pressed == 1) {
-	                     if (((kb_rev == KB_REV_NELL_EVT1) || (kb_rev == KB_REV_NELL)) &&
-	                         (keycode != (nell_alt_convert(keycode)))) {
-	                        // Sending a number keycode in Nell;
-	                        // not sending the ALT code
-			        keycode = nell_alt_convert(keycode);
-	                     }
-	                     else {
+
+                       //Did the timer expire and we are still in the "Sticky ALT" state?
+                       if (ALT_state == AltStateSticky && end_sticky != sticky_alt_jiffies && time_after(jiffies, end_sticky)) {
+                          ALT_state = AltStateStart;
+                       }
+
+                       // ALT key state machine - press
+                       switch (ALT_state) {
+                       case AltStateStart:
+                          if ((keycode == KEY_LEFTALT) &&
+                              (kb_rev == KB_REV_NELL)) {
+                             // First press of ALT; no codes sent; change state
+                             ALT_state = AltStateFirstDown;
+                          }
+                          else {
+	                     // Not ALT or no Nell; send the appropriate keycode
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 1);
+                          }
+                       break;
+                       case AltStateFirstDown:
+	                  nell_alt_keycode = nell_alt_convert(keycode);
+	                  if (keycode == nell_alt_keycode) {
+	                     // Not a special Nell numeric ALT+key
+	                     // Send the ALT key we had previously detected
+	                     report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 1);
+	                  }
+			  keycode = nell_alt_keycode;
+	                  // Send the appropriate keycode
+	                  report_event(mxckbd_dev, EV_KEY, keycode, 1);
+                          // Go to next state
+                          ALT_state = AltStateDown;
+                       break;
+                       case AltStateDown:
+	                  nell_alt_keycode = nell_alt_convert(keycode);
+	                  if (keycode != nell_alt_keycode) {
+	                     // This is a special Nell numeric ALT+key
+	                     // Send a fake ALT release before sending
+	                     report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 0);
+	                     // Send the appropriate keycode
+			     keycode = nell_alt_keycode;
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 1);
+	                  }
+                          else {
+	                     // Send a fake ALT down in case the Nell
+	                     // ALT number processing cleared it
+	                     report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 1);
+	                     // Send the keycode
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 1);
+                          }
+                          // We stay in the same state; only ALT release
+                          // can take us out of this state
+                       break;
+                       case AltStateSticky:
+	                  if (keycode == KEY_LEFTALT) {
+                             // ALT was pushed, released, and pushed again
+                             ALT_state = AltStateFirstDown;
+                          }
+                          else {
+	                     nell_alt_keycode = nell_alt_convert(keycode);
+	                     if (keycode == nell_alt_keycode) {
 	                        // Not a special Nell numeric ALT+key
 	                        // Send the ALT key we had previously detected
 	                        report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 1);
+	                        // Send the appropriate keycode and release both
+	                        report_event(mxckbd_dev, EV_KEY, keycode, 1);
+	                        report_event(mxckbd_dev, EV_KEY, keycode, 0);
+	                        report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 0);
 	                     }
-	                  }
-	                  // Now send the appropriate keycode
-	                  report_event(mxckbd_dev, EV_KEY, keycode, 1);
-	               }
+                             else {
+	                        // Send the appropriate Nell numeric keycode
+	                        // and release it (this avoids a new state)
+			        keycode = nell_alt_keycode;
+	                        report_event(mxckbd_dev, EV_KEY, keycode, 1);
+	                        report_event(mxckbd_dev, EV_KEY, keycode, 0);
+	                     }
+                             // Go back to Start - end of stickyness
+                             ALT_state = AltStateStart;
+                          }
+                       break;
+                       default:
+                             // Invalid state; reset
+                             ALT_state = AltStateStart;
+	                     // Send the keycode
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 1);
+                       break;
+                       }
 	               kpp_dev.iKeyState = KStateDown;
 	               press_scancode[row][col] = -1;
 	            }
@@ -553,20 +615,68 @@ static int mxc_kpp_scan_matrix(void)
 	         for (col = 0; col < kpp_dev.kpp_cols; col++) {
 	            if ((release_scancode[row][col] != -1)) {
 	               scancode = release_scancode[row][col]- MXC_KEYRELEASE;
+	               // Get the keycode from the mapping
 	               keycode = mxckpd_keycodes [scancode];
-	               if (keycode == KEY_LEFTALT) {
-	                  // ALT key has been released
-	                  ALT_pressed = 0;
-	               }
-	               else if ((kb_rev == KB_REV_NELL_EVT1) || (kb_rev == KB_REV_NELL)) {
-	                     // Send the appropriate Nell ALT+key code, if
-	                     // applicable
-			     if (keycode != (nell_alt_convert(keycode))) {
-	                        report_event(mxckbd_dev, EV_KEY,
-	                                     (nell_alt_convert(keycode)), 0);
-	                     }
-	               }
-	               report_event(mxckbd_dev, EV_KEY, keycode, 0);
+
+                       // ALT key state machine - release
+                       switch (ALT_state) {
+                       case AltStateStart:
+                          // Send the key release event; no state change
+	                  nell_alt_keycode = nell_alt_convert(keycode);
+	                  report_event(mxckbd_dev, EV_KEY, keycode, 0);
+	                  report_event(mxckbd_dev, EV_KEY, nell_alt_keycode, 0);
+                       break;
+                       case AltStateFirstDown:
+	                  if (keycode == KEY_LEFTALT) {
+	                     // Going into ALT sticky state; send nothing
+	                     ALT_state = AltStateSticky;
+			     sticky_alt_jiffies = jiffies;
+	                  }
+                          else {
+	                     // Send the appropriate release keycode
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 0);
+                             // Go to next state
+                             ALT_state = AltStateDown;
+	                  }
+                       break;
+                       case AltStateDown:
+	                  nell_alt_keycode = nell_alt_convert(keycode);
+	                  if (keycode == KEY_LEFTALT) {
+	                     // Released ALT key
+	                     report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 0);
+	                     ALT_state = AltStateStart;
+	                  }
+	                  else if (keycode != nell_alt_keycode) {
+	                     // This is a special Nell numeric ALT+key
+	                     // Send a fake ALT release before sending
+	                     report_event(mxckbd_dev, EV_KEY, KEY_LEFTALT, 0);
+	                     // Send the appropriate keycode
+			     keycode = nell_alt_keycode;
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 0);
+	                  }
+                          else {
+	                     // Send the keycode release
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 0);
+                          }
+                          // We stay in the same state; only ALT release
+                          // can take us out of this state
+                       break;
+                       case AltStateSticky:
+                          // We only get to this state if the sequence is:
+                          // key down - ALT down - ALT up - key up
+                          // We do no special ALT treatment; just ignore it
+	                  // Send the keycode release
+	                  report_event(mxckbd_dev, EV_KEY, keycode, 0);
+                          // Go back to Start
+                          ALT_state = AltStateStart;
+                       break;
+                       default:
+                             // Invalid state; reset
+                             ALT_state = AltStateStart;
+	                     // Send the keycode
+	                     report_event(mxckbd_dev, EV_KEY, keycode, 0);
+                       break;
+                       }
 	               kpp_dev.iKeyState = KStateUp;
 	               release_scancode[row][col] = -1;
 	            }
@@ -602,8 +712,8 @@ static void mxc_kp_tq(struct work_struct *work)
 	unsigned short reg_val;
 	int i;
 
-	if (key_pad_enabled == 0) {
-		LLOG_DEBUG1("mxc_kp_tq: returning because key_pad_enabled == 0\n");
+	if (keypad_lock) {
+		LLOG_DEBUG1("mxc_kp_tq: returning because keypad is locked\n");
 		return;
 	}
 
@@ -730,27 +840,37 @@ static void mxc_kpp_close(struct input_dev *dev)
 
 
 /*!
- * This function locks the keypad by setting the lock variable
- * NOTE: we used to have complex funtion that turned off timers and
- * interrupts; however, this introduced a race condition that caused
- * lock-ups.  Now we simply ignore key events while in screen saver, and
- * when the system goes to sleep mode, the keypad is effectively locked
- * (will not generate interrupts).
+ * This function locks the keypad
  */
 static void lock_keypad(void)
 {
+	LLOG_DEBUG3("Entering lock_keypad\n");
+	del_timer_sync(&kpp_dev.poll_timer);
+	del_timer_sync(&mxckbd_dev->timer);
+	disable_irq(keypad->irq);
+	cancel_work_sync(&kpp_dev.tq);
 	keypad_lock = true;
+	clk_disable(kpp_clk);
+	gpio_keypad_inactive();
 }
 
 
 /*!
- * This function unlocks the keypad; see comment for lock_keypad, above.
+ * This function unlocks the keypad
  */
 static void unlock_keypad(void)
 {
-        keypad_lock = false;
+	LLOG_DEBUG3("Entering unlock_keypad\n");
+	del_timer_sync(&kpp_dev.poll_timer);
+	del_timer_sync(&mxckbd_dev->timer);
+	gpio_keypad_active();
+	clk_enable(kpp_clk);
+	enable_irq(keypad->irq);
+       	keypad_lock = false;
+
 	/*
-	 * Check keyboard status and process any key changes
+	 * Check keyboard status and process any key changes that
+	 * happened during lock
 	 */
 	schedule_work (&kpp_dev.tq);
 }
@@ -772,10 +892,11 @@ static int mxc_kpp_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	unsigned short reg_val;
 
-	LLOG_DEBUG3("Entering mxc_kpp_suspend\n");
-
-	del_timer_sync(&kpp_dev.poll_timer);
-	del_timer_sync(&mxckbd_dev->timer);
+	/*
+	 * NOTE: in the Lab126 platform architecture, we always go to
+	 * the "locked" state before going to suspend; therefore, all
+	 * keyboard locking actions are in the lock_keypad function, above.
+	 */
 
 	if (device_may_wakeup(&pdev->dev)) {
 		reg_val = __raw_readw(KPSR);
@@ -786,14 +907,6 @@ static int mxc_kpp_suspend(struct platform_device *pdev, pm_message_t state)
 		}
 		enable_irq_wake(keypad->irq);
 	}
-	else {
-		disable_irq(keypad->irq);
-		key_pad_enabled = 0;
-		clk_disable(kpp_clk);
-		gpio_keypad_inactive();
-                lock_keypad();
-	}
-
 	return 0;
 }
 
@@ -809,29 +922,16 @@ static int mxc_kpp_suspend(struct platform_device *pdev, pm_message_t state)
  */
 static int mxc_kpp_resume(struct platform_device *pdev)
 {
+	/*
+	 * NOTE: in the Lab126 platform architecture, we always execute
+	 * unlock_keypad after mxc_kpp_resume; therefore, all
+	 * keyboard unlocking actions are in the unlock_keypad function, above.
+	 */
 	LLOG_DEBUG3("Entering mxc_kpp_resume\n");
-
 	if (device_may_wakeup(&pdev->dev)) {
 		/* the irq routine already cleared KRIE if it was set */
 		disable_irq_wake(keypad->irq);
 	}
-	else {
-		del_timer_sync(&kpp_dev.poll_timer);
-		del_timer_sync(&mxckbd_dev->timer);
-		gpio_keypad_active();
-		clk_enable(kpp_clk);
-		key_pad_enabled = 1;
-		enable_irq(keypad->irq);
-                unlock_keypad();
-	}
-
-	/*
-	 * Check keyboard status and process any key changes
-	 */
-	schedule_work (&kpp_dev.tq);
-
-	//init_timer(&kpp_dev.poll_timer);
-
 	return 0;
 }
 
@@ -839,6 +939,24 @@ static int mxc_kpp_resume(struct platform_device *pdev)
 #define mxc_kpp_suspend  NULL
 #define mxc_kpp_resume   NULL
 #endif				/* CONFIG_PM */
+
+static ssize_t
+show_alt_timer(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", atomic_read(&alt_sticky_timeout));
+}
+
+static ssize_t
+store_alt_timer(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int		i;
+
+	if (sscanf(buf, "%d", &i) != 1)
+		return -EINVAL;
+
+	atomic_set(&alt_sticky_timeout, i <= 0 ? 0 : i);
+	return count;
+}
 
 /*!
  * This function returns the current state of the keyboard
@@ -1017,6 +1135,7 @@ static int mxc_kpp_probe(struct platform_device *pdev)
 	int i, irq;
 	int retval;
 	unsigned int reg_val;
+	int junk;
 
         /* Create proc entry */
 	proc_entry = create_proc_entry( KEYPAD_PROC_FILE, 0644, NULL );
@@ -1034,7 +1153,7 @@ static int mxc_kpp_probe(struct platform_device *pdev)
 
 	kpp_dev.kpp_cols = keypad->colmax;
 	kpp_dev.kpp_rows = keypad->rowmax;
-	key_pad_enabled = 0;
+	keypad_lock = true;
 
 	/*
 	 * Request for IRQ number for keypad port. The Interrupt handler
@@ -1185,7 +1304,7 @@ static int mxc_kpp_probe(struct platform_device *pdev)
 	memset(cur_rcmap, 0, kpp_dev.kpp_rows * sizeof(cur_rcmap[0]));
 	memset(prev_rcmap, 0, kpp_dev.kpp_rows * sizeof(prev_rcmap[0]));
 
-	key_pad_enabled = 1;
+	keypad_lock = false;
 	/* Initialize the polling timer */
 	init_timer(&kpp_dev.poll_timer);
 
@@ -1195,6 +1314,8 @@ static int mxc_kpp_probe(struct platform_device *pdev)
 	/* By default, devices should wakeup if they can */
 	/* HOWEVER, the keypad is NOT set as "should wakeup" in our platform */
 	device_init_wakeup(&pdev->dev, 0);
+
+	junk = device_create_file(&pdev->dev, &dev_attr_alt_timer);
 
 	return 0;
 }
@@ -1210,6 +1331,8 @@ static int mxc_kpp_probe(struct platform_device *pdev)
 static int mxc_kpp_remove(struct platform_device *pdev)
 {
 	unsigned short reg_val;
+
+	device_remove_file(&pdev->dev, &dev_attr_alt_timer);
 
 	/*
 	 * Clear the KPKD status flag (write 1 to it) and synchronizer chain.

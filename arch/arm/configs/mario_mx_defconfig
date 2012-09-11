@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux kernel version: 2.6.22.19
-# Fri Sep  5 16:36:36 2008
+# Tue Feb  3 13:59:49 2009
 #
 CONFIG_ARM=y
 CONFIG_SYS_SUPPORTS_APM_EMULATION=y
@@ -878,7 +878,7 @@ CONFIG_FB_SYS_FILLRECT=y
 CONFIG_FB_SYS_COPYAREA=y
 CONFIG_FB_SYS_IMAGEBLIT=y
 CONFIG_FB_SYS_FOPS=y
-CONFIG_FB_DEFERRED_IO=y
+# CONFIG_FB_DEFERRED_IO is not set
 # CONFIG_FB_SVGALIB is not set
 # CONFIG_FB_MACMODES is not set
 # CONFIG_FB_BACKLIGHT is not set

@@ -19,6 +19,8 @@
 #include <asm/uaccess.h>
 #include <asm/irq.h>
 #include <asm/mach-types.h>
+#include <asm/div64.h>
+#include <asm/atomic.h>
 
 /* There are 3 buttons on the Atlas PMIC and we use ONOFD1 */
 #define MARIO_BUTTON_MINOR	158 /* Major 10, Minor 158, /dev/mariobutton */
@@ -38,6 +40,29 @@ static struct miscdevice button_misc_device = {
 	NULL,
 };
 
+atomic_t lab126_mario_perf_log;
+EXPORT_SYMBOL(lab126_mario_perf_log);
+
+static ssize_t
+show_perf_log(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", atomic_read(&lab126_mario_perf_log));
+}
+
+static ssize_t
+store_perf_log(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int i;
+
+	if (sscanf(buf, "%d", &i) != 1)
+		return -EINVAL;
+
+	atomic_set(&lab126_mario_perf_log, i != 0);
+	return count;
+}
+
+static DEVICE_ATTR(perf_log, 0644, show_perf_log, store_perf_log);
+
 /*
  * Interrupt triggered when button pressed
  */
@@ -46,6 +71,8 @@ static void mario_button_handler(void *param)
 	unsigned int sense;
 	unsigned int press_event = 0;
 	int i;
+	struct timeval tv;
+	s64 timestamp;
 
 	/*
 	 * reset button - restart
@@ -73,6 +100,13 @@ static void mario_button_handler(void *param)
 		press_event = 1;
 	}
 
+	if (unlikely(atomic_read(&lab126_mario_perf_log))) {
+		do_gettimeofday(&tv);
+		timestamp = timeval_to_ns(&tv);
+		do_div(timestamp, NSEC_PER_MSEC);
+		printk(KERN_DEBUG "mario_button: P def:pbp:id=powerButtonPressed,time=%lld,type=absolute:sending uevent to user space\n", timestamp);
+	}
+
 	if (kobject_uevent(&button_misc_device.this_device->kobj,
 			   mb_evt[press_event]))
 		printk(KERN_WARNING "mariobutton: can't send uevent\n");
@@ -94,34 +128,54 @@ static void mario_button_handler(void *param)
 
 static int __init mario_power_button_init(void)
 {
+	int ret = 0;
+
 	printk (KERN_INFO "Mario Power Button Driver\n");
+
+	atomic_set(&lab126_mario_perf_log, 0);
 
 	if (misc_register (&button_misc_device)) {
 		printk (KERN_WARNING "mariobutton: Couldn't register device 10, "
 				"%d.\n", MARIO_BUTTON_MINOR);
-		return -EBUSY;
+		ret = -EBUSY;
+		goto err1;
 	}
 
 	if (pmic_power_set_conf_button(BT_ON1B, 0, 2)) {
 		printk(KERN_WARNING "mariobutton: can't configure debounce "
 		       "time\n");
-		misc_deregister(&button_misc_device);
-		return -EIO;
+		ret = -EIO;
+		goto err2;
 	}
+
+	if (device_create_file(button_misc_device.this_device, &dev_attr_perf_log)) {
+		printk(KERN_WARNING "mariobutton: can't register sysfs entry\n");
+		ret = -EIO;
+		goto err2;
+	}
+
 
 	if (pmic_power_event_sub(PWR_IT_ONOFD1I, mario_button_handler)) {
 		printk(KERN_WARNING "mariobutton: can't subscribe to IRQ\n");
-		misc_deregister(&button_misc_device);
-		return -EIO;
+		ret = -EIO;
+		goto err3;
 	}
 
 	/* Success */
 	return 0;
+
+err3:
+	device_remove_file(button_misc_device.this_device, &dev_attr_perf_log);
+err2:
+	misc_deregister(&button_misc_device);
+err1:
+	return ret;
 }
 
 static void __exit mario_power_button_exit(void)
 {
 	pmic_power_event_unsub(PWR_IT_ONOFD1I, mario_button_handler);
+	device_remove_file(button_misc_device.this_device, &dev_attr_perf_log);
 	misc_deregister (&button_misc_device);
 }
 

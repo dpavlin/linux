@@ -486,6 +486,9 @@ static void mxcmci_setup_data(struct mxcmci_host *host, struct mmc_data *data)
 	__raw_writel(nob, host->base + MMC_NOB);
 	__raw_writel(data->blksz, host->base + MMC_BLK_LEN);
 
+	__raw_writel(0x17, host->base + MMC_CMD);
+	__raw_writel(nob, host->base + MMC_ARG);
+
 	host->dma_size = data->blocks * data->blksz;
 	pr_debug("%s:Request bytes to transfer:%d\n", DRIVER_NAME,
 		 host->dma_size);
@@ -1136,6 +1139,8 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 	}
 
 	status = __raw_readl(host->base + MMC_STATUS);
+	__raw_writel(status, host->base + MMC_STATUS); /* Ack the IRQ's */
+
 #ifdef CONFIG_MMC_DEBUG
 	dump_status(__FUNCTION__, status);
 #endif
@@ -1148,6 +1153,38 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 			schedule_work(&host->cmd_done_tq);
 	}
 
+	if (status & (STATUS_WRITE_OP_DONE | STATUS_READ_OP_DONE)) {
+		struct mmc_data *data = host->data;
+		if (!data)
+			goto out;
+
+		pr_debug("%s:READ/WRITE OPERATION DONE\n", DRIVER_NAME);
+		/* check for time out and CRC errors */
+		if (status & STATUS_READ_OP_DONE) {
+			if (status & STATUS_TIME_OUT_READ) {
+				pr_debug("%s: Read time out occurred\n",
+					 DRIVER_NAME);
+				data->error = -ETIMEDOUT;
+			} else if (status & STATUS_READ_CRC_ERR) {
+				pr_debug("%s: Read CRC error occurred\n",
+					 DRIVER_NAME);
+				data->error = -EILSEQ;
+			}
+			__raw_writel(STATUS_READ_OP_DONE,
+				     host->base + MMC_STATUS);
+		}
+
+		/* check for CRC errors */
+		if (status & STATUS_WRITE_OP_DONE) {
+			if (status & STATUS_WRITE_CRC_ERR) {
+				pr_debug("%s: Write CRC error occurred\n",
+					 DRIVER_NAME);
+				data->error = -EILSEQ;
+			}
+		}
+		mxcmci_data_done(host, status);
+	}
+out:
 	return IRQ_HANDLED;
 }
 
@@ -1411,67 +1448,18 @@ static void mxcmci_dma_irq(void *devid, int error, unsigned int cnt)
 static void mxcmci_dma_tq(struct work_struct *work)
 {
 	struct mxcmci_host *host = container_of(work, struct mxcmci_host, dma_tq);
-	struct mmc_data *data = host->data;
 	u32 status;
-	ulong nob, blk_size, i, blk_len;
+	ulong nob, blk_size, blk_len;
 
 	nob = __raw_readl(host->base + MMC_REM_NOB);
 	blk_size = __raw_readl(host->base + MMC_REM_BLK_SIZE);
 	blk_len = __raw_readl(host->base + MMC_BLK_LEN);
 
-	i = 0;
-	do {
-		status = __raw_readl(host->base + MMC_STATUS);
-		if (audio_playing_flag == 0)
-			udelay(1);
-		else
-			schedule();
-	} while (!(status & (STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE)));
-
-	if (status & (STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE)) {
-		pr_debug("%s:READ/WRITE OPERATION DONE\n", DRIVER_NAME);
-		/* check for time out and CRC errors */
-		status = __raw_readl(host->base + MMC_STATUS);
-		if (status & STATUS_READ_OP_DONE) {
-			if (status & STATUS_TIME_OUT_READ) {
-				pr_debug("%s: Read time out occurred\n",
-					 DRIVER_NAME);
-				data->error = -ETIMEDOUT;
-				__raw_writel(STATUS_TIME_OUT_READ,
-					     host->base + MMC_STATUS);
-			} else if (status & STATUS_READ_CRC_ERR) {
-				pr_debug("%s: Read CRC error occurred\n",
-					 DRIVER_NAME);
-				data->error = -EILSEQ;
-				__raw_writel(STATUS_READ_CRC_ERR,
-					     host->base + MMC_STATUS);
-			}
-			__raw_writel(STATUS_READ_OP_DONE,
-				     host->base + MMC_STATUS);
-		}
-
-		if (audio_playing_flag != 0)
-			schedule();
-
-		/* check for CRC errors */
-		if (status & STATUS_WRITE_OP_DONE) {
-			if (status & STATUS_WRITE_CRC_ERR) {
-				pr_debug("%s: Write CRC error occurred\n",
-					 DRIVER_NAME);
-				data->error = -EILSEQ;
-				__raw_writel(STATUS_WRITE_CRC_ERR,
-					     host->base + MMC_STATUS);
-			}
-			__raw_writel(STATUS_WRITE_OP_DONE,
-				     host->base + MMC_STATUS);
-		}
-	} else {
-		data->error = -EIO;
-		pr_debug("%s:%d: MXC MMC DMA transfer failed.\n", __FUNCTION__,
-			 __LINE__);
-	}
-
-	mxcmci_data_done(host, status);
+	/*
+	 * Now wait for an OP_DONE interrupt before checking
+	 * error status and finishing the data phase
+	 */
+	return;
 }
 
 static void mxcmci_dma_notq(struct mxcmci_host *host)
@@ -1484,59 +1472,7 @@ static void mxcmci_dma_notq(struct mxcmci_host *host)
 	blk_size = __raw_readl(host->base + MMC_REM_BLK_SIZE);
 	blk_len = __raw_readl(host->base + MMC_BLK_LEN);
 
-	i = 0;
-	do {
-		status = __raw_readl(host->base + MMC_STATUS);
-		if (audio_playing_flag == 0)
-			udelay(1);
-		else
-			schedule();
-	} while (!(status & (STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE)));
-
-	if (status & (STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE)) {
-		pr_debug("%s:READ/WRITE OPERATION DONE\n", DRIVER_NAME);
-		/* check for time out and CRC errors */
-		status = __raw_readl(host->base + MMC_STATUS);
-		if (status & STATUS_READ_OP_DONE) {
-			if (status & STATUS_TIME_OUT_READ) {
-				pr_debug("%s: Read time out occurred\n",
-					 DRIVER_NAME);
-				data->error = -ETIMEDOUT;
-				__raw_writel(STATUS_TIME_OUT_READ,
-					     host->base + MMC_STATUS);
-			} else if (status & STATUS_READ_CRC_ERR) {
-				pr_debug("%s: Read CRC error occurred\n",
-					 DRIVER_NAME);
-				data->error = -EILSEQ;
-				__raw_writel(STATUS_READ_CRC_ERR,
-					     host->base + MMC_STATUS);
-			}
-			__raw_writel(STATUS_READ_OP_DONE,
-				     host->base + MMC_STATUS);
-		}
-
-		if (audio_playing_flag != 0)
-			schedule();
-
-		/* check for CRC errors */
-		if (status & STATUS_WRITE_OP_DONE) {
-			if (status & STATUS_WRITE_CRC_ERR) {
-				pr_debug("%s: Write CRC error occurred\n",
-					 DRIVER_NAME);
-				data->error = -EILSEQ;
-				__raw_writel(STATUS_WRITE_CRC_ERR,
-					     host->base + MMC_STATUS);
-			}
-			__raw_writel(STATUS_WRITE_OP_DONE,
-				     host->base + MMC_STATUS);
-		}
-	} else {
-		data->error = -EIO;
-		pr_debug("%s:%d: MXC MMC DMA transfer failed.\n", __FUNCTION__,
-			 __LINE__);
-	}
-
-	mxcmci_data_done(host, status);
+	return;
 }
 /*!
  * This function is called during the driver binding process. Based on the SDHC
@@ -1681,7 +1617,8 @@ static int mxcmci_probe(struct platform_device *pdev)
 	}
 	__raw_writel(READ_TO_VALUE, host->base + MMC_READ_TO);
 
-	__raw_writel(INT_CNTR_END_CMD_RES, host->base + MMC_INT_CNTR);
+	__raw_writel(INT_CNTR_END_CMD_RES | INT_CNTR_WRITE_OP_DONE |
+		     INT_CNTR_READ_OP_DONE, host->base + MMC_INT_CNTR);
 
 	ret = request_irq(host->irq, mxcmci_irq, 0, pdev->name, host);
 	if (ret) {

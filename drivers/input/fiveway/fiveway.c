@@ -92,47 +92,47 @@ static int debounce_timeout = DEBOUNCE_TIMEOUT_DEFAULT;
 module_param(debounce_timeout, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(debounce_timeout, "Time for debouncing the fiveway switch, in msec; MUST be a multiple of 10 (default is 100)");
 
-#define HOLD_TIMEOUT_DEFAULT 1000
+#define HOLD_TIMEOUT_DEFAULT 500
 static int UP_hold_timeout = HOLD_TIMEOUT_DEFAULT;
 module_param(UP_hold_timeout, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(UP_hold_timeout, "Time before holding UP starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 1000; 0 = no auto-repeat)");
+MODULE_PARM_DESC(UP_hold_timeout, "Time before holding UP starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 500; 0 = no auto-repeat)");
 
 static int DOWN_hold_timeout = HOLD_TIMEOUT_DEFAULT;
 module_param(DOWN_hold_timeout, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(DOWN_hold_timeout, "Time before holding DOWN starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 1000; 0 = no auto-repeat)");
+MODULE_PARM_DESC(DOWN_hold_timeout, "Time before holding DOWN starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 500; 0 = no auto-repeat)");
 
 static int LEFT_hold_timeout = HOLD_TIMEOUT_DEFAULT;
 module_param(LEFT_hold_timeout, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(LEFT_hold_timeout, "Time before holding LEFT starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 1000; 0 = no auto-repeat)");
+MODULE_PARM_DESC(LEFT_hold_timeout, "Time before holding LEFT starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 500; 0 = no auto-repeat)");
 
 static int RIGHT_hold_timeout = HOLD_TIMEOUT_DEFAULT;
 module_param(RIGHT_hold_timeout, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(RIGHT_hold_timeout, "Time before holding RIGHT starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 1000; 0 = no auto-repeat)");
+MODULE_PARM_DESC(RIGHT_hold_timeout, "Time before holding RIGHT starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 500; 0 = no auto-repeat)");
 
 static int SELECT_hold_timeout = 1000;
 module_param(SELECT_hold_timeout, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(SELECT_hold_timeout, "Time before holding SELECT generates HOLD event or starts auto-repeat mode, in msec; MUST be a multiple of 10 (default is 1000)");
 
-#define AUTO_REPEAT_TIMEOUT_DEFAULT 300
+#define AUTO_REPEAT_TIMEOUT_DEFAULT 100
 static int UP_auto_repeat_time = AUTO_REPEAT_TIMEOUT_DEFAULT;
 module_param(UP_auto_repeat_time, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(UP_auto_repeat_time, "Time between UP key auto-repeat events; MUST be a multiple of 10 (default is 300; 0 = no auto-repeat)");
+MODULE_PARM_DESC(UP_auto_repeat_time, "Time between UP key auto-repeat events; MUST be a multiple of 10 (default is 100; 0 = no auto-repeat)");
 
 static int DOWN_auto_repeat_time = AUTO_REPEAT_TIMEOUT_DEFAULT;
 module_param(DOWN_auto_repeat_time, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(DOWN_auto_repeat_time, "Time between DOWN key auto-repeat events; MUST be a multiple of 10 (default is 300; 0 = no auto-repeat)");
+MODULE_PARM_DESC(DOWN_auto_repeat_time, "Time between DOWN key auto-repeat events; MUST be a multiple of 10 (default is 100; 0 = no auto-repeat)");
 
 static int LEFT_auto_repeat_time = AUTO_REPEAT_TIMEOUT_DEFAULT;
 module_param(LEFT_auto_repeat_time, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(LEFT_auto_repeat_time, "Time between LEFT key auto-repeat events; MUST be a multiple of 10 (default is 300; 0 = no auto-repeat)");
+MODULE_PARM_DESC(LEFT_auto_repeat_time, "Time between LEFT key auto-repeat events; MUST be a multiple of 10 (default is 100; 0 = no auto-repeat)");
 
 static int RIGHT_auto_repeat_time = AUTO_REPEAT_TIMEOUT_DEFAULT;
 module_param(RIGHT_auto_repeat_time, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(RIGHT_auto_repeat_time, "Time between RIGHT key auto-repeat events; MUST be a multiple of 10 (default is 300; 0 = no auto-repeat)");
+MODULE_PARM_DESC(RIGHT_auto_repeat_time, "Time between RIGHT key auto-repeat events; MUST be a multiple of 10 (default is 100; 0 = no auto-repeat)");
 
 static int SELECT_auto_repeat_time = AUTO_REPEAT_TIMEOUT_DEFAULT;
 module_param(SELECT_auto_repeat_time, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(SELECT_auto_repeat_time, "Time between SELECT key auto-repeat events; MUST be a multiple of 10 (default is 300; 0 = no auto-repeat)");
+MODULE_PARM_DESC(SELECT_auto_repeat_time, "Time between SELECT key auto-repeat events; MUST be a multiple of 10 (default is 100; 0 = no auto-repeat)");
 
 static int debug = 0;
 module_param(debug, int, S_IRUGO|S_IWUSR);

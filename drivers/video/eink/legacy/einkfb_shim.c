@@ -1,17 +1,13 @@
 /*
  *  linux/drivers/video/eink/legacy/einkfb_shim.c -- eInk framebuffer device compatibility utility
  *
- *      Copyright (C) 2005-2008 Lab126
+ *      Copyright (C) 2005-2009 Lab126
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
  *  more details.
  *
  */
-
-#include <linux/kernel.h>
-#include <linux/module.h>
-#include <linux/syscalls.h>
 
 #include "../hal/einkfb_hal.h"
 #include "einkfb_shim.h"
@@ -69,20 +65,27 @@ static void buffer_copy(int which);
 #define USE_FAKE_PNLCD(c)				(use_fake_pnlcd && fake_pnlcd_buffer && (c))
 #define FAKE_PNLCD()					USE_FAKE_PNLCD(1)
 
-#define FRAMEWORK_OR_DIAGS_RUNNING()			(FRAMEWORK_RUNNING() || running_diags)
 #define CHECK_FRAMEWORK_RUNNING()			(FRAMEWORK_STARTED() && !FRAMEWORK_RUNNING())
 
 #define ALREADY_UNCOMPRESSED				(-1)
 #define PROGRESSBAR_Y					(-1)
 #define PROGRESSBAR_X					(-1)
 
-splash_screen_type splash_screen_up = splash_screen_logo;
+#define ORIENTATION_STRING_UP				"orientation=up"
+#define ORIENTATION_STRING_DOWN				"orientation=down"
+#define ORIENTATION_STRING_LEFT				"orientation=left"
+#define ORIENTATION_STRING_RIGHT			"orientation=right"
+
+#define FAKE_FLASHING_AREA_UPDATE_XRES			6
+
+splash_screen_type splash_screen_up = splash_screen_boot;
 static bool splash_screen_logo_buffer_only = false;
 static int dont_deanimate = 0;
 
 static int local_update_area = 0;
-static int running_diags = 0;
+static int send_fake_rotate = 0;
 static int eink_debug = 0;
+int running_diags = 0;
 
 static picture_info_type shim_picture_info = { 0 };
 static u8 *shim_picture = NULL; 
@@ -111,6 +114,7 @@ static u8 *kernelbuffer = NULL;
 static u8 *override_framebuffer = NULL;
 static u8 *framebuffer = NULL;
 
+static bool framebuffer_orientation = EINK_ORIENT_PORTRAIT;
 static u_long framebuffer_align = 0;
 static u_long framebuffer_size = 0;
 static int framebuffer_xres = 0;
@@ -121,6 +125,7 @@ static struct proc_dir_entry *einkfb_proc_screen_saver = NULL;
 static int valid_screen_saver_buf = 0;
 static int get_next_screen_saver = 0;
 
+static u8  progressbar_background = EINKFB_WHITE;
 static int progressbar_y = PROGRESSBAR_Y;
 static int progressbar_x = PROGRESSBAR_X;
 static int progressbar = 0;
@@ -470,14 +475,19 @@ static void buffer_copy(int which)
 		EINKFB_MEMCPYK(dst, src, kernelbuffer_size);
 }
 
+static void clear_frame_buffer(void)
+{
+	einkfb_memset(framebuffer, EINKFB_WHITE, framebuffer_size);
+}
+
 static void clear_kernel_buffer(void)
 {
 	einkfb_memset(kernelbuffer, EINKFB_WHITE, kernelbuffer_size);
 }
 
-static void clear_picture_buffer(void)
+static void clear_picture_buffer(u8 clear)
 {
-	einkfb_memset(picture_buffer, EINKFB_WHITE, picture_buffer_size);
+	einkfb_memset(picture_buffer, clear, picture_buffer_size);
 }
 
 void clear_screen(fx_type update_mode)
@@ -577,6 +587,57 @@ static ssize_t store_valid_screen_saver_buf(FB_DSTOR_PARAMS)
 static ssize_t show_splash_screen_up(FB_DSHOW_PARAMS)
 {
 	return ( sprintf(buf, "%d\n", splash_screen_up) );
+}
+
+// /sys/devices/platform/eink_fb0/send_fake_rotate
+//
+static ssize_t show_send_fake_rotate(FB_DSHOW_PARAMS)
+{
+	return ( sprintf(buf, "%d\n", send_fake_rotate) );
+}
+
+static void report_event(char *value)
+{
+	char *envp[] = {value, "DRIVER=accelerometer", NULL};
+	struct einkfb_info info; einkfb_get_info(&info);
+
+	einkfb_debug("sending uevent %s\n", value);
+
+	if ( kobject_uevent_env(&info.events->this_device->kobj, KOBJ_CHANGE, envp) )
+		einkfb_debug("failed to send uevent\n");
+}
+
+static ssize_t store_send_fake_rotate(FB_DSTOR_PARAMS)
+{		
+	int result = count;
+	
+	if ( sscanf(buf, "%d", &send_fake_rotate) )
+	{
+		switch ( send_fake_rotate )
+		{
+			case orientation_portrait:
+				report_event(ORIENTATION_STRING_UP);
+			break;
+			
+			case orientation_portrait_upside_down:
+				report_event(ORIENTATION_STRING_DOWN);
+			break;
+			
+			case orientation_landscape:
+				report_event(ORIENTATION_STRING_RIGHT);
+			break;
+			
+			case orientation_landscape_upside_down:
+				report_event(ORIENTATION_STRING_LEFT);
+			break;
+			
+			default:
+				result = -EINVAL;
+			break;
+		}
+	}
+	
+	return ( result );
 }
 
 // /sys/devices/platform/eink_fb0/use_fake_pnlcd
@@ -727,11 +788,11 @@ static bool einkfb_fx_exclude_rects_acceptable(int num_exclude_rects, rect_t *ex
 
 				exclude_rects[i].y1,
 				exclude_rects[i].y2 - exclude_rects[i].y1);
-	        
-	        // We really don't care about byte alignment here.
-	        //
-	        if ( !acceptable && NOT_BYTE_ALIGNED() )
-	                acceptable = true;
+		
+		// We really don't care about byte alignment here.
+		//
+		if ( !acceptable && NOT_BYTE_ALIGNED() )
+			acceptable = true;
 	}
 	
 	return ( acceptable );
@@ -1416,7 +1477,7 @@ static void save_the_last_screen_saver(void)
 
 	set_fs(get_ds());
 	
-	screen_saver_last_file = sys_open(screen_saver_path_last, O_WRONLY, 0);
+	screen_saver_last_file = sys_open(screen_saver_path_last, (O_WRONLY | O_TRUNC), 0);
 	
 	if ( 0 <= screen_saver_last_file )
 	{
@@ -2192,7 +2253,7 @@ static void display_splash_screen(splash_screen_type which_screen)
 
 static void stretch_screen_saver(u8 *buffer)
 {
-	int	buffer_bpp		= EINKFB_2BPP,
+	int	buffer_bpp		= SCREEN_SAVER_BPP,
 		buffer_size		= BPP_SIZE((SCREEN_SAVER_XRES * SCREEN_SAVER_YRES), buffer_bpp);
 
 	stretch_bits(buffer, &buffer_bpp, &buffer_size);
@@ -2207,7 +2268,7 @@ static void fit_screen_saver(u8 *buffer)
 	shim_picture_info.headerless	= true;
 	shim_picture_info.xres		= SCREEN_SAVER_XRES;
 	shim_picture_info.yres		= SCREEN_SAVER_YRES;
-	shim_picture_info.bpp		= EINKFB_2BPP;
+	shim_picture_info.bpp		= SCREEN_SAVER_BPP;
 	
 	shim_picture_len		= ALREADY_UNCOMPRESSED;
 	shim_picture			= buffer;
@@ -2234,7 +2295,7 @@ static void display_screen_saver(void)
 					fit_screen_saver(screen_saver_buffer);
 				else
 				{
-					if ( EINKFB_2BPP == framebuffer_bpp )
+					if ( SCREEN_SAVER_BPP == framebuffer_bpp )
 						memcpy_from_screen_saver_to_kernelbuffer();
 					else
 						stretch_screen_saver(screen_saver_buffer);
@@ -2252,7 +2313,7 @@ static void display_screen_saver(void)
 						fit_screen_saver(picture_buffer);
 					else
 					{
-						if ( EINKFB_2BPP == framebuffer_bpp )
+						if ( SCREEN_SAVER_BPP == framebuffer_bpp )
 							memcpy_from_picture_buffer_to_kernelbuffer();
 						else
 							stretch_screen_saver(picture_buffer);
@@ -2321,7 +2382,7 @@ static int get_progressbar_y(int y, int progressbar_height)
 	int result = y, alignment = BPP_BYTE_ALIGN(framebuffer_align);
 	
 	if ( !IN_RANGE(result, 0, (framebuffer_yres - progressbar_height)) )
-		result = ((framebuffer_yres * 2)/3) - (progressbar_height/2);
+		result = ((framebuffer_yres * 4)/5) - (progressbar_height/2);
 		
 	// Ensure that our computed y-coordinate is byte aligned.
 	//
@@ -2331,65 +2392,9 @@ static int get_progressbar_y(int y, int progressbar_height)
 	return ( result );
 }
 
-static int get_update_header_y(void)
-{
-	int result = 0;
-	
-	switch ( framebuffer_yres )
-	{
-		case 800:
-		default:
-			result = UPDATE_HEADER_OFFSET_Y_800;
-		break;
-		
-		case 1200:
-			result = UPDATE_HEADER_OFFSET_Y_1200;
-		break;
-	}
-	
-	return ( result );
-}
-
-static int get_update_footer_y(void)
-{
-	int result = 0;
-	
-	switch ( framebuffer_yres )
-	{
-		case 800:
-		default:
-			result = UPDATE_FOOTER_OFFSET_Y_800;
-		break;
-		
-		case 1200:
-			result = UPDATE_FOOTER_OFFSET_Y_1200;
-		break;
-	}
-	
-	return ( result );
-}
-
-#define get_system_header_y	get_update_header_y
-#define get_system_footer_y	get_update_footer_y
-
-static int get_system_body_y(int offset)
-{
-	int result = 0;
-	
-	switch ( framebuffer_yres )
-	{
-		case 800:
-		default:
-			result = UPDATE_PROGRESS_OFFSET_Y_800 + offset;
-		break;
-		
-		case 1200:
-			result = UPDATE_PROGRESS_OFFSET_Y_1200 + offset;
-		break;
-	}
-	
-	return ( result );
-}
+#define get_system_header_y(o)	(UPDATE_HEADER_OFFSET_Y + (o))
+#define get_system_footer_y(o)	(UPDATE_FOOTER_OFFSET_Y + (o))
+#define get_system_body_y(o)    (UPDATE_PROGRESS_OFFSET_Y + (o))
 
 static int get_progressbar_x(int progressbar_width)
 {
@@ -2431,8 +2436,8 @@ static void draw_progressbar_empty(void)
 	(
 		progressbar_x,
 		progressbar_y,
-		picture_progressbar_empty_len,
-		picture_progressbar_empty
+		PICTURE_PROGRESSBAR_EMPTY_LEN(progressbar_background),
+		PICTURE_PROGRESSBAR_EMPTY(progressbar_background)
 	);
 }
 
@@ -2442,8 +2447,8 @@ static void draw_progressbar_left_full(void)
 	(
 		progressbar_x,
 		progressbar_y,
-		picture_progressbar_left_full_len,
-		picture_progressbar_left_full
+		PICTURE_PROGRESSBAR_LEFT_FULL_LEN(progressbar_background),
+		PICTURE_PROGRESSBAR_LEFT_FULL(progressbar_background)
 	);
 }
 
@@ -2453,8 +2458,8 @@ static void draw_progressbar_right_full(void)
 	(
 		progressbar_x + (PROGRESSBAR_WIDTH - PROGRESSBAR_WIDTH_END),
 		progressbar_y,
-		picture_progressbar_right_full_len,
-		picture_progressbar_right_full
+		PICTURE_PROGRESSBAR_RIGHT_FULL_LEN(progressbar_background),
+		PICTURE_PROGRESSBAR_RIGHT_FULL(progressbar_background)
 	);
 }
 
@@ -2464,8 +2469,8 @@ static void draw_progressbar_slice(int i)
 	(
 		progressbar_x + (PROGRESSBAR_WIDTH_END + (PROGRESSBAR_WIDTH_SLICE * i)),
 		progressbar_y,
-		picture_progressbar_slice_len,
-		picture_progressbar_slice
+		PICTURE_PROGRESSBAR_SLICE_LEN(progressbar_background),
+		PICTURE_PROGRESSBAR_SLICE(progressbar_background)
 	);
 }
 
@@ -2499,7 +2504,7 @@ static void clear_progressbar(void)
 	shim_picture_len		= ALREADY_UNCOMPRESSED;
 	shim_picture			= picture_buffer;
 
-	clear_picture_buffer();
+	clear_picture_buffer(progressbar_background);
 	display_splash_screen(splash_screen_shim_picture);
 }
 
@@ -2613,7 +2618,7 @@ static void display_progressbar(int n, update_which to_screen)
 		// Refresh the logo for the Framework, which also takes down
 		// the progressbar.
 		//
-		EINKFB_IOCTL(FBIO_EINK_SPLASH_SCREEN, splash_screen_logo);
+		EINKFB_IOCTL(FBIO_EINK_SPLASH_SCREEN, splash_screen_boot);
 
 		// We might have put the screen to sleep to prevent screen corruption,
 		// for example, when the Framework crashes.  So, ensure that it's
@@ -2645,42 +2650,82 @@ static int set_progressbar_xy(progressbar_xy_t *progressbar_xy)
 	return ( result );
 }
 
-static void display_reboot_screen(void)
+static void set_progressbar_background(u8 background)
 {
-	if ( splash_screen_reboot != splash_screen_up )
+	switch ( background )
+	{
+		case EINKFB_WHITE:
+		case EINKFB_BLACK:
+			progressbar_background = background;
+		break;
+		
+		default:
+			progressbar_background = EINKFB_WHITE;
+		break;
+	}
+}
+
+static void display_boot_screen(splash_screen_type which_screen)
+{
+	if ( splash_screen_up != which_screen )
 	{
 		// Ensure that the entire buffer is clear.
 		//
 		clear_kernel_buffer();
-	
-		// Put the restart message into the buffer where the progress bar normally
-		// goes.
+		
+		// Put the black boot background picture into the buffer.
 		//
-		shim_picture_info.x		= get_progressbar_x(PICTURE_RESTART_WIDTH);
-		shim_picture_info.y		= get_progressbar_y(PROGRESSBAR_Y, PICTURE_RESTART_HEIGHT);
+		shim_picture_info.x		= PICTURE_BOOT_BACKGROUND_X();
+		shim_picture_info.y		= PICTURE_BOOT_BACKGROUND_Y(framebuffer_yres);
 		shim_picture_info.update	= update_none;
 		shim_picture_info.to_screen	= update_buffer;
 		shim_picture_info.headerless	= false;
 		
-		shim_picture_len		= picture_restart_len;
-		shim_picture			= picture_restart;
+		shim_picture_len		= PICTURE_BOOT_BACKGROUND_LEN(framebuffer_yres);
+		shim_picture			= PICTURE_BOOT_BACKGROUND(framebuffer_yres);
 	
 		display_splash_screen(splash_screen_shim_picture);
+		set_progressbar_background(EINKFB_BLACK);
 	
-		// Put the logo into the buffer where it normally goes.
+		// Put the logo into the buffer where it should be when the black boot background
+		// picture is up.
 		//
-		splash_screen_logo_buffer_only = true;
-		splash_screen_dispatch(splash_screen_logo);
+		shim_picture_info.x		= PICTURE_BOOT_LOGO_X();
+		shim_picture_info.y		= PICTURE_BOOT_LOGO_Y(framebuffer_yres);
+		shim_picture_info.update	= update_none;
+		shim_picture_info.to_screen	= update_buffer;
+		shim_picture_info.headerless	= false;
 		
-		splash_screen_logo_buffer_only = false;
+		shim_picture_len		= picture_logo_len;
+		shim_picture			= picture_logo;
+	
+		display_splash_screen(splash_screen_shim_picture);
+		
+		// Put the restart message into the buffer where the progress bar normally
+		// goes if we're rebooting.
+		//
+		if ( splash_screen_reboot == which_screen )
+		{
+			shim_picture_info.x		= get_progressbar_x(PICTURE_RESTART_WIDTH);
+			shim_picture_info.y		= get_progressbar_y(PROGRESSBAR_Y, PICTURE_RESTART_HEIGHT);
+			shim_picture_info.update	= update_none;
+			shim_picture_info.to_screen	= update_buffer;
+			shim_picture_info.headerless	= false;
+			
+			shim_picture_len		= picture_restart_len;
+			shim_picture			= picture_restart;
+		
+			display_splash_screen(splash_screen_shim_picture);
+		}
 		
 		// Say that we now want a flashing update.
 		//
 		update_display(fx_update_full);
+		memcpy_from_kernelbuffer_to_framebuffer();
 	
 		// Prevent back-to-back redraws.
 		//
-		splash_screen_up = splash_screen_reboot;
+		splash_screen_up = which_screen;
 	}
 }
 
@@ -2716,7 +2761,7 @@ void display_system_screen(system_screen_t *system_screen)
 		if ( system_screen->picture_header_len && system_screen->picture_header )
 		{
 			shim_picture_info.x		= get_system_header_x(system_screen->header_width);
-			shim_picture_info.y		= get_system_header_y();
+			shim_picture_info.y		= get_system_header_y(system_screen->header_offset);
 			shim_picture_info.update	= update_none;
 			shim_picture_info.to_screen	= update_buffer;
 			shim_picture_info.headerless	= false;
@@ -2748,7 +2793,7 @@ void display_system_screen(system_screen_t *system_screen)
 		if ( system_screen->picture_footer_len && system_screen->picture_footer )
 		{
 			shim_picture_info.x		= get_system_footer_x(system_screen->footer_width);
-			shim_picture_info.y		= get_system_footer_y();
+			shim_picture_info.y		= get_system_footer_y(system_screen->footer_offset);
 			shim_picture_info.update	= update_none;
 			shim_picture_info.to_screen	= update_buffer;
 			shim_picture_info.headerless	= false;
@@ -2759,11 +2804,13 @@ void display_system_screen(system_screen_t *system_screen)
 			display_splash_screen(splash_screen_shim_picture);
 		}
 		
-		// Now get everything onto the screen if we're supposed to.
+		// Now get everything onto the screen if we're supposed to and copied
+		// back to the framebuffer.
 		//
 		if ( system_screen->to_screen )
 		{
 			update_display(system_screen->which_fx);
+			memcpy_from_kernelbuffer_to_framebuffer();
 
 			// Prevent back-to-back redraws.
 			//
@@ -2776,12 +2823,13 @@ static void display_update_screen(splash_screen_type which_screen)
 {
 	if ( splash_screen_up != which_screen )
 	{
-		int 	update_footer_width = 0,
+		int 	update_footer_offset = 0,
+			update_footer_width = 0,
 			picture_footer_len = 0;
 		u8 	*picture_footer = NULL;
 			
+		system_screen_t system_screen = INIT_SYSTEM_SCREEN_T();
 		fx_type	which_fx = fx_update_partial;
-		system_screen_t system_screen;
 		
 		progressbar_badge_t badge = progressbar_badge_none;
 		int	progress = 0;
@@ -2791,40 +2839,44 @@ static void display_update_screen(splash_screen_type which_screen)
 			case splash_screen_update_initial:
 				which_fx = fx_update_full;
 				
-				picture_footer_len = picture_update_initial_len;
-				picture_footer = picture_update_initial;
+				picture_footer_len = PICTURE_UPDATE_FOOTER_INITIAL_LEN(framebuffer_yres);
+				picture_footer = PICTURE_UPDATE_FOOTER_INITIAL(framebuffer_yres);
 				
-				update_footer_width = UPDATE_FOOTER_WIDTH_INITIAL;
+				update_footer_offset = UPDATE_FOOTER_OFFSET_INITIAL(framebuffer_yres);
+				update_footer_width = UPDATE_FOOTER_WIDTH_INITIAL(framebuffer_yres);
 			break;
 			
 			case splash_screen_update_success:
 				badge    = progressbar_badge_success;
 				progress = 100;
 			
-				picture_footer_len = picture_update_success_len;
-				picture_footer = picture_update_success;
+				picture_footer_len = PICTURE_UPDATE_FOOTER_SUCCESS_LEN(framebuffer_yres);
+				picture_footer = PICTURE_UPDATE_FOOTER_SUCCESS(framebuffer_yres);
 				
-				update_footer_width = UPDATE_FOOTER_WIDTH_SUCCESS;
+				update_footer_offset = UPDATE_FOOTER_OFFSET_SUCCESS(framebuffer_yres);
+				update_footer_width = UPDATE_FOOTER_WIDTH_SUCCESS(framebuffer_yres);
 			break;
 			
 			case splash_screen_update_failure:
 				badge 	 = progressbar_badge_failure;
 				progress = get_progress_bar_value();
 			
-				picture_footer_len = picture_update_failure_len;
-				picture_footer = picture_update_failure;
+				picture_footer_len = PICTURE_UPDATE_FOOTER_FAILURE_LEN(framebuffer_yres);
+				picture_footer = PICTURE_UPDATE_FOOTER_FAILURE(framebuffer_yres);
 				
-				update_footer_width = UPDATE_FOOTER_WIDTH_FAILURE;
+				update_footer_offset = UPDATE_FOOTER_OFFSET_FAILURE(framebuffer_yres);
+				update_footer_width = UPDATE_FOOTER_WIDTH_FAILURE(framebuffer_yres);
 			break;
 			
 			case splash_screen_update_failure_no_wait:
 				badge 	 = progressbar_badge_failure;
 				progress = get_progress_bar_value();
 			
-				picture_footer_len = picture_update_failure_no_wait_len;
-				picture_footer = picture_update_failure_no_wait;
+				picture_footer_len = PICTURE_UPDATE_FOOTER_FAIL_NOWAIT_LEN(framebuffer_yres);
+				picture_footer = PICTURE_UPDATE_FOOTER_FAIL_NOWAIT(framebuffer_yres);
 				
-				update_footer_width = UPDATE_FOOTER_WIDTH_FAIL_NOWAIT;
+				update_footer_offset = UPDATE_FOOTER_OFFSET_FAIL_NOWAIT(framebuffer_yres);
+				update_footer_width = UPDATE_FOOTER_WIDTH_FAIL_NOWAIT(framebuffer_yres);
 			break;
 
 			// Prevent compiler from complaining.
@@ -2835,12 +2887,14 @@ static void display_update_screen(splash_screen_type which_screen)
 		
 		// Buffer the header and footer.
 		//
-		system_screen.picture_header_len = picture_update_header_len;
-		system_screen.picture_header = picture_update_header;
-		system_screen.header_width = UPDATE_HEADER_WIDTH;
+		system_screen.picture_header_len = PICTURE_UPDATE_HEADER_LEN(framebuffer_yres);
+		system_screen.picture_header = PICTURE_UPDATE_HEADER(framebuffer_yres);
+		system_screen.header_offset = UPDATE_HEADER_OFFSET(framebuffer_yres);
+		system_screen.header_width = UPDATE_HEADER_WIDTH(framebuffer_yres);
 		
 		system_screen.picture_footer_len = picture_footer_len;
 		system_screen.picture_footer = picture_footer;
+		system_screen.footer_offset = update_footer_offset;
 		system_screen.footer_width = update_footer_width;
 		
 		system_screen.picture_body_len = 0;
@@ -2853,16 +2907,19 @@ static void display_update_screen(splash_screen_type which_screen)
 		
 		display_system_screen(&system_screen);
 
-		// Buffer the progressbar and badge.
+		// Buffer the (white background) progressbar and badge.
 		//
+		set_progressbar_background(EINKFB_WHITE);
 		set_update_screen_progressbar_xy();
 
 		display_progressbar(progress, update_buffer);
 		display_progressbar_badge(badge, update_buffer);
 		
-		// Now get everything onto the screen.
+		// Now get everything onto the screen and copied back to
+		// the framebuffer.
 		//
 		update_display(which_fx);
+		memcpy_from_kernelbuffer_to_framebuffer();
 
 		// Prevent back-to-back redraws.
 		//
@@ -2870,11 +2927,37 @@ static void display_update_screen(splash_screen_type which_screen)
 	}
 }
 
+#define IS_REBOOT_SCREEN(s)			\
+	((splash_screen_lowbatt == (s))	||	\
+	 (splash_screen_reboot == (s)))
+
 void splash_screen_dispatch(splash_screen_type which_screen)
 {
+	orientation_t saved_orientation = orientation_portrait;
+	bool restore_orientation = false;
+	
+	// Except for the logo screen, which is always entirely centered and
+	// fits in both portrait and landscape orientations, force us into
+	// the portrait orientation after remembering whether we need to
+	// put ourselves back into the orientation we started with.
+	//
+	if ( splash_screen_logo != which_screen ) 
+	{
+		// Save the display's current orientation, and force it into portrait
+		// mode in order to display the splash screen.
+		//
+		EINKFB_IOCTL(FBIO_EINK_GET_DISPLAY_ORIENTATION, (unsigned long)&saved_orientation);
+		EINKFB_IOCTL(FBIO_EINK_SET_DISPLAY_ORIENTATION, orientation_portrait);
+		
+		// Say to restore the starting orientation if it changed but not if we're
+		// about to reboot.
+		//
+		restore_orientation = (saved_orientation != orientation_portrait) && !IS_REBOOT_SCREEN(which_screen);
+	}
+
 	// Don't do anything if the platform handles the call itself.
 	//
-	if ( !einkfb_shim_platform_splash_screen_dispatch(which_screen) )
+	if ( !einkfb_shim_platform_splash_screen_dispatch(which_screen, framebuffer_yres) )
 	{
 		// Simple (one-shot) splash screen cases.
 		//
@@ -2903,11 +2986,12 @@ void splash_screen_dispatch(splash_screen_type which_screen)
 				case splash_screen_drivemode_3:
 					display_drivemode_screen(which_screen);
 				break;
-				
-				// Reboot screen.
+					
+				// Boot/reboot screens.
 				//
+				case splash_screen_boot:
 				case splash_screen_reboot:
-					display_reboot_screen();
+					display_boot_screen(which_screen);
 				break;
 				
 				// Update screens.
@@ -2927,6 +3011,18 @@ void splash_screen_dispatch(splash_screen_type which_screen)
 				break;
 			}
 		}
+	}
+	
+	// Restore the orientation if we should.
+	//
+	if ( restore_orientation )
+	{
+		EINKFB_IOCTL(FBIO_EINK_SET_DISPLAY_ORIENTATION, saved_orientation);
+		
+		// If we swapped orientations, invalidate the framebuffer's contents.
+		//
+		if ( !ORIENTATION_SAME(orientation_portrait, saved_orientation) )
+			clear_frame_buffer();
 	}
 }
 
@@ -2957,6 +3053,48 @@ static void einkfb_shim_info_hook(struct einkfb_info *info)
 {
 	if ( info && override_framebuffer )
 		info->start = override_framebuffer;
+}
+
+static void einkfb_shim_check_orientation(void)
+{
+	struct einkfb_info info; einkfb_get_info(&info);
+	
+	// If the orientation changed (x <-> y), then update our world to match the new one.
+	//
+	if ( ORIENTATION(info.xres, info.yres) != framebuffer_orientation )
+	{
+		// Invalidate any screen-related caches.
+		//
+		splash_screen_up = splash_screen_invalid;
+
+		progressbar_y = PROGRESSBAR_Y;
+		progressbar_x = PROGRESSBAR_X;
+
+		// Update any resolution-oriented caches.
+		//
+		framebuffer_xres = info.xres;
+		framebuffer_yres = info.yres;
+		
+		framebuffer_orientation = ORIENTATION(framebuffer_xres, framebuffer_yres);
+	}
+}
+
+static void einkfb_shim_check_for_cursor(update_area_t *update_area)
+{
+	if ( update_area )
+	{
+		int	xstart = update_area->x1, xend = update_area->x2,
+			xres   = xend - xstart;
+		
+		if (	FRAMEWORK_RUNNING()				&&
+			(FAKE_FLASHING_AREA_UPDATE_XRES == xres)	&&
+			(fx_update_full == update_area->which_fx)	&&
+			(NULL == update_area->buffer)			)
+		{	
+			update_area->which_fx = fx_flash;
+			einkfb_debug("detected Reader's blinking cursor; simulating\n");
+		}
+	}
 }
 
 static int einkfb_shim_ioctl(unsigned int cmd, unsigned long arg)
@@ -3043,6 +3181,12 @@ static bool einkfb_shim_ioctl_hook(einkfb_ioctl_hook_which which, unsigned long 
 				if ( !LOCAL_UPDATE() )
 					last_display_fx = fx_none;
 
+				// On area updates, check to see whether we need to simulate a
+				// flashing update or not (for Reader's "cursor").
+				//
+				if ( FBIO_EINK_UPDATE_DISPLAY_AREA == local_cmd )
+					einkfb_shim_check_for_cursor((update_area_t *)local_arg);
+				
 				goto not_done;
 			}
 		break;
@@ -3114,6 +3258,11 @@ static bool einkfb_shim_ioctl_hook(einkfb_ioctl_hook_which which, unsigned long 
 				display_progressbar_badge((progressbar_badge_t)local_arg, update_screen);
 		break;
 
+		case FBIO_EINK_PROGRESSBAR_BACKGROUND:
+			if ( einkfb_ioctl_hook_pre == which )
+				set_progressbar_background((u8)local_arg);
+		break;
+
 		// Even though we're always "done" with this call, the test suite checks whether
 		// this ioctl handles NULL or not.  So, keep the test suite happy by truly
 		// saying whether we actually handled this call or not.
@@ -3175,6 +3324,15 @@ static bool einkfb_shim_ioctl_hook(einkfb_ioctl_hook_which which, unsigned long 
 					goto not_done;
 			}
 		break;
+		
+		// At post-command process time, check to see whether the orientation has changed.
+		//
+		case FBIO_EINK_SET_DISPLAY_ORIENTATION:
+			if ( einkfb_ioctl_hook_post == which )
+				einkfb_shim_check_orientation();
+			else
+				goto not_done;
+		break;
 
 		// Say that we didn't handle the call here.
 		//
@@ -3209,6 +3367,7 @@ static void einkfb_shim_dealloc(void)
 
 static DEVICE_ATTR(valid_screen_saver_buf,	DEVICE_MODE_RW, show_valid_screen_saver_buf,	store_valid_screen_saver_buf);
 static DEVICE_ATTR(splash_screen_up,		DEVICE_MODE_R,  show_splash_screen_up,		NULL);
+static DEVICE_ATTR(send_fake_rotate,		DEVICE_MODE_RW, show_send_fake_rotate,		store_send_fake_rotate);
 static DEVICE_ATTR(use_fake_pnlcd,		DEVICE_MODE_RW, show_use_fake_pnlcd,		store_use_fake_pnlcd);
 static DEVICE_ATTR(running_diags,		DEVICE_MODE_RW,	show_running_diags,		store_running_diags);
 static DEVICE_ATTR(progressbar,			DEVICE_MODE_RW, show_progressbar,		store_progressbar);
@@ -3267,17 +3426,17 @@ static int __init einkfb_shim_init(void)
 		picture_buffer_size = info.blen;
 		picture_buffer = info.buf;
 
-		// Cache the framebuffer info since, with the shim, we currently don't support
-		// dynamic changes to the graphics environment.  Also, copy the kernelbuffer
-		// to the framebuffer so that we capture what, if anything, the bootloader
-		// put on the screen.
+		// Cache the framebuffer info and copy the kernelbuffer to the framebuffer
+		// so that we capture what, if anything, the bootloader put on the screen.
 		//
 		framebuffer_xres  = info.xres;
 		framebuffer_yres  = info.yres;
 		framebuffer_bpp   = info.bpp;
 		framebuffer_size  = info.size;
 		framebuffer_align = info.align;
-		framebuffer	  = info.start;
+		
+		framebuffer_orientation = ORIENTATION(framebuffer_xres, framebuffer_yres);
+		framebuffer = info.start;
 
 		if ( !kernelbuffer_local )
 			memcpy_from_kernelbuffer_to_framebuffer();
@@ -3289,6 +3448,7 @@ static int __init einkfb_shim_init(void)
 		
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_valid_screen_saver_buf);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_splash_screen_up);
+		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_send_fake_rotate);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_use_fake_pnlcd);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_running_diags);
 		FB_DEVICE_CREATE_FILE(&info.dev->dev, &dev_attr_progressbar);
@@ -3353,6 +3513,7 @@ static void __exit einkfb_shim_exit(void)
 	einkfb_remove_proc_entry(EINKFB_PROC_EINK_SCREEN_SAVER, einkfb_proc_screen_saver);
 	device_remove_file(&info.dev->dev, &dev_attr_valid_screen_saver_buf);
 	device_remove_file(&info.dev->dev, &dev_attr_splash_screen_up);
+	device_remove_file(&info.dev->dev, &dev_attr_send_fake_rotate);
 	device_remove_file(&info.dev->dev, &dev_attr_use_fake_pnlcd);
 	device_remove_file(&info.dev->dev, &dev_attr_running_diags);
 	device_remove_file(&info.dev->dev, &dev_attr_progressbar);

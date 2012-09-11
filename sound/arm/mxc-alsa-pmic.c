@@ -1003,7 +1003,7 @@ void configure_ssi_tx(snd_pcm_substream_t * substream)
 	ssi_synchronous_mode(ssi, true);
 
 	if (runtime->channels == 1) {
-		if (stream_id == 2)
+		if  (stream_id == 2)
 			ssi_network_mode(ssi, true);
 		else
 			ssi_network_mode(ssi, false);

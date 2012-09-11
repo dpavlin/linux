@@ -184,10 +184,10 @@ typedef u32 * volatile reg_addr_t;
 #define APOLLO_WHITE					0x00
 #define APOLLO_BLACK					0xFF
 
-#define APOLLO_ORIENTATION_0			0x00
-#define APOLLO_ORIENTATION_90			0x01
-#define APOLLO_ORIENTATION_180			0x02
-#define APOLLO_ORIENTATION_270			0x03
+#define APOLLO_ORIENTATION_0			0x00        // landscape upside down
+#define APOLLO_ORIENTATION_90			0x01        // portrait  upside down
+#define APOLLO_ORIENTATION_180			0x02        // landscape
+#define APOLLO_ORIENTATION_270			0x03        // portrait
 
 // For use with apollo_set_init_display_speed() & apollo_get_init_display_speed().
 // These are local to either the kernel or bootloader.
@@ -366,5 +366,8 @@ extern int ProgramRam(unsigned long start_addr,
 		unsigned char *buffer, unsigned long blen);
 
 extern int wait_for_ack_irq(int which);
+
+extern u8 apollo_get_orientation(void);
+extern void apollo_set_orientation(u8 orientation);
 
 #endif // _APOLLO_H

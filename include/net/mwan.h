@@ -10,14 +10,19 @@
 
 typedef enum {
 	WAN_INVALID = -1,
-	WAN_OFF,
-	WAN_ON,
-	WAN_OFF_KILL
+	WAN_OFF,			// 0
+	WAN_ON,				// 1
+	WAN_OFF_KILL			// 2
 } wan_status_t;
-
 
 extern void wan_set_power_status(wan_status_t);
 extern wan_status_t wan_get_power_status(void);
+
+#define MODEM_TYPE_UNKNOWN		(-1)
+#define MODEM_TYPE_AD_DTM               0
+#define MODEM_TYPE_NVTL_EVDO            1
+#define MODEM_TYPE_NVTL_HSPA            2
+#define MODEM_TYPE_AD_DTP               3
 
 #endif // __MWAN_H__
 

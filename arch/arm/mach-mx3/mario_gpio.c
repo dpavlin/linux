@@ -1454,6 +1454,13 @@ void gpio_wan_power(int enable)
 
 EXPORT_SYMBOL(gpio_wan_power);
 
+void gpio_wan_cfg_rf_enable(int opendrain)
+{
+	mxc_iomux_set_pad(MX31_PIN_GPIO1_1, PAD_CTL_DRV_NORMAL | (opendrain ? PAD_CTL_ODE_OpenDrain : 0));
+}
+
+EXPORT_SYMBOL(gpio_wan_cfg_rf_enable);
+
 void gpio_wan_rf_enable(int enable)
 {
 	mxc_set_gpio_dataout(MX31_PIN_GPIO1_1, enable != 0);
@@ -1461,16 +1468,39 @@ void gpio_wan_rf_enable(int enable)
 
 EXPORT_SYMBOL(gpio_wan_rf_enable);
 
+void gpio_wan_usb_enable(int enable)
+{
+	if (!IS_MARIO()) {
+		mxc_set_gpio_dataout(MX31_PIN_DCD_DCE1, enable != 0);
+	}
+}
+
+EXPORT_SYMBOL(gpio_wan_usb_enable);
+
 
 #define IS_TURING_EVT1() (IS_TURING() && IS_EVT() && GET_BOARD_HW_VERSION() == 1)
 
 void gpio_wan_init(void *tph_event_callback)
 {
-	// configure the "WAN_RF_DISABLE" line
+	// configure the "WAN_RF_ENABLE" line
 	mxc_request_iomux(MX31_PIN_GPIO1_1, OUTPUTCONFIG_GPIO, INPUTCONFIG_NONE);
 	mxc_set_gpio_direction(MX31_PIN_GPIO1_1, 0);
-	mxc_iomux_set_pad(MX31_PIN_GPIO1_1, PAD_CTL_DRV_NORMAL | PAD_CTL_ODE_OpenDrain);
+
+	// default to push/pull until reconfigured
+	gpio_wan_cfg_rf_enable(0);
+
+	// bring "WAN_RF_ENABLE" low by default
 	gpio_wan_rf_enable(0);
+
+	if (!IS_MARIO()) {
+		// configure the "WAN_USB_EN" line
+		mxc_request_iomux(MX31_PIN_DCD_DCE1, OUTPUTCONFIG_GPIO, INPUTCONFIG_NONE);
+		mxc_set_gpio_direction(MX31_PIN_DCD_DCE1, 0);
+		mxc_iomux_set_pad(MX31_PIN_DCD_DCE1, PAD_CTL_DRV_NORMAL);
+
+		// bring "WAN_USB_EN" low by default
+		gpio_wan_usb_enable(0);
+	}
 
 	wan_use_flip_flop = 0;
 

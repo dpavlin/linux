@@ -90,7 +90,7 @@ char *broadsheet_get_commands_version_string(void)
     //
     if ( info.checksum )
     {
-        sprintf(temp_string, " (C/S %04lX)", info.checksum);
+        sprintf(temp_string, " (C/S %08lX)", info.checksum);
         strcat(commands_version_string, temp_string);
     }
     
