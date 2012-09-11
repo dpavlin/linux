@@ -3181,8 +3181,9 @@ static void fsl_udc_low_power_suspend(struct arcotg_udc *udc)
 	disable_irq(ARCOTG_IRQ);
 	udc->suspended = 1;
 	suspend_port();
+	mdelay(20);
 	suspend_ctrl();
-	mdelay(10); /* Let the controller settle down */
+	mdelay(20); /* Let the controller settle down */
 	suspend_irq(udc);
 
 	/* Check if CPU is scaling */
@@ -3193,11 +3194,12 @@ static void fsl_udc_low_power_suspend(struct arcotg_udc *udc)
 
 	/* Make sure the clock gating does not get interrupted */
 	spin_lock_irqsave(&udc->lock, flags);
-        clk_disable(usb_ahb_clk);
-        spin_unlock_irqrestore(&udc->lock, flags);
+	clk_disable(usb_ahb_clk);
+	spin_unlock_irqrestore(&udc->lock, flags);
 
 	/* Get into low power IDLE */
 	atomic_set(&usb_dma_doze_ref_count, 0);
+	udc->stopped = 1;
 }
 
 static void reset_nxp_phy(void)
@@ -3221,6 +3223,8 @@ static void reset_nxp_phy(void)
 	//Wait for the PHY to come back up
 	mdelay(3);
 }
+
+static int udc_resume(struct arcotg_udc *udc);
 
 static void reset_smsc_phy(void)
 {
@@ -3262,10 +3266,10 @@ static void fsl_udc_low_power_resume(struct arcotg_udc *udc)
 	if (SMSC_ID == local_phy_ops->id)
 		reset_smsc_phy();
 
+	udc_resume(udc);
 	resume_ctrl();
-	usb_slave_regs->portsc1 |= cpu_to_le32(PORTSCX_PORT_FORCE_RESUME);
-	resume_irq(udc);
 	enable_irq(ARCOTG_IRQ);
+	resume_irq(udc);
 }
 
 static int is_usb_connected(void)
@@ -3865,7 +3869,6 @@ static void redo_detect_work(struct arcotg_udc *udc)
 	if (!recovery_mode) {
 		udc->conn_sts = USB_CONN_DISCONNECTED;
 		fsl_udc_low_power_resume(udc);
-		udc_resume(udc);
 		mdelay(1);
 		if (SMSC_ID == local_phy_ops->id) {
 			local_phy_ops->reset();
