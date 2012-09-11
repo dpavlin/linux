@@ -635,7 +635,33 @@ static ssize_t wakeup_enable_show(struct device *dev, struct device_attribute *a
 static ssize_t wakeup_enable_store(struct device *dev, struct device_attribute *attr,
 				const char *buf, size_t size)
 {
-	wakeup_value = simple_strtol(buf, NULL, 10);
+	int ret;
+	struct timeval tmp;
+	int value = 0;
+
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Error setting the wakeup value in PMIC RTC\n");
+		return -EINVAL;
+	}
+
+	if (value != 0) {
+		ret = pmic_rtc_get_time(&tmp);
+                if (ret < 0)
+                        printk (KERN_ERR "Failed reading time from RTC\n");
+
+		tmp.tv_sec += value;
+	
+		ret = pmic_rtc_set_time_alarm(&tmp);
+
+                if (ret < 0)
+                        printk (KERN_ERR "Failed setting ALARM for suspend wakeup\n");
+
+		/* Clear TODAI interrupt flag and unmask TODAM */
+	        pmic_write_reg(REG_INTERRUPT_STATUS_1, 0, 0x2);
+        	pmic_write_reg(REG_INTERRUPT_MASK_1, 0, 0x2);
+
+		wakeup_value = value;
+        }
 
 	return size;
 }
@@ -747,6 +773,10 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 	return 0;
 }
 
+unsigned long suspend_time = 0;
+unsigned long last_suspend_time = 0;
+unsigned long total_suspend_time = 0;
+
 /*!
  * This function is called to save the system time delta relative to
  * the MXC RTC when enterring a low power state. This time delta is
@@ -761,28 +791,12 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 static int mxc_rtc_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct timespec tv;
-	ssize_t retval;
-	struct rtc_wkalrm alm;
-	unsigned long now, alarm;
-
-	if (wakeup_value != 0) {
-		retval = mxc_rtc_read_time(&pdev->dev, &alm.time);
-		if (retval < 0)
-			printk ("Error - reading time from RTC\n");
-
-		rtc_tm_to_time(&alm.time, &now);
-		alarm = now + wakeup_value;
-		rtc_time_to_tm(alarm, &alm.time);
-		mxc_rtc_set_alarm(&pdev->dev, &alm);
-
-		if (retval < 0)
-			printk ("Error - setting ALARM for suspend wakeup\n");
-	}
 
 	/* calculate time delta for suspend */
 	/* RTC precision is 1 second; adjust delta for avg 1/2 sec err */
 	tv.tv_nsec = NSEC_PER_SEC >> 1;
 	tv.tv_sec = get_alarm_or_time(&pdev->dev, MXC_RTC_TIME);
+	suspend_time = tv.tv_sec;
 	set_normalized_timespec(&mxc_rtc_delta,
 				xtime.tv_sec - tv.tv_sec,
 				xtime.tv_nsec - tv.tv_nsec);
@@ -808,6 +822,7 @@ static int mxc_rtc_resume(struct platform_device *pdev)
 {
 	struct timespec tv;
 	struct timespec ts;
+	unsigned long resume_time = 0;
 
 	if (wakeup_value != 0) {
 		wakeup_value = 0;
@@ -817,6 +832,7 @@ static int mxc_rtc_resume(struct platform_device *pdev)
 
 	tv.tv_nsec = 0;
 	tv.tv_sec = get_alarm_or_time(&pdev->dev, MXC_RTC_TIME);
+	resume_time = tv.tv_sec;
 
 	/* restore wall clock using delta against this RTC;
 	 * adjust again for avg 1/2 second RTC sampling error
@@ -825,6 +841,8 @@ static int mxc_rtc_resume(struct platform_device *pdev)
 				tv.tv_sec + mxc_rtc_delta.tv_sec,
 				(NSEC_PER_SEC >> 1) + mxc_rtc_delta.tv_nsec);
 	do_settimeofday(&ts);
+	last_suspend_time = resume_time - suspend_time;
+	total_suspend_time += last_suspend_time;
 
 	return 0;
 }

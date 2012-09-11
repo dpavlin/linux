@@ -276,6 +276,28 @@ static unsigned long bs_image_stop_time;
 #define BS_NUM_IMAGE_TIMINGS    (BS_IMAGE_TIMING_STOP + 1)
 static unsigned long bs_image_timings[BS_NUM_IMAGE_TIMINGS];
 
+#define BS_IMAGE_TIME_2BPP_60   300
+#define BS_IMAGE_TIME_4BPP_60   (BS_IMAGE_TIME_2BPP_60 << 1)
+#define BS_IMAGE_TIME_8BPP_60   (BS_IMAGE_TIME_4BPP_60 << 1)
+
+#define BS_IMAGE_TIME_2BPP_97   600
+#define BS_IMAGE_TIME_4BPP_97   (BS_IMAGE_TIME_2BPP_97 << 1)
+#define BS_IMAGE_TIME_8BPP_97   (BS_IMAGE_TIME_4BPP_97 << 1)
+
+#define bs_image_time_60_start  0
+#define bs_image_time_97_start  3
+
+static unsigned long bs_image_time[] =
+{
+    BS_IMAGE_TIME_2BPP_60,
+    BS_IMAGE_TIME_4BPP_60,
+    BS_IMAGE_TIME_8BPP_60,
+    
+    BS_IMAGE_TIME_2BPP_97,
+    BS_IMAGE_TIME_4BPP_97,
+    BS_IMAGE_TIME_8BPP_97
+};
+
 static u8 bs_4bpp_nybble_swap_table_inverted[256] =
 {
     0xFF, 0xEF, 0xDF, 0xCF, 0xBF, 0xAF, 0x9F, 0x8F, 0x7F, 0x6F, 0x5F, 0x4F, 0x3F, 0x2F, 0x1F, 0x0F,
@@ -1977,6 +1999,33 @@ static void bs_cmd_ld_img_upd_data_which(bs_cmd cmd, fx_type update_mode, u8 *da
             einkfb_print_image_timing(bs_image_loading_time,    IMAGE_TIMING_LOAD_TYPE);
             einkfb_print_image_timing(bs_image_display_time,    IMAGE_TIMING_DISP_TYPE);
             einkfb_print_image_timing(bs_image_stop_time,       IMAGE_TIMING_STOP_TYPE);
+        }
+        
+        // If it took too long to perform a full-screen update, log a warning.
+        //
+        if ( !upd_area )
+        {
+            int i = (BS97_INIT_HSIZE == bs_hsize) ? bs_image_time_97_start : bs_image_time_60_start;
+            
+            switch ( info.bpp )
+            {
+                case EINKFB_2BPP:
+                    i += 0;
+                break;
+                
+                case EINKFB_4BPP:
+                    i += 1;
+                break;
+                
+                case EINKFB_8BPP:
+                default:
+                    i += 2;
+                break;
+            }
+            
+            if ( bs_image_stop_time > bs_image_time[i] )
+                einkfb_print_warn("full-screen update took %lu ms; should have been no more than %lu ms\n",
+                    bs_image_stop_time, bs_image_time[i]);
         }
         
         bs_upd_mode = BS_UPD_MODE(BS_UPD_MODE_GC);

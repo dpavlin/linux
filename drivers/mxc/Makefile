@@ -11,3 +11,4 @@ obj-y                                   += security/
 obj-$(CONFIG_MXC_VPU)                   += vpu/
 
 obj-$(CONFIG_MXC_CHARGER)		+= charger/
+obj-$(CONFIG_MXC_BATTERY)		+= charger/

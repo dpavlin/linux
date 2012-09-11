@@ -40,7 +40,7 @@
 #define DRIVER_NAME                     "MXCMMC"
 #define SDHC_MEM_SIZE                   16384
 #define SDHC_REV_NO                     0x400
-#define READ_TO_VALUE                   0x2db4
+#define READ_TO_VALUE                   0xffff
 
 /* Address offsets of the SDHC registers */
 #define MMC_STR_STP_CLK                 0x00	/* Clock Control Reg */

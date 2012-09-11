@@ -24,5 +24,7 @@ extern wan_status_t wan_get_power_status(void);
 #define MODEM_TYPE_NVTL_HSPA            2
 #define MODEM_TYPE_AD_DTP               3
 
+extern int wan_get_modem_type(void);
+
 #endif // __MWAN_H__
 

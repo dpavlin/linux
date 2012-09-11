@@ -1,7 +1,7 @@
 #
 # Automatically generated make config: don't edit
 # Linux kernel version: 2.6.22.19
-# Tue Feb  3 13:59:49 2009
+# Fri Mar 27 10:35:20 2009
 #
 CONFIG_ARM=y
 CONFIG_SYS_SUPPORTS_APM_EMULATION=y
@@ -896,6 +896,7 @@ CONFIG_FB_EINK_PNLCD=m
 CONFIG_FB_EINK_HAL=m
 CONFIG_FB_EINK_HAL_EMULATOR=m
 CONFIG_FB_EINK_HAL_BROADSHEET=m
+# CONFIG_FB_EINK_HAL_ISIS is not set
 # CONFIG_FB_EINK_HAL_BUILTIN is not set
 # CONFIG_FB_MXC is not set
 # CONFIG_FB_S1D13XXX is not set
@@ -1258,6 +1259,7 @@ CONFIG_MXC_MC13783_POWER=y
 # Battery Charger driver
 #
 CONFIG_MXC_CHARGER=m
+CONFIG_MXC_BATTERY=y
 
 #
 # File systems
@@ -1327,7 +1329,8 @@ CONFIG_RAMFS=y
 # CONFIG_EFS_FS is not set
 # CONFIG_YAFFS_FS is not set
 # CONFIG_JFFS2_FS is not set
-# CONFIG_CRAMFS is not set
+CONFIG_CRAMFS=y
+# CONFIG_CRAMFS_LINEAR is not set
 # CONFIG_VXFS_FS is not set
 # CONFIG_HPFS_FS is not set
 # CONFIG_QNX4FS_FS is not set

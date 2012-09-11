@@ -129,7 +129,7 @@ static struct fsl_xcvr_ops *fsl_usb_get_xcvr(char *name)
 /* The dmamask must be set for EHCI to work */
 static u64 ehci_dmamask = ~(u32) 0;
 
-atomic_t usb_dma_doze_ref_count = ATOMIC_INIT(0);
+atomic_t usb_dma_doze_ref_count = ATOMIC_INIT(1);
 EXPORT_SYMBOL(usb_dma_doze_ref_count);
 
 

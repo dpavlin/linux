@@ -3,4 +3,5 @@
 #
 
 obj-$(CONFIG_MXC_CHARGER)	+= charger.o
+obj-$(CONFIG_MXC_BATTERY)	+= battery.o
 

@@ -32,7 +32,7 @@
 #define log_info(format, arg...) printk("mwan: I %s:" format, __func__, ## arg)
 #define log_err(format, arg...) printk("mwan: E %s:" format, __func__, ## arg)
 
-#define VERSION			"1.1.4"
+#define VERSION			"1.1.5"
 
 #define PROC_WAN		"wan"
 #define PROC_WAN_POWER		"power"
@@ -283,6 +283,16 @@ init_modem_type(
 #endif
 	}
 }
+
+
+int
+wan_get_modem_type(
+	void)
+{
+	return modem_type;
+}
+
+EXPORT_SYMBOL(wan_get_modem_type);
 
 
 static int

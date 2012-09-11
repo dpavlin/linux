@@ -1502,23 +1502,19 @@ void gpio_wan_init(void *tph_event_callback)
 		gpio_wan_usb_enable(0);
 	}
 
-	wan_use_flip_flop = 0;
+	wan_use_flip_flop = 1;
 
 	if (IS_TURING()) {
-		if (IS_EVT()) {
-			if (GET_BOARD_HW_VERSION() > 1) {
-				wan_use_flip_flop = 1;
-			}
-		} else {
-			wan_use_flip_flop = 1;
+		if (IS_EVT() && GET_BOARD_HW_VERSION() <= 1) {
+			wan_use_flip_flop = 0;
 		}
 
-	} else if (IS_NELL()) {
-		wan_use_flip_flop = !IS_PROTO();
+	} else if (IS_NELL() && IS_PROTO()) {
+		wan_use_flip_flop = 0;
 	}
-			
+
 	if (wan_use_flip_flop) {
-		// ensure that the clock line is off
+		// ensure that the clock line is low
 		pmic_power_regulator_off(REGU_GPO2);
 
 		// ensure the power state is cleared

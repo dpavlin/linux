@@ -43,9 +43,15 @@ typedef enum panel_sizes panel_sizes;
 
 enum mfg_codes
 {
-    undefined_mfg_code, pvi, lgd, unknown_mfg_code, num_mfg_codes
+    undefined_mfg_code, pvi, lgd, pvi_hydis, unknown_mfg_code, num_mfg_codes
 };
 typedef enum mfg_codes mfg_codes;
+
+enum tuning_biases
+{
+    standard_bias, increased_ds_blooming, unknown_tuning_bias, num_tuning_biases
+};
+typedef enum tuning_biases tuning_biases;
 
 static char waveform_version_string[waveform_version_string_max];
 
@@ -72,7 +78,12 @@ static char *panel_size_names[num_panel_sizes] =
 
 static char *mfg_code_names[num_mfg_codes] =
 {
-    "???", "PVI", "LGD", "???"
+    "???", "PVI", "LGD", "P/H", "???"
+};
+
+static char *tuning_bias_names[num_tuning_biases] = 
+{
+    "S", "D", "?"
 };
 
 #define IS_V110(v) ((matrix_Vizplex_110 == (v)) || (matrix_Vizplex_110A == (v)))
@@ -83,7 +94,7 @@ static char *mfg_code_names[num_mfg_codes] =
     (((b == r) || (p == r)) && (0 != s))
 
 #define has_valid_mfg_code(c) \
-    (IN_RANGE(c, pvi, lgd))
+    (IN_RANGE(c, pvi, pvi_hydis))
 
 #define BS_CHECKSUM(c1, c2) (((c2) << 16) | (c1))
 
@@ -96,23 +107,24 @@ void broadsheet_get_waveform_info(broadsheet_waveform_info_t *info)
 
         broadsheet_set_flash_select(bs_flash_waveform);
 
-        broadsheet_read_from_flash_byte(EINK_ADDR_WAVEFORM_VERSION,    &info->waveform_version);
-        broadsheet_read_from_flash_byte(EINK_ADDR_WAVEFORM_SUBVERSION, &info->waveform_subversion);
-        broadsheet_read_from_flash_byte(EINK_ADDR_WAVEFORM_TYPE,       &info->waveform_type);
-        broadsheet_read_from_flash_byte(EINK_ADDR_RUN_TYPE,            &info->run_type);
-        broadsheet_read_from_flash_byte(EINK_ADDR_FPL_PLATFORM,        &info->fpl_platform);
-        broadsheet_read_from_flash_byte(EINK_ADDR_FPL_SIZE,            &info->fpl_size);
-        broadsheet_read_from_flash_byte(EINK_ADDR_ADHESIVE_RUN_NUM,    &info->adhesive_run_number);
-        broadsheet_read_from_flash_byte(EINK_ADDR_MODE_VERSION,        &info->mode_version);
-        broadsheet_read_from_flash_byte(EINK_ADDR_MFG_CODE,            &info->mfg_code);
-        broadsheet_read_from_flash_byte(EINK_ADDR_CHECKSUM1,           &checksum1);
-        broadsheet_read_from_flash_byte(EINK_ADDR_CHECKSUM2,           &checksum2);
+        broadsheet_read_from_flash_byte(EINK_ADDR_WAVEFORM_VERSION,     &info->waveform_version);
+        broadsheet_read_from_flash_byte(EINK_ADDR_WAVEFORM_SUBVERSION,  &info->waveform_subversion);
+        broadsheet_read_from_flash_byte(EINK_ADDR_WAVEFORM_TYPE,        &info->waveform_type);
+        broadsheet_read_from_flash_byte(EINK_ADDR_RUN_TYPE,             &info->run_type);
+        broadsheet_read_from_flash_byte(EINK_ADDR_FPL_PLATFORM,         &info->fpl_platform);
+        broadsheet_read_from_flash_byte(EINK_ADDR_FPL_SIZE,             &info->fpl_size);
+        broadsheet_read_from_flash_byte(EINK_ADDR_ADHESIVE_RUN_NUM,     &info->adhesive_run_number);
+        broadsheet_read_from_flash_byte(EINK_ADDR_MODE_VERSION,         &info->mode_version);
+        broadsheet_read_from_flash_byte(EINK_ADDR_MFG_CODE,             &info->mfg_code);
+        broadsheet_read_from_flash_byte(EINK_ADDR_CHECKSUM1,            &checksum1);
+        broadsheet_read_from_flash_byte(EINK_ADDR_CHECKSUM2,            &checksum2);
+        broadsheet_read_from_flash_byte(EINK_ADDR_WAVEFORM_TUNING_BIAS, &info->tuning_bias);
         
-        broadsheet_read_from_flash_short(EINK_ADDR_FPL_LOT,            &info->fpl_lot);
+        broadsheet_read_from_flash_short(EINK_ADDR_FPL_LOT,             &info->fpl_lot);
         
-        broadsheet_read_from_flash_long(EINK_ADDR_CHECKSUM,            &info->filesize);
-        broadsheet_read_from_flash_long(EINK_ADDR_FILESIZE,            &info->checksum);
-        broadsheet_read_from_flash_long(EINK_ADDR_SERIAL_NUMBER,       &info->serial_number);
+        broadsheet_read_from_flash_long(EINK_ADDR_CHECKSUM,             &info->checksum);
+        broadsheet_read_from_flash_long(EINK_ADDR_FILESIZE,             &info->filesize);
+        broadsheet_read_from_flash_long(EINK_ADDR_SERIAL_NUMBER,        &info->serial_number);
         
         broadsheet_set_flash_select(saved_flash_select);
         
@@ -125,6 +137,7 @@ void broadsheet_get_waveform_info(broadsheet_waveform_info_t *info)
                         "             type:  0x%02X\n"
                         "         run type:  0x%02X\n"
                         "     mode version:  0x%02X\n"
+                        "      tuning bias:  0x%02X\n"
                         "\n"
                         "     FPL platform:  0x%02X\n"
                         "              lot:  0x%04X\n"
@@ -141,6 +154,7 @@ void broadsheet_get_waveform_info(broadsheet_waveform_info_t *info)
                         info->waveform_type,
                         info->run_type,
                         info->mode_version,
+                        info->tuning_bias,
                         
                         info->fpl_platform,
                         info->fpl_lot,
@@ -166,6 +180,7 @@ void broadsheet_get_waveform_version(broadsheet_waveform_t *waveform)
         waveform->run_type      = info.run_type;
         waveform->mode_version  = !IS_V110(info.fpl_platform) ? 0 : info.mode_version;
         waveform->mfg_code      = info.mfg_code;
+        waveform->tuning_bias   = info.tuning_bias;
         waveform->serial_number = info.serial_number;
         
         waveform->parse_wf_hex  = info.filesize ? true : false;
@@ -209,7 +224,8 @@ char *broadsheet_get_waveform_version_string(void)
     // Build up a waveform version string in the following way:
     //
     //      <FPL PLATFORM>_<RUN TYPE><FPL LOT NUMBER>_<FPL SIZE>_
-    //      <WF TYPE><WF VERSION><WF SUBVERSION> (MFG CODE, S/N XXX)
+    //      <WF TYPE><WF VERSION><WF SUBVERSION>_<TUNING BIAS>
+    //      (MFG CODE, S/N XXX)
     //
     // FPL PLATFORM
     //
@@ -351,7 +367,23 @@ char *broadsheet_get_waveform_version_string(void)
         sprintf(temp_string, "%02d", (waveform.subversion % 100));
     
     strcat(waveform_version_string, temp_string);
+    strcat(waveform_version_string, waveform_seperator);
     
+    // TUNING BIAS
+    //
+    switch ( waveform.tuning_bias )
+    {
+        case standard_bias:
+        case increased_ds_blooming:
+            strcat(waveform_version_string, tuning_bias_names[waveform.tuning_bias]);
+        break;
+        
+        case unknown_tuning_bias:
+        default:
+            strcat(waveform_version_string, tuning_bias_names[unknown_tuning_bias]);
+        break;
+    }
+
     // MFG CODE, SERIAL NUMBER
     //
     valid_serial_number = has_valid_serial_number(run_type, waveform.serial_number);

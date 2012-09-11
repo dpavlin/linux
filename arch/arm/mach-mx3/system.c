@@ -100,6 +100,8 @@ sysfs_show_idle_count(struct sys_device *dev, char *buf)
 	curr += sprintf(curr, "SDMA USECOUNT - %d\n", clk_get_usecount(sdma_clk));
 	curr += sprintf(curr, "USB USECOUNT - %d\n", clk_get_usecount(usb_clk));
 	curr += sprintf(curr, "EMI ZERO COUNT - %d\n", emi_zero_count);
+	curr += sprintf(curr, "USB GADGET USECOUNT - %d\n", 
+				atomic_read(&usb_dma_doze_ref_count));
 
 	curr += sprintf(curr, "\n");
 	return curr - buf;
@@ -143,6 +145,7 @@ void arch_idle(void)
 {
 	int emi_gated_off = 0;
 	unsigned long ccmr;
+	int usb_in_use = 0;
 
 	/*
 	 * This should do all the clock switching
@@ -184,11 +187,13 @@ void arch_idle(void)
 			ccmr = reg = __raw_readl(MXC_CCM_CCMR);
 #ifdef CONFIG_MACH_MARIO_MX
 			if ( (wan_get_power_status() == WAN_OFF) || 
-				(wan_get_power_status() == WAN_INVALID) )  {
+				(wan_get_power_status() == WAN_INVALID)) {
 					reg &= 0xfffffcfe; /* UPLL, SPLL and FPME */
 			}
-			else
+			else {
+				usb_in_use = 1;
 				reg &= 0xfffffefe; /* SPLL and FPME */
+			}
 #endif
 			__raw_writel(reg, MXC_CCM_CCMR);
 
@@ -215,7 +220,8 @@ void arch_idle(void)
 
 			if ((clk_get_usecount(sdma_clk) == 0)
 				&& (clk_get_usecount(ipu_clk) <= 1)
-				&& (clk_get_usecount(usb_clk) == 0)
+				&& (usb_in_use == 0)
+				&& (atomic_read(&usb_dma_doze_ref_count) == 0)
 				&& (clk_get_usecount(rtic_clk) == 0)
 				&& (clk_get_usecount(mpeg_clk) == 0)
 				&& (clk_get_usecount(mbx_clk) == 0)
@@ -233,8 +239,9 @@ void arch_idle(void)
 			 */
 			__raw_writel(ccmr, MXC_CCM_CCMR);
 
-			if (emi_gated_off == 1)
-				clk_enable(emi_clk);	
+			if (emi_gated_off == 1) {
+				clk_enable(emi_clk);
+			}
 
 			__raw_writel(reg1, MXC_CCM_CGR0);
 			__raw_writel(reg2, MXC_CCM_CGR1);
@@ -303,9 +310,6 @@ void arch_reset(char mode)
 #ifdef CONFIG_MACH_MARIO_MX
 	struct timeval pmic_time;
 
-	if (in_atomic())
-		mxc_wd_reset();
-
 	pmic_rtc_get_time(&pmic_time);
 	pmic_time.tv_sec += 5;
 	pmic_rtc_set_time_alarm(&pmic_time);
@@ -342,7 +346,7 @@ int __init mxc_check_oops(void)
 
 	if ( (oops_buffer[0] == 'O') && (oops_buffer[1] == 'O') &&
 		(oops_buffer[2] == 'P') && (oops_buffer[3] == 'S') ) {
-			printk(KERN_ERR "boot: I def:oops::Kernel Crash Start\n");
+			printk ("Kernel Crash Start\n");
 			printk ("%s", oops_buffer);
 			memcpy((void *)oops_buffer, (oops_start + 1024), 1023);
 			printk ("%s", oops_buffer);
@@ -350,7 +354,7 @@ int __init mxc_check_oops(void)
 			printk ("%s", oops_buffer);
 			memcpy((void *)oops_buffer, (oops_start + 3072), 1023);
 			printk ("%s", oops_buffer);
-			printk ("\nboot: I def:oops::Kernel Crash End\n");
+			printk ("\nKernel Crash End\n");
 	}
 
 	memset(oops_start, 0, OOPS_SAVE_SIZE);

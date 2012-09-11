@@ -1,17 +1,16 @@
 /*
+ * Charger driver
+ *
+ * Copyright 2008-2009 Amazon Technologies, Inc.  All rights reserved.
+ * Jerry Katzung <katzung@lab126.com>
+ * Manish Lachwani <lachwani@lab126.com>
+ *
  * The code contained herein is licensed under the GNU General Public
  * License. You may obtain a copy of the GNU General Public License
  * Version 2 or later at the following locations:
  *
  * http://www.opensource.org/licenses/gpl-license.html
  * http://www.gnu.org/copyleft/gpl.html
- */
-
-/*
- * Charger driver
- *
- * Copyright 2008-2009 Lab126, Inc.
- * Manish Lachwani (lachwani@lab126.com)
  */
 
 #include <linux/kernel.h>
@@ -28,14 +27,17 @@
 #include <asm/arch/pmic_light.h>
 
 #include "charger.h"
+#include "battery.h"
+
 
 #define LLOG_G_LOG_MASK chrg_log_mask
 #define LLOG_KERNEL_COMP "charger"
 
 #include <llog.h>
 
-#define DRIVER_NAME "charger"
 
+#define DRIVER_NAME "charger"
+#define DRIVER_VERSION "version=2.1"
 
 #define CHARGE_CURRENT_MAX		1000	/* mA */
 #define POWER_DISSIPATION_MAX		1000	/* mW */
@@ -66,6 +68,11 @@ static void charger_arcotg_wakeup(struct work_struct *not_used);
 static DECLARE_DELAYED_WORK(charger_usb4v4_work, charger_usb4v4);
 static DECLARE_DELAYED_WORK(charger_arcotg_work, charger_arcotg_wakeup);
 static void charger_queue_plug_event(int state);
+static void set_led(int led_state);
+#ifdef CONFIG_CPU_FREQ
+int charger_cpufreq_notifier(struct notifier_block *nb, unsigned long val, void *data);
+#endif
+
 static int host_charging = 0;
 
 atomic_t arcotg_callback_done = ATOMIC_INIT(0);
@@ -265,8 +272,87 @@ struct chrg_tbl_el  charging_table[] = { /* max mV, max current, vchrg */
 #endif
 					};
 
+
 static int determine_current_limit(int chrgraw, int bp, int power_max);
 static void enable_lobathi_lobatli_interrupts(int enable_lobathi, int enable_lobatli);
+
+static void charger_disable(void)
+{
+	printk(KERN_INFO "charger_disable\n");
+
+	/* If charger has already been disabled, do not redo it */
+	if (charger->charger_present == 0) {
+		printk(KERN_INFO "Charger already disabled\n");
+		return;
+	}
+
+	/* Deregister CPUFreq */
+#ifdef CONFIG_CPU_FREQ
+	cpufreq_unregister_notifier(&charger->cpufreq_transition,
+			CPUFREQ_TRANSITION_NOTIFIER);
+#endif
+	/* Delete the charger timer */
+	del_timer_sync(&charger->timer);
+
+	/* Cancel the work element */
+	cancel_work_sync(&charger->charger_work);
+
+	/* Turn off LED */
+	set_led(LED_OFF);
+
+	/* Clear the ichrg */
+	pmic_write_reg(REG_CHARGER, 0, 0xffffffff);
+	pmic_event_unsubscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
+
+	/* Charger state variables */
+	charger->charger_present = 0;
+	charger->current_led = LED_OFF;
+	charger->current_ichrg = 0;
+}
+
+static void charger_enable(void)
+{
+	t_sensor_bits   sensors;
+	pmic_get_sensors(&sensors);
+
+	/* First check if the charger has already been enabled */
+	if (charger->charger_present == 1) {
+		printk(KERN_INFO " Charger already enabled\n");
+		return;
+	}
+
+	printk(KERN_INFO "charger_enable\n");
+
+	/* Only enable if a charger is indeed connected */
+	if (sensors.sense_usb4v4s ||
+		(sensors.sense_chgcurrs && sensors.sense_chgdets)) {	
+
+		charger->charger_present = 1;
+
+		/* Set the timer for 10 second default */	
+		mod_timer(&charger->timer, jiffies + (charger->timer_delay * HZ));
+		pmic_event_subscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
+		set_bit(OP_CHECK_CHARGER, &charger->operations);
+
+		/* Queue the work element */
+		queue_work(charger->charger_wq, &charger->charger_work);
+
+		/* Re-register for CPUFreq */
+#ifdef CONFIG_CPU_FREQ
+		charger->cpufreq_transition.notifier_call = charger_cpufreq_notifier;
+		cpufreq_register_notifier(&charger->cpufreq_transition,
+				CPUFREQ_TRANSITION_NOTIFIER);
+#endif
+	}
+}
+
+static void charger_set_state(int enable)
+{
+	if (enable == 0)
+		charger_disable();
+	else 
+		charger_enable();
+}
 
 #ifdef CONFIG_CPU_FREQ
 int charger_cpufreq_notifier(struct notifier_block *nb, unsigned long val,
@@ -819,7 +905,9 @@ static void charger_work_fn(struct work_struct *work)
 
 	pmic_get_sensors(&sensors);
 	if (sensors.sense_usb4v4s || (sensors.sense_chgcurrs && sensors.sense_chgdets)) {
-		if (charger->current_led == LED_OFF) {
+		/* Check battery error flags as well */
+		if ( (charger->current_led == LED_OFF) && 
+			(battery_error_flags == 0) ) {
 			schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(1000));
 		}
 	}
@@ -836,9 +924,9 @@ static void charger_work_fn(struct work_struct *work)
 	 *
 	 * 				LOBATHI		LOBATLI
 	 * 				--------	--------
-	 * Low-battery (hi and/or lo)	disabled	disabled(???)
+	 * Low-battery (hi and/or lo)	disabled	disabled
 	 *
-	 * Off				disabled(???)	disabled(???)
+	 * Off				disabled	disabled
 	 *
 	 * Suspended			enabled		enabled
 	 *
@@ -886,7 +974,7 @@ static void charger_work_fn(struct work_struct *work)
 	/*
 	 * We're going to need the latest readings for all our calculations
 	 * Make sure the arcotg is not in a misdetect retry else it's
-	 * timers will fire will we read the ADC
+	 * timers will fire while we read the ADC
 	 */
 	if (charger_misdetect_retry == 0)
 		valid = get_latest_readings(&chrgraw, &bp, &batt);
@@ -949,7 +1037,9 @@ static void charger_work_fn(struct work_struct *work)
 		}
 	}
 
-	if (!temp_ok || !vbus_present) {
+	/* Handle the charger control work */
+
+	if (!temp_ok || !vbus_present || (battery_error_flags != 0)) {
 	
 		/* powerd will inform us if the temperature is out of range
 		 * for charging.  If this is the case, we have to turn off
@@ -957,9 +1047,8 @@ static void charger_work_fn(struct work_struct *work)
 		 * Also, if VBUS has gone away, we need to shut down the
 		 * charge regulator as well.
 		 */
-
 		log_chrg_calcs(CHRG_MSG_DBG_TEMP_AND_VBUS, temp_ok,
-				vbus_present);
+				vbus_present, battery_error_flags);
 
 		new_current_limit = 0;
 		new_ichrg = 0;
@@ -1134,6 +1223,15 @@ static void charger_timer(unsigned long data)
 }
 
 
+/* Battery status change notification handler */
+static int charger_batt_err_callback(void * arg, int error_flags)
+{
+	log_chrg_info(CHRG_MSG_INFO_BATT_CALLBACK, error_flags);
+	queue_work(charger->charger_wq, &charger->charger_work);
+	return 0;
+}
+
+
 /*
  * Atlas event handlers
  */
@@ -1227,9 +1325,8 @@ static void chrgcurri_event(void *param)
 		schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(10));
 	}
 	else {
-		set_led(LED_OFF);
-		charger_queue_plug_event(0);
-		pmic_write_reg(REG_CHARGER, 0, 0xffffffff);
+		/* 1 second debounce time */
+		schedule_delayed_work(&charger_usb4v4_work, msecs_to_jiffies(1000));
 	}
 
 	mutex_unlock(&charger_wq_mutex);
@@ -1342,6 +1439,45 @@ show_current_limit (struct device *_dev, struct device_attribute *attr, char *bu
 static DEVICE_ATTR (current_limit, S_IRUGO, show_current_limit, NULL);
 
 
+/* "errors" sysfs attribute - nonzero indicates some battery-related issue */
+
+static ssize_t
+show_errors (struct device *_dev, struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+			battery_error_flags);
+}
+
+static DEVICE_ATTR (errors, S_IRUGO, show_errors, NULL);
+
+
+/* "globals" sysfs attribute */
+
+static ssize_t
+show_globals (struct device *_dev, struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE,
+			"cwq:%d op:%lu lcs:%d hcs:%d sus:%d vbp:%d chp:%d\n"
+			"ccl:%d ci:%d cv:%d cl:%d ucl:%d mcl:%d mpd:%d\n"
+			"bp:%d vb:%d tok:%d bfl:%d ast:%d\n",
+			charger->charger_work_queued, charger->operations,
+			charger->lobatli_callback_subscribed,
+			charger->lobathi_callback_subscribed,
+			charger->suspended,
+			charger->vbus_present, charger->charger_present,
+			charger->current_current_limit,
+			charger->current_ichrg, charger->current_vchrg,
+			charger->current_led,
+			charger->usb_current_limit,
+			charger->max_current_limit,
+			charger->max_power_dissipation,
+			charger->voltage, charger->vbatt,
+			charger->temp_ok, charger->battery_full,
+			charger->arcotg_state);
+}
+
+static DEVICE_ATTR (globals, S_IRUGO, show_globals, NULL);
+
 /* "ichrg_setting" sysfs attribute */
 
 static ssize_t
@@ -1400,6 +1536,28 @@ store_max_power (struct device *_dev, struct device_attribute *attr,
 
 static DEVICE_ATTR (max_power, S_IRUGO|S_IWUSR, show_max_power, store_max_power);
 
+/* charger enable/disable on the fly */
+static ssize_t
+show_charger_state(struct device *_dev, struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", charger->charger_present);
+}
+
+static ssize_t
+store_charger_state (struct device *_dev, struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	int value;
+
+	if ((sscanf(buf, "%d", &value) > 0) &&
+			((value == 0) || (value == 1))) {
+		charger_set_state(value);
+		return strlen(buf);
+	}
+	return -EINVAL;
+}
+
+static DEVICE_ATTR (charger_state, S_IRUGO|S_IWUSR, show_charger_state, store_charger_state);
 
 /* "temp_ok" sysfs attribute */
 
@@ -1472,7 +1630,6 @@ show_voltage (struct device *_dev, struct device_attribute *attr, char *buf)
 static DEVICE_ATTR (voltage, S_IRUGO, show_voltage, NULL);
 
 
-
 /*
  * Driver infrastructure calls - probe/remove, suspend/resume
  */
@@ -1517,6 +1674,13 @@ static int charger_resume(struct platform_device *pdev)
 	log_chrg_entry();
 
 	charger->suspended = false;
+
+	/* The charger LED will be on if the user resumed the device
+	 * by connecting USB.  Assuming the state is "on" helps work
+	 * around an edge case if the charger needs to be forced off.
+	 * (SW thinks the LED is off, so it doesn't turn it off.)
+	 */
+	charger->current_led = 1;
 
 	green_led_initialization();
 
@@ -1568,11 +1732,12 @@ static int __init charger_init(void)
 {
 	int		retval;
 	t_sensor_bits	sensors;
+	int		connected;
 
 	LLOG_INIT();
 	LLOG_G_LOG_MASK |= CHRG_LOG_DEFAULT;
 
-	log_chrg_info(CHRG_MSG_INFO_DRIVER_LOADING);
+	log_chrg_info(CHRG_MSG_INFO_DRIVER_LOADING, DRIVER_VERSION);
 
 	spin_lock_init(&charger->lock);
 
@@ -1597,8 +1762,6 @@ static int __init charger_init(void)
 	charger->arcotg_callback = NULL;
 	charger->arcotg_arg = NULL;
 
-	printk("Version 2.0\n");
-
 	/* Create a fake piece of hardware for us to bind against... */
 
 	retval = platform_device_register(&charger->dev);
@@ -1622,14 +1785,18 @@ static int __init charger_init(void)
 	retval = device_create_file(&charger->dev.dev, &dev_attr_battery_full);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_charging);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_current_limit);
+	retval = device_create_file(&charger->dev.dev, &dev_attr_errors);
+	retval = device_create_file(&charger->dev.dev, &dev_attr_globals);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_ichrg_setting);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_logging);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_max_power);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_temp_ok);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_timer_delay);
-//	retval = device_create_file(&charger->dev.dev, &dev_attr_vchrg_setting);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_vbatt);
 	retval = device_create_file(&charger->dev.dev, &dev_attr_voltage);
+	retval = device_create_file(&charger->dev.dev, &dev_attr_charger_state);
+
+	battery_register_callback(charger_batt_err_callback, NULL);
 
 	charger->chgdeti_callback.func    = chgdeti_event;
 	charger->chgdeti_callback.param   = NULL;
@@ -1653,12 +1820,16 @@ static int __init charger_init(void)
 	 * Check status of USB4V4
 	 */
 	pmic_get_sensors(&sensors);
-	if (sensors.sense_usb4v4s || (sensors.sense_chgcurrs && sensors.sense_chgdets))
+	connected = sensors.sense_usb4v4s ||
+			(sensors.sense_chgcurrs && sensors.sense_chgdets);
+	
+	if (connected && charger->temp_ok && (battery_error_flags == 0))
 		charger_queue_plug_event(1);
 	else {
 		set_led(LED_OFF);
 		pmic_write_reg(REG_CHARGER, 0, 0xffffffff);
 	}
+
 
 #ifdef CONFIG_CPU_FREQ
 	charger->cpufreq_transition.notifier_call = charger_cpufreq_notifier;
@@ -1678,9 +1849,7 @@ static void __exit charger_exit(void)
 {
 	del_timer_sync(&charger->timer);
 
-	cancel_work_sync(&charger->charger_work);
-	flush_workqueue(charger->charger_wq);
-	destroy_workqueue(charger->charger_wq);
+	battery_register_callback(NULL, NULL);
 
 	pmic_event_unsubscribe(EVENT_CHGDETI, charger->chgdeti_callback);
 	pmic_event_unsubscribe(EVENT_CHRGCURRI, charger->chrgcurri_callback);
@@ -1689,23 +1858,29 @@ static void __exit charger_exit(void)
 	if (charger->lobatli_callback_subscribed)
 		pmic_event_unsubscribe(EVENT_LOBATLI, charger->lobatli_callback);
 
+	cancel_work_sync(&charger->charger_work);
+	flush_workqueue(charger->charger_wq);
+	destroy_workqueue(charger->charger_wq);
+
 	device_remove_file(&charger->dev.dev, &dev_attr_battery_full);
 	device_remove_file(&charger->dev.dev, &dev_attr_charging);
 	device_remove_file(&charger->dev.dev, &dev_attr_current_limit);
+	device_remove_file(&charger->dev.dev, &dev_attr_errors);
+	device_remove_file(&charger->dev.dev, &dev_attr_globals);
 	device_remove_file(&charger->dev.dev, &dev_attr_ichrg_setting);
 	device_remove_file(&charger->dev.dev, &dev_attr_logging);
 	device_remove_file(&charger->dev.dev, &dev_attr_max_power);
 	device_remove_file(&charger->dev.dev, &dev_attr_temp_ok);
 	device_remove_file(&charger->dev.dev, &dev_attr_timer_delay);
-//	device_remove_file(&charger->dev.dev, &dev_attr_vchrg_setting);
 	device_remove_file(&charger->dev.dev, &dev_attr_vbatt);
 	device_remove_file(&charger->dev.dev, &dev_attr_voltage);
+	device_remove_file(&charger->dev.dev, &dev_attr_charger_state);
 
 	platform_device_unregister(&charger->dev);
 	
 	platform_driver_unregister(&charger->drvr);
 
-	printk(KERN_INFO "Battery charger driver unloaded.\n");
+	log_chrg_info("unld", "", " Battery charger driver unloaded.\n");
 
 #ifdef CONFIG_CPU_FREQ
 	cpufreq_unregister_notifier(&charger->cpufreq_transition,
@@ -1718,5 +1893,6 @@ module_init(charger_init);
 module_exit(charger_exit);
 
 MODULE_DESCRIPTION("Charger driver");
+MODULE_AUTHOR("Jerry Katzung");
 MODULE_AUTHOR("Manish Lachwani");
 MODULE_LICENSE("GPL");

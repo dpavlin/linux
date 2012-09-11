@@ -572,6 +572,9 @@ struct arcotg_udc {
 	atomic_t timer_scheduled;
 	struct delayed_work phy_locked_work;
 	struct delayed_work charger_detect_work;
+#ifdef CONFIG_CPU_FREQ
+	struct notifier_block cpufreq_transition;
+#endif
 };
 
 #if 0

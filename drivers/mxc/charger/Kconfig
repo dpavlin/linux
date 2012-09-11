@@ -7,6 +7,7 @@ menu "Battery Charger driver"
 config MXC_CHARGER
 	tristate "MXC Battery Charger driver"
 	depends on MXC_PMIC_MC13783
+	depends on MXC_BATTERY
 	default m
 	help
 	   This selects the battery charger driver that controls the
@@ -18,5 +19,20 @@ config MXC_CHARGER
 
 	   To compile this driver as a module, choose M here:
 	   the module will be called "charger".
+
+config MXC_BATTERY
+	tristate "MXC Battery Communication driver"
+	depends on MXC_PMIC_MC13783
+	default m
+	help
+	   This selects the I2C client driver that communicates with
+	   the battery over I2C.
+
+	   Say Y to compile it into the kernel.
+
+	   If unsure, say N.
+
+	   To compile this driver as a module, choose M here:
+	   the module will be called "battery".
 
 endmenu

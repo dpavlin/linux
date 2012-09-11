@@ -231,8 +231,16 @@ extern unsigned int LLOG_G_LOG_MASK;
 		printk( kern_level LLOG_KERNEL_COMP ": " format, ##__VA_ARGS__ )
 #endif
 
+/**
+ * Logs an event at the specified level (kern_level is ignored unless
+ * __KERNEL__ is defined) IFF log_level is selected by the current log mask.
+ * For internal use by the other macros only.
+ * The do/while() is included so that if this macro is used (directly or
+ * indirectly) in an "if" statement without braces, it won't "eat" an "else"
+ * that follows it.
+ */
 #define _LLOGMSG_CHK( kern_level, syslog_level, log_level, format, ... ) \
-		if( log_level & LLOG_G_LOG_MASK ) _LLOGMSG_PRINT( kern_level, syslog_level, format, ## __VA_ARGS__ )
+		do { if( log_level & LLOG_G_LOG_MASK ) _LLOGMSG_PRINT( kern_level, syslog_level, format, ## __VA_ARGS__ ); } while (0)
 
 #define _LLOGMSG_FORMAT( kern_level, syslog_level, log_level, str_subcomp, msg_id_char, msg_id_str, args_format, msg_format, ... ) \
 	_LLOGMSG_CHK( kern_level, syslog_level, log_level, msg_id_char " " str_subcomp ":"  msg_id_str ":" args_format ":" msg_format, ## __VA_ARGS__ )
