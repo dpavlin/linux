@@ -161,12 +161,7 @@ static void sdma_wakeup_channel(int channel)
  */
 static irqreturn_t sdma_int_handler(int irq, void *dev_id)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
 	IRQ_Handler();
-	local_irq_restore(flags);
-
 	return IRQ_RETVAL(1);
 }
 

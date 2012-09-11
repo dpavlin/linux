@@ -45,8 +45,6 @@
  */
 #define MMC_SHIFT	3
 
-extern int test_mmc;
-
 /*
  * There is one mmc_blk_data per slot.
  */
@@ -208,7 +206,6 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 	struct mmc_card *card = md->queue.card;
 	struct mmc_blk_request brq;
 	int ret = 1, sg_pos, data_size;
-	int disable_multi = 0;
 
 	mmc_claim_host(card->host);
 
@@ -231,9 +228,6 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 		brq.data.blocks = req->nr_sectors >> (md->block_bits - 9);
 		if (brq.data.blocks > card->host->max_blk_count)
 			brq.data.blocks = card->host->max_blk_count;
-
-		if (disable_multi && brq.data.blocks > 1)
-			brq.data.blocks = 1;
 
 		mmc_set_data_timeout(&brq.data, card, rq_data_dir(req) != READ);
 
@@ -320,25 +314,14 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 
 		mmc_queue_bounce_post(mq);
 
-		if (brq.cmd.error || brq.data.error || brq.stop.error || test_mmc) {
-			if (brq.data.blocks > 1 && rq_data_dir(req) == READ) {
-				/* Redo read one sector at a time */
-				printk(KERN_WARNING "mmc: I def:mmc::%s retrying using single "
-					"block read\n", req->rq_disk->disk_name);
-				disable_multi = 1;
-				test_mmc = 0;
-				continue;
-			}
-		}	
-
 		if (brq.cmd.error) {
-			printk(KERN_ERR "mmc: I def:mmc::%s error %d sending read/write command\n",
+			printk(KERN_ERR "%s: error %d sending read/write command\n",
 			       req->rq_disk->disk_name, brq.cmd.error);
 			goto cmd_err;
 		}
 
 		if (brq.data.error) {
-			printk(KERN_ERR "mmc: I def:mmc::%s error %d transferring data\n",
+			printk(KERN_ERR "%s: error %d transferring data\n",
 			       req->rq_disk->disk_name, brq.data.error);
 			goto cmd_err;
 		}
@@ -362,8 +345,7 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 					       req->rq_disk->disk_name, err);
 					goto cmd_err;
 				}
-			} while (!(cmd.resp[0] & R1_READY_FOR_DATA) || 
-				(R1_CURRENT_STATE(cmd.resp[0]) == 7));
+			} while (!(cmd.resp[0] & R1_READY_FOR_DATA));
 
 #if 0
 			if (cmd.resp[0] & ~0x00000900)
@@ -372,16 +354,6 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 			if (mmc_decode_status(cmd.resp))
 				goto cmd_err;
 #endif
-		}
-
-		if (brq.cmd.error || brq.stop.error || brq.data.error) {
-			if (rq_data_dir(req) == READ) {
-				spin_lock_irq(&md->lock);
-				ret = end_that_request_chunk(req, -EIO, brq.data.blksz);
-				spin_unlock_irq(&md->lock);
-				continue;
-			}
-			goto cmd_err;
 		}
 
 		/*
@@ -404,7 +376,7 @@ static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 
 	return 1;
 
-cmd_err:
+ cmd_err:
  	/*
  	 * If this is an SD card and we're writing, we can first
  	 * mark the known good sectors as ok.
@@ -415,7 +387,7 @@ cmd_err:
 	 * For reads we just fail the entire chunk as that should
 	 * be safe in all cases.
 	 */
- 	if (mmc_card_sd(card)) {
+ 	if (rq_data_dir(req) != READ && mmc_card_sd(card)) {
 		u32 blocks;
 		unsigned int bytes;
 
@@ -429,7 +401,8 @@ cmd_err:
 			ret = end_that_request_chunk(req, 1, bytes);
 			spin_unlock_irq(&md->lock);
 		}
-	} else {
+	} else if (rq_data_dir(req) != READ &&
+		   (card->host->caps & MMC_CAP_MULTIWRITE)) {
 		spin_lock_irq(&md->lock);
 		ret = end_that_request_chunk(req, 1, brq.data.bytes_xfered);
 		spin_unlock_irq(&md->lock);

@@ -138,8 +138,6 @@ static int accel_enable_status(void)
 	return atomic_read(&accel_enabled);
 }
 
-int test_mmc = 0;
-
 /*
  * sysfs interface to CPU idle counts
  */
@@ -154,7 +152,6 @@ sysfs_show_idle_count(struct sys_device *dev, char *buf)
 	curr += sprintf(curr, "EMI ZERO COUNT - %d\n", emi_zero_count);
 
 	curr += sprintf(curr, "\n");
-	test_mmc = 1;
 	return curr - buf;
 }
 

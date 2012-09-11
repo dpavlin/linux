@@ -426,8 +426,13 @@ static void mxcmci_start_clock(struct mxcmci_host *host, bool wait)
 		if (!wait)
 			break;
 
+		if (audio_playing_flag != 0)
+			schedule();
+
 		wait_cnt = CMD_WAIT_CNT;
 		while (wait_cnt--) {
+			if (audio_playing_flag != 0)
+				schedule();
 			if (__raw_readl(host->base + MMC_STATUS) &
 			    STATUS_CARD_BUS_CLK_RUN) {
 				break;
@@ -467,7 +472,6 @@ static void mxcmci_softreset(struct mxcmci_host *host)
 	__raw_writel(0x3f, host->base + MMC_CLK_RATE);
 
 	__raw_writel(0xff, host->base + MMC_RES_TO);
-	__raw_writel(0xffff, host->base + MMC_READ_TO);
 	__raw_writel(512, host->base + MMC_BLK_LEN);
 	__raw_writel(1, host->base + MMC_NOB);
 }
@@ -500,6 +504,10 @@ static void mxcmci_setup_data(struct mxcmci_host *host, struct mmc_data *data,
 		 host->dma_size);
 
 	if (mxc_mmc_dma_enable == 1) {
+		if (host->dma_size <= (16 << host->mmc->ios.bus_width)) {
+			return;
+		}
+
 		if (data->blksz & 0x3) {
 			printk(KERN_ERR
 		       		"mxc_mci: block size not multiple of 5 bytes\n");
@@ -568,7 +576,14 @@ static void mxcmci_start_cmd(struct work_struct *work)
 	__raw_writel(cmd->arg, host->base + MMC_ARG);
 
 	__raw_writel(cmdat, host->base + MMC_CMD_DAT_CONT);
-	mxcmci_start_clock(host, true);
+
+	if (!(cmdat & CMD_DAT_CONT_DATA_ENABLE) || (cmdat & CMD_DAT_CONT_WRITE)) {
+		mxcmci_start_clock(host, true);
+	} else {
+		__raw_writel(STR_STP_CLK_IPG_CLK_GATE_DIS |
+			     STR_STP_CLK_IPG_PERCLK_GATE_DIS,
+			     host->base + MMC_STR_STP_CLK);
+	}
 }
 
 static void mxcmci_start_command(struct mxcmci_host *host)
@@ -603,8 +618,14 @@ static void mxcmci_start_command(struct mxcmci_host *host)
 	__raw_writel(cmd->arg, host->base + MMC_ARG);
 
 	__raw_writel(cmdat, host->base + MMC_CMD_DAT_CONT);
-	mxcmci_start_clock(host, true);
 
+	if (!(cmdat & CMD_DAT_CONT_DATA_ENABLE) || (cmdat & CMD_DAT_CONT_WRITE)) {
+		mxcmci_start_clock(host, true);
+	} else {
+		__raw_writel(STR_STP_CLK_IPG_CLK_GATE_DIS |
+			     STR_STP_CLK_IPG_PERCLK_GATE_DIS,
+			     host->base + MMC_STR_STP_CLK);
+	}
 }
 /*!
  * This function is called to complete the command request.
@@ -620,8 +641,10 @@ static void mxcmci_finish_request(struct mxcmci_host *host)
 	host->req = NULL;
 	host->cmd = NULL;
 	host->data = NULL;
-	
-	mxcmci_stop_clock(host, true);
+
+	if (!(req->cmd->flags & MMC_KEEP_CLK_RUN)) {
+		mxcmci_stop_clock(host, true);
+	}
 
 	mmc_request_done(host->mmc, req);
 }
@@ -678,18 +701,10 @@ static void mxcmci_cmd_done(struct work_struct *work)
 		__raw_writel(STATUS_TIME_OUT_RESP, host->base + MMC_STATUS);
 		pr_debug("%s: CMD TIMEOUT\n", DRIVER_NAME);
 		cmd->error = -ETIMEDOUT;
-
-		mxcmci_softreset(host);
-		__raw_writel(READ_TO_VALUE, host->base + MMC_READ_TO);
-		__raw_writel(INT_CNTR_END_CMD_RES, host->base + MMC_INT_CNTR);
 	} else if (stat & STATUS_RESP_CRC_ERR && cmd->flags & MMC_RSP_CRC) {
 		__raw_writel(STATUS_RESP_CRC_ERR, host->base + MMC_STATUS);
 		printk(KERN_ERR "%s: cmd crc error\n", DRIVER_NAME);
 		cmd->error = -EILSEQ;
-
-		mxcmci_softreset(host);
-		__raw_writel(READ_TO_VALUE, host->base + MMC_READ_TO);
-		__raw_writel(INT_CNTR_END_CMD_RES, host->base + MMC_INT_CNTR);
 	}
 
 	/* Read response from the card */
@@ -734,14 +749,15 @@ static void mxcmci_cmd_done(struct work_struct *work)
 	/* The command has a data transfer */
 	if (mxc_mmc_dma_enable == 1) {
 		/* Use DMA if transfer size is greater than fifo size */
-		if (sdma_dma_disable == 1) {
-			sdma_dma_disable = 0;
-			mxc_dma_start(host->dma);
+		if (host->dma_size > (16 << host->mmc->ios.bus_width)) {
+			if (sdma_dma_disable == 1) {
+				sdma_dma_disable = 0;
+				mxc_dma_start(host->dma);
+			}
+			else
+				mxc_dma_enable(host->dma);
+			return;
 		}
-		else
-			mxc_dma_enable(host->dma);
-
-		return;
 	}
 
 	/* Use PIO tranfer of data */
@@ -785,11 +801,13 @@ static void mxcmci_cmd_done(struct work_struct *work)
 		if (status & STATUS_TIME_OUT_READ) {
 			pr_debug("%s: Read time out occurred\n", DRIVER_NAME);
 			data->error = -ETIMEDOUT;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_TIME_OUT_READ,
 				     host->base + MMC_STATUS);
 		} else if (status & STATUS_READ_CRC_ERR) {
 			pr_debug("%s: Read CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_READ_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -823,6 +841,7 @@ static void mxcmci_cmd_done(struct work_struct *work)
 		if (status & STATUS_WRITE_CRC_ERR) {
 			pr_debug("%s: Write CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_WRITE_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -863,18 +882,10 @@ static void mxcmci_cmd_done_notq(struct mxcmci_host *host)
 		__raw_writel(STATUS_TIME_OUT_RESP, host->base + MMC_STATUS);
 		pr_debug("%s: CMD TIMEOUT\n", DRIVER_NAME);
 		cmd->error = -ETIMEDOUT;
-
-		mxcmci_softreset(host);
-		__raw_writel(READ_TO_VALUE, host->base + MMC_READ_TO);
-		__raw_writel(INT_CNTR_END_CMD_RES, host->base + MMC_INT_CNTR);
 	} else if (stat & STATUS_RESP_CRC_ERR && cmd->flags & MMC_RSP_CRC) {
 		__raw_writel(STATUS_RESP_CRC_ERR, host->base + MMC_STATUS);
 		printk(KERN_ERR "%s: cmd crc error\n", DRIVER_NAME);
 		cmd->error = -EILSEQ;
-
-		mxcmci_softreset(host);
-		__raw_writel(READ_TO_VALUE, host->base + MMC_READ_TO);
-		__raw_writel(INT_CNTR_END_CMD_RES, host->base + MMC_INT_CNTR);
 	}
 
 	/* Read response from the card */
@@ -917,14 +928,15 @@ static void mxcmci_cmd_done_notq(struct mxcmci_host *host)
 	/* The command has a data transfer */
 	if (mxc_mmc_dma_enable == 1) {
 		/* Use DMA if transfer size is greater than fifo size */
-		if (sdma_dma_disable == 1) {
-			sdma_dma_disable = 0;
-			mxc_dma_start(host->dma);
+		if (host->dma_size > (16 << host->mmc->ios.bus_width)) {
+			if (sdma_dma_disable == 1) {
+				sdma_dma_disable = 0;
+				mxc_dma_start(host->dma);
+			}
+			else
+				mxc_dma_enable(host->dma);
+			return;
 		}
-		else
-			mxc_dma_enable(host->dma);
-
-		return;
 	}
 
 	/* Use PIO tranfer of data */
@@ -968,11 +980,13 @@ static void mxcmci_cmd_done_notq(struct mxcmci_host *host)
 		if (status & STATUS_TIME_OUT_READ) {
 			pr_debug("%s: Read time out occurred\n", DRIVER_NAME);
 			data->error = -ETIMEDOUT;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_TIME_OUT_READ,
 				     host->base + MMC_STATUS);
 		} else if (status & STATUS_READ_CRC_ERR) {
 			pr_debug("%s: Read CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_READ_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -1006,6 +1020,7 @@ static void mxcmci_cmd_done_notq(struct mxcmci_host *host)
 		if (status & STATUS_WRITE_CRC_ERR) {
 			pr_debug("%s: Write CRC error occurred\n", DRIVER_NAME);
 			data->error = -EILSEQ;
+			schedule_work(&mxc_mmc_reset_work);
 			__raw_writel(STATUS_WRITE_CRC_ERR,
 				     host->base + MMC_STATUS);
 		}
@@ -1039,8 +1054,10 @@ static int mxcmci_data_done(struct mxcmci_host *host, unsigned int stat)
 	}
 
 	if (mxc_mmc_dma_enable == 1) {
-		dma_unmap_sg(mmc_dev(host->mmc), data->sg, host->dma_len,
-			     host->dma_dir);
+		if (host->dma_size > (16 << host->mmc->ios.bus_width)) {
+			dma_unmap_sg(mmc_dev(host->mmc), data->sg, host->dma_len,
+				     host->dma_dir);
+		}
 	}
 
 	if (__raw_readl(host->base + MMC_STATUS) & STATUS_ERR_MASK) {
@@ -1051,7 +1068,14 @@ static int mxcmci_data_done(struct mxcmci_host *host, unsigned int stat)
 	host->data = NULL;
 	data->bytes_xfered = host->dma_size;
 
-	if (!host->req->stop) {
+	if (host->req->stop && !data->error) {
+		host->cmd = host->req->stop;
+		host->cmdat = 0;
+		if (audio_playing_flag == 0)
+			mxcmci_start_command(host);
+		else
+			schedule_work (&host->cmd_tq);
+	} else {
 		if (audio_playing_flag == 0)
 			mxcmci_request_notq(host);
 		else
@@ -1131,8 +1155,7 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 	}
 
 	status = __raw_readl(host->base + MMC_STATUS);
-	 /* Ack the IRQ's */
-	__raw_writel(status & ~(STATUS_WRITE_OP_DONE | STATUS_READ_OP_DONE), host->base + MMC_STATUS); 
+	__raw_writel(status, host->base + MMC_STATUS); /* Ack the IRQ's */
 
 #ifdef CONFIG_MMC_DEBUG
 	dump_status(__FUNCTION__, status);
@@ -1148,16 +1171,8 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 
 	if (status & (STATUS_WRITE_OP_DONE | STATUS_READ_OP_DONE)) {
 		struct mmc_data *data = host->data;
-		if (!data) {
-			__raw_writel(STATUS_READ_OP_DONE | STATUS_WRITE_OP_DONE, host->base + MMC_STATUS);
+		if (!data)
 			goto out;
-		}
-
-		if (host->req->stop) {
-			host->cmd = host->req->stop;
-			host->cmdat = 0;
-			mxcmci_start_command(host);
-		}
 
 		pr_debug("%s:READ/WRITE OPERATION DONE\n", DRIVER_NAME);
 		/* check for time out and CRC errors */
@@ -1166,10 +1181,12 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 				pr_debug("%s: Read time out occurred\n",
 					 DRIVER_NAME);
 				data->error = -ETIMEDOUT;
+				schedule_work(&mxc_mmc_reset_work);
 			} else if (status & STATUS_READ_CRC_ERR) {
 				pr_debug("%s: Read CRC error occurred\n",
 					 DRIVER_NAME);
 				data->error = -EILSEQ;
+				schedule_work(&mxc_mmc_reset_work);
 			}
 			__raw_writel(STATUS_READ_OP_DONE,
 				     host->base + MMC_STATUS);
@@ -1181,9 +1198,8 @@ static irqreturn_t mxcmci_irq(int irq, void *devid)
 				pr_debug("%s: Write CRC error occurred\n",
 					 DRIVER_NAME);
 				data->error = -EILSEQ;
+				schedule_work(&mxc_mmc_reset_work);
 			}
-			__raw_writel(STATUS_WRITE_OP_DONE,
-					host->base + MMC_STATUS);
 		}
 		mxcmci_data_done(host, status);
 	}
@@ -1375,13 +1391,25 @@ static void mxcmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 
 		pr_debug("prescaler = 0x%x, divider = 0x%x\n", prescaler,
 			 clk_dev);
+		mxcmci_stop_clock(host, true);
 
+		/*
+		 * HIGHSPEED has been turned on for the moviNAND.
+		 * The clock frequency has to be greater than 20MHz for
+		 * to work correctly. Hence, set the prescalar and the
+		 * divider here. prescalar=0 means CLK_20 = CLK_DIV. and 
+		 * CLK_DIV = 1 means clk rate = ipg_perclk/2.
+		 */
+		if (mmc->caps & MMC_CAP_MMC_HIGHSPEED) {
+			if (prescaler == 0)
+				clk_dev = 0x1;
+		}
 		__raw_writel((prescaler << 4) | clk_dev,
 			     host->base + MMC_CLK_RATE);
-
-		__raw_writel(0x2, host->base + MMC_STR_STP_CLK);
-	} else
-		__raw_writel(0x1, host->base + MMC_STR_STP_CLK);
+		mxcmci_start_clock(host, false);
+	} else {
+		mxcmci_stop_clock(host, true);
+	}
 }
 
 /*!
@@ -1440,7 +1468,6 @@ static void mxcmci_dma_tq(struct work_struct *work)
 {
 	struct mxcmci_host *host = container_of(work, struct mxcmci_host, dma_tq);
 	ulong nob, blk_size, blk_len;
-	u32 status;
 
 	nob = __raw_readl(host->base + MMC_REM_NOB);
 	blk_size = __raw_readl(host->base + MMC_REM_BLK_SIZE);
@@ -1450,24 +1477,17 @@ static void mxcmci_dma_tq(struct work_struct *work)
 	 * Now wait for an OP_DONE interrupt before checking
 	 * error status and finishing the data phase
 	 */
-	status = __raw_readl(host->base + MMC_INT_CNTR);
-	__raw_writel((INT_CNTR_READ_OP_DONE | INT_CNTR_WRITE_OP_DONE | status),
-			host->base + MMC_INT_CNTR);
 	return;
 }
 
 static void mxcmci_dma_notq(struct mxcmci_host *host)
 {
 	ulong nob, blk_size, blk_len;
-	u32 status;
 
 	nob = __raw_readl(host->base + MMC_REM_NOB);
 	blk_size = __raw_readl(host->base + MMC_REM_BLK_SIZE);
 	blk_len = __raw_readl(host->base + MMC_BLK_LEN);
 
-	status = __raw_readl(host->base + MMC_INT_CNTR);
-	__raw_writel((INT_CNTR_READ_OP_DONE | INT_CNTR_WRITE_OP_DONE | status),
-			host->base + MMC_INT_CNTR);
 	return;
 }
 /*!
@@ -1515,16 +1535,15 @@ static int mxcmci_probe(struct platform_device *pdev)
 		 */
 		mmc->max_phys_segs = 1;
 		mmc->max_hw_segs = 1;
-		mmc->max_blk_size = 512;
-		mmc->max_blk_count = 16;
+		mmc->max_blk_size = 2048;
+		mmc->max_blk_count = 127;
 		mmc->max_req_size = mmc->max_blk_size * mmc->max_blk_count;
 		mmc->max_seg_size = mmc->max_req_size;
-
 		/*
 		 * Capabilities - 4-bit Bus, Multiple Block writes and 
 		 * Can do non-log2 block sizes
 		 */
-		mmc->caps = MMC_CAP_4_BIT_DATA | MMC_CAP_MULTIWRITE;
+		mmc->caps = MMC_CAP_4_BIT_DATA | MMC_CAP_MULTIWRITE | MMC_CAP_BYTEBLOCK;
 	}
 	else {
 		mmc->max_phys_segs = 1;
@@ -1549,7 +1568,7 @@ static int mxcmci_probe(struct platform_device *pdev)
 
 	mmc->f_min = mmc_plat->min_clk;
 	mmc->f_max = mmc_plat->max_clk;
-	printk("SDHC:%d clock:%lu\n", pdev->id, clk_get_rate(host->clk));
+	pr_debug("SDHC:%d clock:%lu\n", pdev->id, clk_get_rate(host->clk));
 
 	spin_lock_init(&host->lock);
 	host->res = platform_get_resource(pdev, IORESOURCE_MEM, 0);

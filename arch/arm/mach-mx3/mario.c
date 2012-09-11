@@ -721,12 +721,29 @@ static void __init mxc_init_pmic_audio(void)
 	gpio_activate_audio_ports();
 }
 
+static void pmic_rtc_unconfigure(void)
+{
+	/* Ack the RTC timer interrupt */
+	pmic_write_reg(REG_INTERRUPT_STATUS_1, 0, 0x2);
+
+	/* Mask the RTC alarm interrupt */
+	pmic_write_reg(REG_INTERRUPT_MASK_1, 0x3, 0x3);
+
+	/* Clear out the RTC Alarm time register */
+	pmic_write_reg(REG_RTC_ALARM, 0x0, 0xffffffff);
+
+	/* Clear out the RTC Alarm Day register */
+	pmic_write_reg(REG_RTC_DAY_ALARM, 0x0, 0xffffffff);
+}
+
 /*
  * mx31 power off (halt)
  */
 static void mx31_pm_power_off(void)
 {
 	t_pc_config pc_config;
+
+	pmic_rtc_unconfigure();
 
 	pc_config.auto_en_vbkup2= 0;
 	pc_config.en_vbkup2= 0;
