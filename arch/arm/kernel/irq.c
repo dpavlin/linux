@@ -37,6 +37,8 @@
 #include <linux/kallsyms.h>
 #include <linux/proc_fs.h>
 
+#include <linux/ftrace.h>
+
 #include <asm/system.h>
 #include <asm/mach/time.h>
 
@@ -85,7 +87,7 @@ int show_interrupts(struct seq_file *p, void *v)
 unlock:
 		spin_unlock_irqrestore(&irq_desc[i].lock, flags);
 	} else if (i == NR_IRQS) {
-#ifdef CONFIG_ARCH_ACORN
+#ifdef CONFIG_FIQ
 		show_fiq_list(p, v);
 #endif
 #ifdef CONFIG_SMP
@@ -100,7 +102,7 @@ unlock:
 /* Handle bad interrupts */
 static struct irq_desc bad_irq_desc = {
 	.handle_irq = handle_bad_irq,
-	.lock = SPIN_LOCK_UNLOCKED
+	.lock = RAW_SPIN_LOCK_UNLOCKED(bad_irq_desc.lock)
 };
 
 /*
@@ -108,10 +110,12 @@ static struct irq_desc bad_irq_desc = {
  * come via this function.  Instead, they should provide their
  * own 'handler'
  */
-asmlinkage void __exception asm_do_IRQ(unsigned int irq, struct pt_regs *regs)
+asmlinkage void __exception notrace asm_do_IRQ(unsigned int irq, struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 	struct irq_desc *desc = irq_desc + irq;
+
+	trace_event_irq(irq, user_mode(regs), instruction_pointer(regs));
 
 	/*
 	 * Some hardware gives randomly wrong interrupts.  Rather

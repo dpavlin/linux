@@ -20,6 +20,39 @@
 #define D_CACHE_LINE_SIZE	32
 #define BTB_FLUSH_SIZE		8
 
+#ifndef CONFIG_SMP
+/*
+ * Invalidate the entire I cache (this code is a workaround for the ARM1136
+ * Errata 411920 - Invalidate Instruction Cache operation can fail. This
+ * Errata is present in 1136, 1156 and 1176. It does not affect the MPCore
+ *
+ * Registers:
+ *   r0 - set to 0
+ *   r1 - corrupted
+ */
+ENTRY(v6_icache_inval_all)
+	mov	r0, #0
+	mrs	r1, cpsr
+	cpsid	ifa				@ disable interrupts
+	mcr	p15, 0, r0, c7, c5, 0		@ invalidate entire I-cache
+	mcr	p15, 0, r0, c7, c5, 0		@ invalidate entire I-cache
+	mcr	p15, 0, r0, c7, c5, 0		@ invalidate entire I-cache
+	mcr	p15, 0, r0, c7, c5, 0		@ invalidate entire I-cache
+	msr	cpsr_cx, r1			@ restore interrupts
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	mov	pc, lr
+#endif
+
 /*
  *	v6_flush_cache_all()
  *
@@ -31,7 +64,11 @@ ENTRY(v6_flush_kern_cache_all)
 	mov	r0, #0
 #ifdef HARVARD_CACHE
 	mcr	p15, 0, r0, c7, c14, 0		@ D cache clean+invalidate
+#ifdef CONFIG_SMP
 	mcr	p15, 0, r0, c7, c5, 0		@ I+BTB cache invalidate
+#else
+	b	v6_icache_inval_all
+#endif
 #else
 	mcr	p15, 0, r0, c7, c15, 0		@ Cache clean+invalidate
 #endif
@@ -95,19 +132,37 @@ ENTRY(v6_coherent_user_range)
 
 #ifdef HARVARD_CACHE
 	bic	r0, r0, #CACHE_LINE_SIZE - 1
-1:	mcr	p15, 0, r0, c7, c10, 1		@ clean D line
+1:
+USER(	mcr	p15, 0, r0, c7, c10, 1)		@ clean D line
 	add	r0, r0, #CACHE_LINE_SIZE
+2:
 	cmp	r0, r1
 	blo	1b
 #endif
 	mov	r0, #0
 #ifdef HARVARD_CACHE
 	mcr	p15, 0, r0, c7, c10, 4		@ drain write buffer
+#ifdef CONFIG_SMP
 	mcr	p15, 0, r0, c7, c5, 0		@ I+BTB cache invalidate
+#else
+	b	v6_icache_inval_all
+#endif
 #else
 	mcr	p15, 0, r0, c7, c5, 6		@ invalidate BTB
 #endif
 	mov	pc, lr
+
+/*
+ * For unmapped addresses, go to the next page. If the virtual
+ * address is not mapped, pick the next page
+ */
+9001:
+	mov	r0, r0, lsr #12
+	mov	r0, r0, lsl #12
+	add	r0, r0, #4096
+	b	2b
+ENDPROC(v6_coherent_user_range)
+ENDPROC(v6_coherent_kern_range)
 
 /*
  *	v6_flush_kern_dcache_page(kaddr)

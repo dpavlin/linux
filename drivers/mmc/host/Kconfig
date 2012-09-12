@@ -130,3 +130,41 @@ config MMC_SPI
 
 	  If unsure, or if your system has no SPI master driver, say N.
 
+	  If unsure, say N.
+
+config MMC_MXC
+	tristate "Freescale MXC Multimedia Card Interface support"
+	depends on ARCH_MXC && MMC
+	help
+	  This selects the Freescale MXC Multimedia card Interface.
+	  If you have a MXC platform with a Multimedia Card slot,
+	  say Y or M here.
+
+config MMC_IMX_ESDHCI
+	tristate "Freescale i.MX Secure Digital Host Controller Interface support"
+	depends on ARCH_MXC && MMC
+	help
+	  This selects the Freescale i.MX Multimedia card Interface.
+	  If you have a i.MX platform with a Multimedia Card slot,
+	  say Y or M here.
+
+	  If unsure, say N.
+
+config MMC_IMX_ESDHCI_SELECT2
+	bool "Enable second ESDHCI port"
+	depends on MMC_IMX_ESDHCI && ARCH_MX25
+	default n
+	help
+	  Enable the second ESDHC port
+
+config MMC_IMX_ESDHCI_PIO_MODE
+	bool "Freescale i.MX Secure Digital Host Controller Interface PIO mode"
+	depends on MMC_IMX_ESDHC != n
+	default n
+	help
+	  This set the Freescale i.MX Multimedia card Interface to PIO mode.
+	  If you have a i.MX platform with a Multimedia Card slot,
+	  and want test it with PIO mode.
+	  say Y here.
+
+	  If unsure, say N.

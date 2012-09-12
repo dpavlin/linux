@@ -32,7 +32,7 @@ static int process_sdio_pending_irqs(struct mmc_card *card)
 
 	ret = mmc_io_rw_direct(card, 0, 0, SDIO_CCCR_INTx, 0, &pending);
 	if (ret) {
-		printk(KERN_DEBUG "%s: error %d reading SDIO_CCCR_INTx\n",
+		printk(KERN_ERR "%s: error %d reading SDIO_CCCR_INTx\n",
 		       mmc_card_id(card), ret);
 		return ret;
 	}
@@ -78,9 +78,7 @@ static int sdio_irq_thread(void *_host)
 	 * asynchronous notification of pending SDIO card interrupts
 	 * hence we poll for them in that case.
 	 */
-	idle_period = msecs_to_jiffies(10);
-	period = (host->caps & MMC_CAP_SDIO_IRQ) ?
-		MAX_SCHEDULE_TIMEOUT : idle_period;
+	period = MAX_SCHEDULE_TIMEOUT;
 
 	pr_debug("%s: IRQ thread started (poll period = %lu jiffies)\n",
 		 mmc_hostname(host), period);
@@ -107,25 +105,26 @@ static int sdio_irq_thread(void *_host)
 
 		/*
 		 * Give other threads a chance to run in the presence of
-		 * errors.  FIXME: determine if due to card removal and
-		 * possibly exit this thread if so.
+		 * errors.
 		 */
-		if (ret < 0)
-			ssleep(1);
+		if (ret < 0) {
+			set_current_state(TASK_INTERRUPTIBLE);
+			if (!kthread_should_stop())
+				schedule_timeout(HZ);
+			set_current_state(TASK_RUNNING);
+		}
 
 		/*
 		 * Adaptive polling frequency based on the assumption
 		 * that an interrupt will be closely followed by more.
 		 * This has a substantial benefit for network devices.
 		 */
-		if (!(host->caps & MMC_CAP_SDIO_IRQ)) {
-			if (ret > 0)
-				period /= 2;
-			else {
-				period++;
-				if (period > idle_period)
-					period = idle_period;
-			}
+		if (ret > 0)
+			period /= 2;
+		else {
+			period++;
+			if (period > idle_period)
+				period = idle_period;
 		}
 
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -205,6 +204,11 @@ int sdio_claim_irq(struct sdio_func *func, sdio_irq_handler_t *handler)
 		return -EBUSY;
 	}
 
+	func->irq_handler = handler;
+	ret = sdio_card_irq_get(func->card);
+	if (ret)
+		func->irq_handler = NULL;
+
 	ret = mmc_io_rw_direct(func->card, 0, 0, SDIO_CCCR_IENx, 0, &reg);
 	if (ret)
 		return ret;
@@ -216,11 +220,6 @@ int sdio_claim_irq(struct sdio_func *func, sdio_irq_handler_t *handler)
 	ret = mmc_io_rw_direct(func->card, 1, 0, SDIO_CCCR_IENx, reg, NULL);
 	if (ret)
 		return ret;
-
-	func->irq_handler = handler;
-	ret = sdio_card_irq_get(func->card);
-	if (ret)
-		func->irq_handler = NULL;
 
 	return ret;
 }
@@ -242,11 +241,6 @@ int sdio_release_irq(struct sdio_func *func)
 
 	pr_debug("SDIO: Disabling IRQ for %s...\n", sdio_func_id(func));
 
-	if (func->irq_handler) {
-		func->irq_handler = NULL;
-		sdio_card_irq_put(func->card);
-	}
-
 	ret = mmc_io_rw_direct(func->card, 0, 0, SDIO_CCCR_IENx, 0, &reg);
 	if (ret)
 		return ret;
@@ -261,6 +255,10 @@ int sdio_release_irq(struct sdio_func *func)
 	if (ret)
 		return ret;
 
+	if (func->irq_handler) {
+		func->irq_handler = NULL;
+		sdio_card_irq_put(func->card);
+	}
 	return 0;
 }
 EXPORT_SYMBOL_GPL(sdio_release_irq);

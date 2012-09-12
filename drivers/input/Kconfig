@@ -162,6 +162,10 @@ comment "Input Device Drivers"
 
 source "drivers/input/keyboard/Kconfig"
 
+source "drivers/input/fiveway/Kconfig"
+
+source "drivers/input/volume/Kconfig"
+
 source "drivers/input/mouse/Kconfig"
 
 source "drivers/input/joystick/Kconfig"

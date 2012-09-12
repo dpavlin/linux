@@ -496,4 +496,8 @@ config SBNI_MULTILINE
 
 	  If unsure, say N.
 
+config LUIGI_WAN
+	tristate "Luigi WAN module support"
+	depends on MACH_MX35_LUIGI
+
 endif # WAN

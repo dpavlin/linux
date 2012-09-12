@@ -11,6 +11,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/types.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/random.h>
@@ -27,6 +28,25 @@ MODULE_DESCRIPTION("Input core");
 MODULE_LICENSE("GPL");
 
 #define INPUT_DEVICES	256
+
+/*
+ * EV_ABS events which should not be cached are listed here.
+ */
+static unsigned int input_abs_bypass_init_data[] __initdata = {
+	ABS_MT_TOUCH_MAJOR,
+	ABS_MT_TOUCH_MINOR,
+	ABS_MT_WIDTH_MAJOR,
+	ABS_MT_WIDTH_MINOR,
+	ABS_MT_ORIENTATION,
+	ABS_MT_POSITION_X,
+	ABS_MT_POSITION_Y,
+	ABS_MT_TOOL_TYPE,
+	ABS_MT_BLOB_ID,
+	ABS_MT_TRACKING_ID,
+	0
+};
+static unsigned long input_abs_bypass[BITS_TO_LONGS(ABS_CNT)];
+
 
 static LIST_HEAD(input_dev_list);
 static LIST_HEAD(input_handler_list);
@@ -131,6 +151,11 @@ static void input_start_autorepeat(struct input_dev *dev, int code)
 	}
 }
 
+static void input_stop_autorepeat(struct input_dev *dev)
+{
+	del_timer(&dev->timer);
+}
+
 #define INPUT_IGNORE_EVENT	0
 #define INPUT_PASS_TO_HANDLERS	1
 #define INPUT_PASS_TO_DEVICE	2
@@ -155,6 +180,10 @@ static void input_handle_event(struct input_dev *dev,
 				disposition = INPUT_PASS_TO_HANDLERS;
 			}
 			break;
+		case SYN_MT_REPORT:
+			dev->sync = 0;
+			disposition = INPUT_PASS_TO_HANDLERS;
+			break;
 		}
 		break;
 
@@ -166,6 +195,8 @@ static void input_handle_event(struct input_dev *dev,
 				__change_bit(code, dev->key);
 				if (value)
 					input_start_autorepeat(dev, code);
+				else
+					input_stop_autorepeat(dev);
 			}
 
 			disposition = INPUT_PASS_TO_HANDLERS;
@@ -183,6 +214,11 @@ static void input_handle_event(struct input_dev *dev,
 
 	case EV_ABS:
 		if (is_event_supported(code, dev->absbit, ABS_MAX)) {
+	
+			if (test_bit(code, input_abs_bypass)) {
+				disposition = INPUT_PASS_TO_HANDLERS;
+				break;
+			}
 
 			value = input_defuzz_abs_event(value,
 					dev->abs[code], dev->absfuzz[code]);
@@ -479,7 +515,7 @@ static void input_disconnect_device(struct input_dev *dev)
 	 * that there are no threads in the middle of input_open_device()
 	 */
 	mutex_lock(&dev->mutex);
-	dev->going_away = 1;
+	dev->going_away = true;
 	mutex_unlock(&dev->mutex);
 
 	spin_lock_irq(&dev->event_lock);
@@ -1226,10 +1262,66 @@ static int input_dev_uevent(struct device *device, struct kobj_uevent_env *env)
 	return 0;
 }
 
+#define INPUT_DO_TOGGLE(dev, type, bits, on)			\
+	do {							\
+		int i;						\
+		if (!test_bit(EV_##type, dev->evbit))		\
+			break;					\
+		for (i = 0; i < type##_MAX; i++) {		\
+			if (!test_bit(i, dev->bits##bit) ||	\
+			    !test_bit(i, dev->bits))		\
+				continue;			\
+			dev->event(dev, EV_##type, i, on);	\
+		}						\
+	} while (0)
+
+static void input_dev_reset(struct input_dev *dev, bool activate)
+{
+	if (!dev->event)
+		return;
+
+	INPUT_DO_TOGGLE(dev, LED, led, activate);
+	INPUT_DO_TOGGLE(dev, SND, snd, activate);
+
+	if (activate && test_bit(EV_REP, dev->evbit)) {
+		dev->event(dev, EV_REP, REP_PERIOD, dev->rep[REP_PERIOD]);
+		dev->event(dev, EV_REP, REP_DELAY, dev->rep[REP_DELAY]);
+	}
+}
+
+#ifdef CONFIG_PM
+static int input_dev_suspend(struct device *dev, pm_message_t state)
+{
+	struct input_dev *input_dev = to_input_dev(dev);
+
+	mutex_lock(&input_dev->mutex);
+	input_dev_reset(input_dev, false);
+	mutex_unlock(&input_dev->mutex);
+
+	return 0;
+}
+
+static int input_dev_resume(struct device *dev)
+{
+	struct input_dev *input_dev = to_input_dev(dev);
+
+	mutex_lock(&input_dev->mutex);
+	input_dev_reset(input_dev, true);
+	mutex_unlock(&input_dev->mutex);
+
+	return 0;
+}
+
+#endif /* CONFIG_PM */
+
 static struct device_type input_dev_type = {
 	.groups		= input_dev_attr_groups,
 	.release	= input_dev_release,
 	.uevent		= input_dev_uevent,
+#ifdef CONFIG_PM
+	.suspend	= input_dev_suspend,
+	.resume		= input_dev_resume,
+#endif
 };
 
 struct class input_class = {
@@ -1622,9 +1714,19 @@ static const struct file_operations input_fops = {
 	.open = input_open_file,
 };
 
+static void __init input_init_abs_bypass(void)
+{
+	const unsigned int *p;
+
+	for (p = input_abs_bypass_init_data; *p; p++)
+		input_abs_bypass[BIT_WORD(*p)] |= BIT_MASK(*p);
+}
+
 static int __init input_init(void)
 {
 	int err;
+
+	input_init_abs_bypass();
 
 	err = class_register(&input_class);
 	if (err) {

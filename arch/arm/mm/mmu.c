@@ -25,7 +25,7 @@
 
 #include "mm.h"
 
-DEFINE_PER_CPU(struct mmu_gather, mmu_gathers);
+DEFINE_PER_CPU_LOCKED(struct mmu_gather, mmu_gathers);
 
 extern void _stext, _etext, __data_start, _end;
 extern pgd_t swapper_pg_dir[PTRS_PER_PGD];
@@ -797,4 +797,5 @@ void setup_mm_for_reboot(char mode)
 		pmd[1] = __pmd(pmdval + (1 << (PGDIR_SHIFT - 1)));
 		flush_pmd_entry(pmd);
 	}
+	local_flush_tlb_all();
 }

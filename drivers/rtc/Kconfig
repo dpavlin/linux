@@ -545,9 +545,38 @@ config RTC_DRV_RS5C313
 	help
 	  If you say yes here you get support for the Ricoh RS5C313 RTC chips.
 
+config RTC_MXC
+	tristate "Freescale MXC Real Time Clock"
+	depends on ARCH_MXC
+	depends on RTC_CLASS
+	help
+	  Support for Freescale RTC MXC
+
+config RTC_DRV_MXC_V2
+	tristate "Freescale MXC Secure Real Time Clock"
+	depends on ARCH_MXC
+	depends on RTC_CLASS
+	help
+	  Support for Freescale SRTC MXC
+
+config RTC_DRV_IMXDI
+	tristate "Freescale IMX DryIce Real Time Clock"
+	depends on ARCH_MXC
+	depends on RTC_CLASS
+	help
+	  Support for Freescale IMX DryIce RTC
+
+config RTC_MC13892
+	tristate "Freescale MC13892 Real Time Clock"
+	depends on ARCH_MXC && MXC_PMIC_MC13892
+	depends on RTC_CLASS
+	help
+	  Support for Freescale MC13892 RTC
+
 config RTC_DRV_PPC
        tristate "PowerPC machine dependent RTC support"
        depends on PPC_MERGE
+       depends on RTC_CLASS
        help
 	 The PowerPC kernel has machine-specific functions for accessing
 	 the RTC. This exposes that functionality through the generic RTC

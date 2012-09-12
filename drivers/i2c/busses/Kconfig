@@ -305,6 +305,57 @@ config I2C_MPC
 	  This driver can also be built as a module.  If so, the module
 	  will be called i2c-mpc.
 
+config I2C_MXC
+	tristate "MXC I2C support"
+	depends on I2C && ARCH_MXC
+	help
+	  If you say yes to this option, support will be included for Freescale
+	  MXC I2C modules.
+
+	  This driver can also be built as a module.
+
+config I2C_MXC_FAST_MODE_BUS_0
+	tristate "MXC I2C Fast Mode Support Bus 0"
+	depends on I2C && ARCH_MXC
+	default n
+	help
+	  If you say yes to this option, support will be included for Freescale
+	  MXC I2C Fast Mode for Bus 0. This drives the i2c bus at 400Kb/s as 
+	  against the normal mode of 100Kb/s
+
+	  This driver can also be built as a module.
+
+config I2C_MXC_FAST_MODE_BUS_1
+	tristate "MXC I2C Fast Mode Support Bus 1"
+	depends on I2C && ARCH_MXC
+	default n
+	help
+	  If you say yes to this option, support will be included for Freescale
+	  MXC I2C Fast Mode for Bus 1. This drives the i2c bus at 400Kb/s as 
+	  against the normal mode of 100Kb/s
+
+	  This driver can also be built as a module.
+
+config I2C_MXC_FAST_MODE_BUS_2
+	tristate "MXC I2C Fast Mode Support Bus 2"
+	depends on I2C && ARCH_MXC
+	default n
+	help
+	  If you say yes to this option, support will be included for Freescale
+	  MXC I2C Fast Mode for Bus 2. This drives the i2c bus at 400Kb/s as 
+	  against the normal mode of 100Kb/s
+
+	  This driver can also be built as a module.
+
+config I2C_MXC_HS
+	tristate "MXC HIGH SPEED I2C support"
+	depends on I2C && ARCH_MXC
+	help
+	  If you say yes to this option, support will be included for Freescale
+	  MXC HIGH SPEED I2C modules.
+
+	  This driver can also be built as a module.
+
 config I2C_NFORCE2
 	tristate "Nvidia nForce2, nForce3 and nForce4"
 	depends on PCI

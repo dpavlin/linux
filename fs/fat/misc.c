@@ -11,6 +11,14 @@
 #include <linux/msdos_fs.h>
 #include <linux/buffer_head.h>
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+
+#include <linux/miscdevice.h>
+
+extern void mxc_send_fatfs_event(void);
+
+#endif
+
 /*
  * fat_fs_panic reports a severe file system problem and sets the file system
  * read-only. The file system can be made writable again by remounting it.
@@ -31,6 +39,10 @@ void fat_fs_panic(struct super_block *s, const char *fmt, ...)
 		s->s_flags |= MS_RDONLY;
 		printk(KERN_ERR "    File system has been set read-only\n");
 	}
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	mxc_send_fatfs_event();
+#endif
 }
 
 EXPORT_SYMBOL_GPL(fat_fs_panic);

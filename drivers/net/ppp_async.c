@@ -34,6 +34,10 @@
 #include <asm/uaccess.h>
 #include <asm/string.h>
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+#include <net/mwan.h>
+#endif
+
 #define PPP_VERSION	"2.4.2"
 
 #define OBUFSIZE	256
@@ -67,7 +71,7 @@ struct asyncppp {
 	struct tasklet_struct tsk;
 
 	atomic_t	refcnt;
-	struct semaphore dead_sem;
+	struct compat_semaphore dead_sem;
 	struct ppp_channel chan;	/* interface to generic ppp layer */
 	unsigned char	obuf[OBUFSIZE];
 };
@@ -393,6 +397,10 @@ static struct tty_ldisc ppp_ldisc = {
 	.write_wakeup = ppp_asynctty_wakeup,
 };
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+static int modem_requires_sync_byte = 0;
+#endif
+
 static int __init
 ppp_async_init(void)
 {
@@ -402,6 +410,11 @@ ppp_async_init(void)
 	if (err != 0)
 		printk(KERN_ERR "PPP_async: error %d registering line disc.\n",
 		       err);
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	modem_requires_sync_byte = wan_get_modem_type() == MODEM_TYPE_AD_DTP;
+#endif
+
 	return err;
 }
 
@@ -567,7 +580,12 @@ ppp_async_encode(struct asyncppp *ap)
 		 * character if necessary.
 		 */
 		if (islcp || flag_time == 0
-		    || time_after_eq(jiffies, ap->last_xmit + flag_time))
+		    || time_after_eq(jiffies, ap->last_xmit + flag_time)
+#ifdef CONFIG_MACH_LUIGI_LAB126
+		    || modem_requires_sync_byte)
+#else
+		    )
+#endif
 			*buf++ = PPP_FLAG;
 		ap->last_xmit = jiffies;
 		fcs = PPP_INITFCS;

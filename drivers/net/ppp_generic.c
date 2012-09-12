@@ -2428,6 +2428,7 @@ ppp_create_interface(int unit, int *retp)
 
 	dev->hard_start_xmit = ppp_start_xmit;
 	dev->do_ioctl = ppp_net_ioctl;
+	dev->features = NETIF_F_LLTX;
 
 	ret = -EEXIST;
 	mutex_lock(&all_ppp_mutex);

@@ -15,6 +15,10 @@
 #include <linux/sched.h>
 #include <linux/init.h>
 
+#ifdef CONFIG_PM
+#include <linux/sysdev.h>
+#endif
+
 #include <asm/thread_notify.h>
 #include <asm/vfp.h>
 
@@ -157,6 +161,9 @@ static void vfp_raise_exceptions(u32 exceptions, u32 inst, u32 fpscr, struct pt_
 	 * Comparison instructions always return at least one of
 	 * these flags set.
 	 */
+	if (exceptions & (FPSCR_N|FPSCR_Z|FPSCR_C|FPSCR_V))
+		fpscr &= ~(FPSCR_N|FPSCR_Z|FPSCR_C|FPSCR_V);
+
 	fpscr |= exceptions;
 
 	fmxr(FPSCR, fpscr);
@@ -266,7 +273,7 @@ void VFP_bounce(u32 trigger, u32 fpexc, struct pt_regs *regs)
 		 * on VFP subarch 1.
 		 */
 		 vfp_raise_exceptions(VFP_EXCEPTION_ERROR, trigger, fpscr, regs);
-		 return;
+		goto exit;
 	}
 
 	/*
@@ -297,7 +304,7 @@ void VFP_bounce(u32 trigger, u32 fpexc, struct pt_regs *regs)
 	 * the FPEXC.FP2V bit is valid only if FPEXC.EX is 1.
 	 */
 	if (fpexc ^ (FPEXC_EX | FPEXC_FP2V))
-		return;
+		goto exit;
 
 	/*
 	 * The barrier() here prevents fpinst2 being read
@@ -310,6 +317,8 @@ void VFP_bounce(u32 trigger, u32 fpexc, struct pt_regs *regs)
 	exceptions = vfp_emulate_instruction(trigger, orig_fpscr, regs);
 	if (exceptions)
 		vfp_raise_exceptions(exceptions, trigger, orig_fpscr, regs);
+ exit:
+	preempt_enable();
 }
 
 static void vfp_enable(void *unused)
@@ -322,7 +331,114 @@ static void vfp_enable(void *unused)
 	set_copro_access(access | CPACC_FULL(10) | CPACC_FULL(11));
 }
 
+/*
+ * Synchronise the hardware VFP state of a thread other than current with the
+ * saved one. This function is used by the ptrace mechanism.
+ */
+#ifdef CONFIG_SMP
+void vfp_sync_state(struct thread_info *thread)
+{
+	/*
+	 * On SMP systems, the VFP state is automatically saved at every
+	 * context switch. We mark the thread VFP state as belonging to a
+	 * non-existent CPU so that the saved one will be reloaded when
+	 * needed.
+	 */
+	thread->vfpstate.hard.cpu = NR_CPUS;
+}
+#else
+void vfp_sync_state(struct thread_info *thread)
+{
+	unsigned int cpu = get_cpu();
+	u32 fpexc = fmrx(FPEXC);
+
+	/*
+	 * If VFP is enabled, the previous state was already saved and
+	 * last_VFP_context updated.
+	 */
+	if (fpexc & FPEXC_EN)
+		goto out;
+
+	if (!last_VFP_context[cpu])
+		goto out;
+
+	/*
+	 * Save the last VFP state on this CPU.
+	 */
+	fmxr(FPEXC, fpexc | FPEXC_EN);
+	vfp_save_state(last_VFP_context[cpu], fpexc);
+	fmxr(FPEXC, fpexc);
+
+	/*
+	 * Set the context to NULL to force a reload the next time the thread
+	 * uses the VFP.
+	 */
+	last_VFP_context[cpu] = NULL;
+
+out:
+	put_cpu();
+}
+#endif
+
 #include <linux/smp.h>
+
+#ifdef CONFIG_PM
+
+/* Suspend the VFP after saving state */
+static int vfp_suspend(struct sys_device *dev, pm_message_t state)
+{
+	struct thread_info *ti = current_thread_info();
+
+	/* Read the floating point exception register */
+	u32 fpexc = fmrx(FPEXC);
+
+	printk(KERN_INFO "Suspending VFP ...\n");
+
+	/* Check if the VFP is enabled */
+	if (fpexc & FPEXC_EN) {
+		/* Save state */
+		vfp_save_state(&ti->vfpstate, fpexc);
+
+		/* Disable the VFP */
+		fmxr(FPEXC, fmrx(FPEXC) & ~FPEXC_EN);
+	}
+
+	/* Clear the last state */
+	memset(last_VFP_context, 0, sizeof(last_VFP_context));
+	return 0;
+}
+
+/* Resume the VFP */
+static int vfp_resume(struct sys_device *dev)
+{
+	/* ensure we have access to the vfp */
+	vfp_enable(NULL);
+	
+	/* and disable it to ensure the next usage restores the state */
+	fmxr(FPEXC, fmrx(FPEXC) & ~FPEXC_EN);
+
+	return 0;
+}
+
+static struct sysdev_class vfp_pm_sysclass = {
+	.name		= "vfp",
+	.suspend	= vfp_suspend,
+	.resume		= vfp_resume,
+};
+
+static struct sys_device vfp_pm_sysdev = {
+	.cls	= &vfp_pm_sysclass,
+};
+
+static void vfp_pm_init(void)
+{
+	sysdev_class_register(&vfp_pm_sysclass);
+	sysdev_register(&vfp_pm_sysdev);
+}
+
+#else
+static inline void vfp_pm_init(void) { }
+#endif /* CONFIG_PM */
 
 /*
  * VFP support code initialisation.
@@ -365,6 +481,9 @@ static int __init vfp_init(void)
 		vfp_vector = vfp_support_entry;
 
 		thread_register_notifier(&vfp_notifier_block);
+
+		/* Initialize the VFP pm */
+		vfp_pm_init();
 
 		/*
 		 * We detected VFP, and the support code is

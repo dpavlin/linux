@@ -194,6 +194,7 @@ static int ehci_bus_resume (struct usb_hcd *hcd)
 	u32			temp;
 	u32			power_okay;
 	int			i;
+	u8			resume_needed = 0;
 
 	if (time_before (jiffies, ehci->next_statechange))
 		msleep(5);
@@ -228,7 +229,9 @@ static int ehci_bus_resume (struct usb_hcd *hcd)
 
 	/* Some controller/firmware combinations need a delay during which
 	 * they set up the port statuses.  See Bugzilla #8190. */
-	mdelay(8);
+	spin_unlock_irq(&ehci->lock);
+	msleep(8);
+	spin_lock_irq(&ehci->lock);
 
 	/* manually resume the ports we suspended during bus_suspend() */
 	i = HCS_N_PORTS (ehci->hcs_params);
@@ -239,11 +242,19 @@ static int ehci_bus_resume (struct usb_hcd *hcd)
 				(temp & PORT_SUSPEND)) {
 			ehci->reset_done [i] = jiffies + msecs_to_jiffies (20);
 			temp |= PORT_RESUME;
+			resume_needed = 1;
 		}
 		ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
 	}
+
+	/* msleep for 20ms only if code is trying to resume port */
+	if (resume_needed) {
+		spin_unlock_irq(&ehci->lock);
+		msleep(20);
+		spin_lock_irq(&ehci->lock);
+	}
+
 	i = HCS_N_PORTS (ehci->hcs_params);
-	mdelay (20);
 	while (i--) {
 		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
 		if (test_bit(i, &ehci->bus_suspended) &&
@@ -532,6 +543,37 @@ ehci_hub_descriptor (
 #endif
 	desc->wHubCharacteristics = cpu_to_le16(temp);
 }
+
+#ifdef CONFIG_USB_OTG
+static int ehci_start_port_reset(struct usb_hcd *hcd, unsigned port)
+{
+	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
+	u32 status;
+
+	if (!port)
+		return -EINVAL;
+	port--;
+
+	/* start port reset before HNP protocol time out */
+	status = readl(&ehci->regs->port_status[port]);
+	if (!(status & PORT_CONNECT))
+		return -ENODEV;
+
+	/* khubd will finish the reset later */
+	if (ehci_is_TDI(ehci))
+		writel(PORT_RESET | (status & ~(PORT_CSC | PORT_PEC
+				| PORT_OCC)), &ehci->regs->port_status[port]);
+	else
+		writel(PORT_RESET, &ehci->regs->port_status[port]);
+
+	return 0;
+}
+#else
+static int ehci_start_port_reset(struct usb_hcd *hcd, unsigned port)
+{
+	return 0;
+}
+#endif /* CONFIG_USB_OTG */
 
 /*-------------------------------------------------------------------------*/
 

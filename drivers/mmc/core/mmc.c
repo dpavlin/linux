@@ -15,10 +15,16 @@
 #include <linux/mmc/host.h>
 #include <linux/mmc/card.h>
 #include <linux/mmc/mmc.h>
+#include <asm/arch/board_id.h>
 
 #include "core.h"
 #include "bus.h"
 #include "mmc_ops.h"
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+unsigned long manufacturer_id;
+unsigned int card_capacity;
+#endif
 
 static const unsigned int tran_exp[] = {
 	10000,		100000,		1000000,	10000000,
@@ -52,6 +58,15 @@ static const unsigned int tacc_mant[] = {
 			__res |= resp[__off-1] << ((32 - __shft) % 32);	\
 		__res & __mask;						\
 	})
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+
+#define SAMSUNG_MANF_ID 	0x15		/* Samsung manufacturer ID */
+#define SANDISK_MANF_ID		0x2		/* Sandisk manufacturer ID */
+#define TOSHIBA_MANF_ID		0x11		/* Toshiba manufacturer ID */
+#define HYNIX_MANF_ID		0x90		/* Hynix manufacturer ID */
+
+#endif
 
 /*
  * Given the decoded CSD structure, decode the raw CID to our CID structure.
@@ -121,7 +136,7 @@ static int mmc_decode_csd(struct mmc_card *card)
 	 * v1.2 has extra information in bits 15, 11 and 10.
 	 */
 	csd_struct = UNSTUFF_BITS(resp, 126, 2);
-	if (csd_struct != 1 && csd_struct != 2) {
+	if (csd_struct != 1 && csd_struct != 2 && csd_struct != 3) {
 		printk(KERN_ERR "%s: unrecognised CSD structure version %d\n",
 			mmc_hostname(card->host), csd_struct);
 		return -EINVAL;
@@ -208,7 +223,7 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 	}
 
 	ext_csd_struct = ext_csd[EXT_CSD_REV];
-	if (ext_csd_struct > 2) {
+	if (ext_csd_struct > 5) {
 		printk(KERN_ERR "%s: unrecognised EXT_CSD structure "
 			"version %d\n", mmc_hostname(card->host),
 			ext_csd_struct);
@@ -222,8 +237,28 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 			ext_csd[EXT_CSD_SEC_CNT + 1] << 8 |
 			ext_csd[EXT_CSD_SEC_CNT + 2] << 16 |
 			ext_csd[EXT_CSD_SEC_CNT + 3] << 24;
-		if (card->ext_csd.sectors)
-			mmc_card_set_blockaddr(card);
+		/*
+		 * EXT_CSD versions 3 or less should all support block addressing
+		 * and not byte addressing
+		 */
+		if (card->ext_csd.sectors && (ext_csd_struct <= 5)) {
+			/*
+			 * Toshiba 2GB cards support byte addressing mode only
+			 */
+			if (manufacturer_id == TOSHIBA_MANF_ID) {
+				if (card_capacity == 0xfff) {
+					printk(KERN_INFO "%s: Using block addressing\n", mmc_hostname(card->host));
+					mmc_card_set_blockaddr(card);
+				}
+				else
+					printk(KERN_INFO "%s: Using byte addressing\n", mmc_hostname(card->host));
+			}
+			else {
+				printk(KERN_INFO "%s: Using block addressing\n", mmc_hostname(card->host));
+				mmc_card_set_blockaddr(card);
+			}
+			
+		}
 	}
 
 	switch (ext_csd[EXT_CSD_CARD_TYPE]) {
@@ -354,6 +389,49 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		card->type = MMC_TYPE_MMC;
 		card->rca = 1;
 		memcpy(card->raw_cid, cid, sizeof(card->raw_cid));
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+		/*
+	 	 * Manufacturer ID: 127-120
+		 */
+		manufacturer_id = UNSTUFF_BITS(card->raw_cid, 104, 24);
+		manufacturer_id = (manufacturer_id >> 16);
+
+		switch (manufacturer_id) {
+		case SAMSUNG_MANF_ID:
+				if (IS_SHASTA() && (IS_DVT() || IS_PVT())) {
+					printk(KERN_INFO "%s: Using open-ended mode on Samsung eMMC\n",
+						mmc_hostname(host));
+					host->predefined = 0;
+				}
+				else { 
+					printk(KERN_INFO "%s: Using predefined mode on Samsung eMMC\n", 
+						mmc_hostname(host));
+					host->predefined = 1;
+				}
+				break;
+		case SANDISK_MANF_ID:
+				printk(KERN_INFO "%s: Using open-ended mode on Sandisk eMMC\n",
+						mmc_hostname(host));
+				host->predefined = 0;
+				break;
+		case TOSHIBA_MANF_ID:
+				printk(KERN_INFO "%s: Using open-ended mode on Toshiba eMMC\n",
+						mmc_hostname(host));
+				host->predefined = 0;
+				break;
+		case HYNIX_MANF_ID:
+				printk(KERN_INFO "%s: Using open-ended mode on Hynix eMMC\n",
+						mmc_hostname(host));
+				host->predefined = 0;
+				break;
+		default:
+				printk(KERN_INFO "%s: Using open-ended mode on eMMC\n",
+						mmc_hostname(host));
+				host->predefined = 0;
+				break;
+		}
+#endif
 	}
 
 	/*
@@ -383,6 +461,9 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			goto free_card;
 	}
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	card_capacity = UNSTUFF_BITS(card->raw_csd, 62, 12);
+#endif
 	/*
 	 * Select card, as all following commands rely on that.
 	 */
@@ -408,12 +489,17 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		(host->caps & MMC_CAP_MMC_HIGHSPEED)) {
 		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
 			EXT_CSD_HS_TIMING, 1);
-		if (err)
+		if (err && err != -EBADMSG)
 			goto free_card;
-
-		mmc_card_set_highspeed(card);
-
-		mmc_set_timing(card->host, MMC_TIMING_MMC_HS);
+	
+		if (err) {
+			printk(KERN_WARNING "%s: switch to highspeed failed\n",
+			       mmc_hostname(card->host));
+			err = 0;
+		} else {
+			mmc_card_set_highspeed(card);
+			mmc_set_timing(card->host, MMC_TIMING_MMC_HS);
+		}
 	}
 
 	/*
@@ -434,13 +520,35 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 	 * Activate wide bus (if supported).
 	 */
 	if ((card->csd.mmca_vsn >= CSD_SPEC_VER_4) &&
+		(host->caps & MMC_CAP_8_BIT_DATA)) {
+		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
+			EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_8);
+		if (err && err != -EBADMSG)
+			goto free_card;
+
+		if (err) {
+			printk(KERN_WARNING "%s: switch to bus width %d "
+			       "failed\n", mmc_hostname(card->host),
+			       1 << MMC_BUS_WIDTH_8);
+			err = 0;
+		} else {
+			mmc_set_bus_width(card->host, MMC_BUS_WIDTH_8);
+		}
+	} else if ((card->csd.mmca_vsn >= CSD_SPEC_VER_4) &&
 		(host->caps & MMC_CAP_4_BIT_DATA)) {
 		err = mmc_switch(card, EXT_CSD_CMD_SET_NORMAL,
 			EXT_CSD_BUS_WIDTH, EXT_CSD_BUS_WIDTH_4);
-		if (err)
+		if (err && err != -EBADMSG)
 			goto free_card;
 
-		mmc_set_bus_width(card->host, MMC_BUS_WIDTH_4);
+		if (err) {
+			printk(KERN_WARNING "%s: switch to bus width %d "
+			       "failed\n", mmc_hostname(card->host),
+			       1 << MMC_BUS_WIDTH_4);
+			err = 0;
+		} else {
+			mmc_set_bus_width(card->host, MMC_BUS_WIDTH_4);
+		}
 	}
 
 	if (!oldcard)
@@ -496,8 +604,6 @@ static void mmc_detect(struct mmc_host *host)
 	}
 }
 
-#ifdef CONFIG_MMC_UNSAFE_RESUME
-
 /*
  * Suspend callback from host.
  */
@@ -540,12 +646,7 @@ static void mmc_resume(struct mmc_host *host)
 
 }
 
-#else
-
-#define mmc_suspend NULL
-#define mmc_resume NULL
-
-#endif
+#ifdef CONFIG_MMC_UNSAFE_RESUME
 
 static const struct mmc_bus_ops mmc_ops = {
 	.remove = mmc_remove,
@@ -553,6 +654,40 @@ static const struct mmc_bus_ops mmc_ops = {
 	.suspend = mmc_suspend,
 	.resume = mmc_resume,
 };
+
+static void mmc_attach_bus_ops(struct mmc_host *host)
+{
+	mmc_attach_bus(host, &mmc_ops);
+}
+
+#else
+
+static const struct mmc_bus_ops mmc_ops = {
+	.remove = mmc_remove,
+	.detect = mmc_detect,
+	.suspend = NULL,
+	.resume = NULL,
+};
+
+static const struct mmc_bus_ops mmc_ops_unsafe = {
+	.remove = mmc_remove,
+	.detect = mmc_detect,
+	.suspend = mmc_suspend,
+	.resume = mmc_resume,
+};
+
+static void mmc_attach_bus_ops(struct mmc_host *host)
+{
+	const struct mmc_bus_ops *bus_ops;
+
+	if (host->caps & MMC_CAP_NON_REMOVABLE)
+		bus_ops = &mmc_ops_unsafe;
+	else
+		bus_ops = &mmc_ops;
+	mmc_attach_bus(host, bus_ops);
+}
+
+#endif
 
 /*
  * Starting point for MMC card init.
@@ -564,7 +699,7 @@ int mmc_attach_mmc(struct mmc_host *host, u32 ocr)
 	BUG_ON(!host);
 	WARN_ON(!host->claimed);
 
-	mmc_attach_bus(host, &mmc_ops);
+	mmc_attach_bus_ops(host);
 
 	/*
 	 * We need to get OCR a different way for SPI.

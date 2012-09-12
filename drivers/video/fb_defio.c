@@ -60,11 +60,18 @@ int fb_deferred_io_fsync(struct file *file, struct dentry *dentry, int datasync)
 {
 	struct fb_info *info = file->private_data;
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	if (info->fbdefio) {
+#endif
 	/* Kill off the delayed work */
 	cancel_rearming_delayed_work(&info->deferred_work);
 
 	/* Run it immediately */
 	return schedule_delayed_work(&info->deferred_work, 0);
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	}
+	return 0;
+#endif
 }
 EXPORT_SYMBOL_GPL(fb_deferred_io_fsync);
 
@@ -179,6 +186,11 @@ void fb_deferred_io_cleanup(struct fb_info *info)
 		page = vmalloc_to_page(screen_base + i);
 		page->mapping = NULL;
 	}
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	info->fbops->fb_mmap = NULL;
+	mutex_destroy(&fbdefio->lock);
+#endif
 }
 EXPORT_SYMBOL_GPL(fb_deferred_io_cleanup);
 

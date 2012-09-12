@@ -339,6 +339,28 @@ void ether_setup(struct net_device *dev)
 }
 EXPORT_SYMBOL(ether_setup);
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+/**
+ * alloc_etherdev_mq_ar6000 - Allocates and sets up an Wireless LAN device
+ * @sizeof_priv: Size of additional driver-private structure to be allocated
+ *	for this Ethernet device
+ * @queue_count: The number of queues this device has.
+ *
+ * Fill in the fields of the device structure with Ethernet-generic
+ * values. Basically does everything except registering the device.
+ *
+ * Constructs a new net device, complete with a private data area of
+ * size (sizeof_priv).  A 32-byte (not bit) alignment is enforced for
+ * this private data area.
+ */
+
+struct net_device *alloc_etherdev_mq_ar6000(int sizeof_priv, unsigned int queue_count)
+{
+	return alloc_netdev_mq(sizeof_priv, "wlan%d", ether_setup, queue_count);
+}
+EXPORT_SYMBOL(alloc_etherdev_mq_ar6000);
+#endif
+
 /**
  * alloc_etherdev_mq - Allocates and sets up an Ethernet device
  * @sizeof_priv: Size of additional driver-private structure to be allocated

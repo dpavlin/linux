@@ -36,6 +36,11 @@ config BATTERY_DS2760
 	help
 	  Say Y here to enable support for batteries with ds2760 chip.
 
+config BATTERY_LUIGI
+	tristate "MX35 Luigi Battery Driver"
+	help
+	  Say Y to enable support for reading the MX35 Luigi Battery 
+
 config BATTERY_PMU
 	tristate "Apple PMU battery"
 	depends on PPC32 && ADB_PMU

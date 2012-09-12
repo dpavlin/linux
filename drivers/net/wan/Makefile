@@ -46,6 +46,11 @@ obj-$(CONFIG_PC300TOO)		+= pc300too.o
 clean-files := wanxlfw.inc
 $(obj)/wanxl.o:	$(obj)/wanxlfw.inc
 
+ifneq ($(CONFIG_LUIGI_WAN),)
+obj-y				+= mwan-core.o
+endif
+obj-$(CONFIG_LUIGI_WAN)		+= mwan.o
+
 ifeq ($(CONFIG_WANXL_BUILD_FIRMWARE),y)
 ifeq ($(ARCH),m68k)
   AS68K = $(AS)

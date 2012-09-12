@@ -44,6 +44,12 @@
   #define SMC_IRQ_SENSE		IRQF_TRIGGER_LOW
 #endif
 
+#ifdef CONFIG_ARCH_MXC
+  #define SMC_USE_16BIT		0
+  #define SMC_USE_32BIT		1
+  #define SMC_IRQ_SENSE		IRQF_TRIGGER_LOW
+#endif
+
 
 /*
  * Define the bus width specific IO macros
@@ -608,6 +614,8 @@ smc_pxa_dma_outsw(struct device *dev, u_long ioaddr, u_long physaddr,
 #define CHIP_9116	0x116
 #define CHIP_9117	0x117
 #define CHIP_9118	0x118
+#define CHIP_9217	0x117A
+#define CHIP_9218	0x118A
 
 struct chip_id {
 	u16 id;
@@ -619,6 +627,8 @@ static const struct chip_id chip_ids[] =  {
 	{ CHIP_9116, "LAN9116" },
 	{ CHIP_9117, "LAN9117" },
 	{ CHIP_9118, "LAN9118" },
+	{ CHIP_9217, "LAN9217" },
+	{ CHIP_9218, "LAN9218" },
 	{ 0, NULL },
 };
 

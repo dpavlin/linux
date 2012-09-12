@@ -97,9 +97,14 @@ struct thread_info;
 struct task_struct;
 
 /* information about the system we're running on */
+#define SERIAL16_SIZE 16
+#define REVISION16_SIZE 16
+
 extern unsigned int system_rev;
 extern unsigned int system_serial_low;
 extern unsigned int system_serial_high;
+extern unsigned char system_rev16[REVISION16_SIZE];
+extern unsigned char system_serial16[SERIAL16_SIZE];
 extern unsigned int mem_fclk_21285;
 
 struct pt_regs;

@@ -711,6 +711,9 @@ __armv4_mmu_cache_off:
 __armv7_mmu_cache_off:
 		mrc	p15, 0, r0, c1, c0
 		bic	r0, r0, #0x000d
+#if defined(CONFIG_ARCH_MX51)
+		bic	r0, r0, #0x1000
+#endif
 		mcr	p15, 0, r0, c1, c0	@ turn MMU and cache off
 		mov	r12, lr
 		bl	__armv7_mmu_cache_flush
@@ -941,6 +944,19 @@ memdump:	mov	r12, r0
 #endif
 
 		.ltorg
+#ifdef CONFIG_MCOUNT
+/* CONFIG_MCOUNT causes boot header to be built with -pg requiring this
+ * trampoline
+ */
+                .text
+                .align 0
+                .type mcount %function
+                .global mcount
+mcount:
+		mov pc, lr	@ just return
+#endif
+
+
 reloc_end:
 
 		.align

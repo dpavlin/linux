@@ -242,8 +242,11 @@
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 
-#include "gadget_chips.h"
+#include <asm/arch/boot_globals.h>
 
+#include "usbstring.c"
+#include "config.c"
+#include "epautoconf.c"
 
 /*-------------------------------------------------------------------------*/
 
@@ -262,8 +265,24 @@ MODULE_LICENSE("Dual BSD/GPL");
  *
  * DO NOT REUSE THESE IDs with any other driver!!  Ever!!
  * Instead:  allocate your own, using normal USB-IF procedures. */
+#ifdef CONFIG_MACH_LUIGI_LAB126
+
+#define DRIVER_VENDOR_ID	0x1949  // Lab126
+#define DRIVER_PRODUCT_ID	0x0004  // Shasta
+#define DRIVER_BCD_DEVICE	0x0100  // FW version 01.00
+
+#define DRIVER_MFG_STR		"Amazon"
+#define DRIVER_VENDOR_ID_STR	"Kindle"
+#define DRIVER_PROD_ID_STR	"Internal Storage"
+static const char productname[] = "Amazon Kindle";
+extern char mx35_serial_number[];
+
+#else
+
 #define DRIVER_VENDOR_ID	0x0525	// NetChip
 #define DRIVER_PRODUCT_ID	0xa4a5	// Linux-USB File-backed Storage Gadget
+
+#endif
 
 
 /*
@@ -313,6 +332,11 @@ MODULE_LICENSE("Dual BSD/GPL");
 #define INFO(d, fmt, args...) \
 	dev_info(&(d)->gadget->dev , fmt , ## args)
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+#define ICHRG_VALUE_HIGH	5	/* As defined by Atlas - maps to 480mA */
+#define ICHRG_VALUE_FULL	1	/* maps to 80mA */
+#define FSG_THREAD_NICE_LEVEL	(-20)
+#endif
 
 /*-------------------------------------------------------------------------*/
 
@@ -345,11 +369,19 @@ static struct {
 } mod_data = {					// Default values
 	.transport_parm		= "BBB",
 	.protocol_parm		= "SCSI",
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	.removable		= 1,
+#else
 	.removable		= 0,
+#endif
 	.can_stall		= 1,
 	.vendor			= DRIVER_VENDOR_ID,
 	.product		= DRIVER_PRODUCT_ID,
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	.release		= DRIVER_BCD_DEVICE,
+#else
 	.release		= 0xffff,	// Use controller chip type
+#endif
 	.buflen			= 16384,
 	};
 
@@ -646,6 +678,7 @@ struct fsg_dev {
 #define REGISTERED		0
 #define IGNORE_BULK_OUT		1
 #define SUSPENDED		2
+#define ONLINE			3
 
 	struct usb_ep		*bulk_in;
 	struct usb_ep		*bulk_out;
@@ -700,6 +733,8 @@ static void set_bulk_out_req_length(struct fsg_dev *fsg,
 	if (rem > 0)
 		length += fsg->bulk_out_maxpacket - rem;
 	bh->outreq->length = length;
+	if (bh->bulk_out_intended_length == 31)
+		bh->outreq->length = 31;
 }
 
 static struct fsg_dev			*the_fsg;
@@ -821,7 +856,11 @@ device_desc = {
 	/* The next three values can be overridden by module parameters */
 	.idVendor =		__constant_cpu_to_le16(DRIVER_VENDOR_ID),
 	.idProduct =		__constant_cpu_to_le16(DRIVER_PRODUCT_ID),
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	.bcdDevice =		__constant_cpu_to_le16(DRIVER_BCD_DEVICE),
+#else
 	.bcdDevice =		__constant_cpu_to_le16(0xffff),
+#endif
 
 	.iManufacturer =	STRING_MANUFACTURER,
 	.iProduct =		STRING_PRODUCT,
@@ -839,7 +878,7 @@ config_desc = {
 	.bConfigurationValue =	CONFIG_VALUE,
 	.iConfiguration =	STRING_CONFIG,
 	.bmAttributes =		USB_CONFIG_ATT_ONE | USB_CONFIG_ATT_SELFPOWER,
-	.bMaxPower =		1,	// self-powered
+        .bMaxPower =            CONFIG_USB_GADGET_VBUS_DRAW / 2, 
 };
 
 static struct usb_otg_descriptor
@@ -984,12 +1023,20 @@ ep_desc(struct usb_gadget *g, struct usb_endpoint_descriptor *fs,
 /* The CBI specification limits the serial string to 12 uppercase hexadecimal
  * characters. */
 static char				manufacturer[64];
+#ifdef CONFIG_MACH_LUIGI_LAB126
+static char				serial[17];
+#else
 static char				serial[13];
+#endif
 
 /* Static strings, in UTF-8 (for simplicity we use only ASCII characters) */
 static struct usb_string		strings[] = {
 	{STRING_MANUFACTURER,	manufacturer},
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	{STRING_PRODUCT,	productname},
+#else
 	{STRING_PRODUCT,	longname},
+#endif
 	{STRING_SERIAL,		serial},
 	{STRING_CONFIG,		"Self-powered"},
 	{STRING_INTERFACE,	"Mass Storage"},
@@ -1392,6 +1439,14 @@ get_config:
 			 * state (queued bufs, etc) and set the new config. */
 			raise_exception(fsg, FSG_STATE_CONFIG_CHANGE);
 			value = DELAYED_STATUS;
+#ifdef CONFIG_MACH_LUIGI_LAB126
+			if (w_value) {
+				if (fsg->gadget->speed == USB_SPEED_HIGH)
+					usb_gadget_vbus_draw(fsg->gadget, ICHRG_VALUE_HIGH);
+				else
+					usb_gadget_vbus_draw(fsg->gadget, ICHRG_VALUE_FULL);
+			}
+#endif
 		}
 		break;
 	case USB_REQ_GET_CONFIGURATION:
@@ -1856,7 +1911,7 @@ static int fsync_sub(struct lun *curlun)
 
 	if (curlun->ro || !filp)
 		return 0;
-	if (!filp->f_op->fsync)
+	if (!filp->f_op || !filp->f_op->fsync)
 		return -EINVAL;
 
 	inode = filp->f_path.dentry->d_inode;
@@ -2009,8 +2064,13 @@ static int do_inquiry(struct fsg_dev *fsg, struct fsg_buffhd *bh)
 {
 	u8	*buf = (u8 *) bh->buf;
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	static char vendor_id[] = DRIVER_VENDOR_ID_STR;
+	static char product_id[] = DRIVER_PROD_ID_STR;
+#else
 	static char vendor_id[] = "Linux   ";
 	static char product_id[] = "File-Stor Gadget";
+#endif
 
 	if (!fsg->curlun) {		// Unsupported LUNs are okay
 		fsg->bad_lun_okay = 1;
@@ -2218,8 +2278,24 @@ static int do_start_stop(struct fsg_dev *fsg)
 			close_backing_file(curlun);
 			up_write(&fsg->filesem);
 			down_read(&fsg->filesem);
+			
+			if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
+				kobject_uevent(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE)) {
+					printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+			}
+			else {
+				fsg->gadget->configured = 1;
+			}
 		}
 	} else {
+
+		if (!test_and_set_bit(ONLINE, &fsg->atomic_bitflags) &&
+			kobject_uevent(&fsg->gadget->dev.parent->kobj, KOBJ_ONLINE)) {
+				printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+		}
+		else {
+			fsg->gadget->configured = 1;
+		}
 
 		/* Our emulation doesn't support mounting; the medium is
 		 * available for use as soon as it is loaded. */
@@ -2228,6 +2304,7 @@ static int do_start_stop(struct fsg_dev *fsg)
 			return -EINVAL;
 		}
 	}
+	set_drivemode_online(test_bit(ONLINE, &fsg->atomic_bitflags));
 #endif
 	return 0;
 }
@@ -3236,6 +3313,15 @@ static int do_set_config(struct fsg_dev *fsg, u8 new_config)
 			default: 		speed = "?";	break;
 			}
 			INFO(fsg, "%s speed config #%d\n", speed, fsg->config);
+
+			if (!test_and_set_bit(ONLINE, &fsg->atomic_bitflags) &&
+				kobject_uevent(&fsg->gadget->dev.parent->kobj, KOBJ_ONLINE)) {
+					printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+			}
+			else {
+				fsg->gadget->configured = 1;
+			}
+			set_drivemode_online(test_bit(ONLINE, &fsg->atomic_bitflags));	
 		}
 	}
 	return rc;
@@ -3605,6 +3691,12 @@ static ssize_t show_file(struct device *dev, struct device_attribute *attr,
 	return rc;
 }
 
+static ssize_t
+show_online(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct fsg_dev *fsg = dev_get_drvdata(dev);
+	return sprintf(buf, "%d\n", test_bit(ONLINE, &fsg->atomic_bitflags));
+}
 
 static ssize_t store_ro(struct device *dev, struct device_attribute *attr,
 		const char *buf, size_t count)
@@ -3669,6 +3761,7 @@ static ssize_t store_file(struct device *dev, struct device_attribute *attr,
 /* The write permissions and store_xxx pointers are set in fsg_bind() */
 static DEVICE_ATTR(ro, 0444, show_ro, NULL);
 static DEVICE_ATTR(file, 0444, show_file, NULL);
+static DEVICE_ATTR(online, 0444, show_online, NULL);
 
 
 /*-------------------------------------------------------------------------*/
@@ -3707,6 +3800,14 @@ static void /* __init_or_exit */ fsg_unbind(struct usb_gadget *gadget)
 			device_unregister(&curlun->dev);
 			curlun->registered = 0;
 		}
+	}
+
+	if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
+		kobject_uevent_atomic(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE)) {
+			printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+	}
+	else {
+		fsg->gadget->configured = 0;
 	}
 
 	/* If the thread isn't already dead, tell it to exit now */
@@ -3877,7 +3978,9 @@ static int __init fsg_bind(struct usb_gadget *gadget)
 		if ((rc = device_create_file(&curlun->dev,
 					&dev_attr_ro)) != 0 ||
 				(rc = device_create_file(&curlun->dev,
-					&dev_attr_file)) != 0) {
+					&dev_attr_file)) != 0 ||
+				(rc = device_create_file(&curlun->dev,
+					&dev_attr_online)) != 0) {
 			device_unregister(&curlun->dev);
 			goto out;
 		}
@@ -3975,6 +4078,21 @@ static int __init fsg_bind(struct usb_gadget *gadget)
 	/* This should reflect the actual gadget power source */
 	usb_gadget_set_selfpowered(gadget);
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	snprintf(manufacturer, sizeof manufacturer, DRIVER_MFG_STR);
+
+	{
+		char *src = mx35_serial_number;
+		char *dst = serial;
+
+		if (*src == 0)
+			src = "Empty";
+
+		strncpy(dst, src, sizeof(serial));
+		dst[sizeof(serial)-1] = 0;
+        }
+
+#else
 	snprintf(manufacturer, sizeof manufacturer, "%s %s with %s",
 			init_utsname()->sysname, init_utsname()->release,
 			gadget->name);
@@ -3988,6 +4106,7 @@ static int __init fsg_bind(struct usb_gadget *gadget)
 			break;
 		sprintf(&serial[i], "%02X", c);
 	}
+#endif
 
 	fsg->thread_task = kthread_create(fsg_main_thread, fsg,
 			"file-storage-gadget");
@@ -3995,6 +4114,10 @@ static int __init fsg_bind(struct usb_gadget *gadget)
 		rc = PTR_ERR(fsg->thread_task);
 		goto out;
 	}
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	set_user_nice(fsg->thread_task, FSG_THREAD_NICE_LEVEL);
+#endif
 
 	INFO(fsg, DRIVER_DESC ", version: " DRIVER_VERSION "\n");
 	INFO(fsg, "Number of LUNs=%d\n", fsg->nluns);
@@ -4041,6 +4164,7 @@ out:
 	fsg->state = FSG_STATE_TERMINATED;	// The thread is dead
 	fsg_unbind(gadget);
 	close_all_backing_files(fsg);
+	complete(&fsg->thread_notifier);
 	return rc;
 }
 
@@ -4053,7 +4177,17 @@ static void fsg_suspend(struct usb_gadget *gadget)
 
 	DBG(fsg, "suspend\n");
 	set_bit(SUSPENDED, &fsg->atomic_bitflags);
-}
+
+	if (fsg->curlun != NULL) {
+		fsg->curlun->prevent_medium_removal = 0;
+		if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
+			kobject_uevent_atomic(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE)) {
+				printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+		}
+
+		set_drivemode_online(test_bit(ONLINE, &fsg->atomic_bitflags));
+	}
+};
 
 static void fsg_resume(struct usb_gadget *gadget)
 {
@@ -4112,6 +4246,9 @@ static int __init fsg_init(void)
 	int		rc;
 	struct fsg_dev	*fsg;
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	set_drivemode_online(0);
+#endif
 	if ((rc = fsg_alloc()) != 0)
 		return rc;
 	fsg = the_fsg;

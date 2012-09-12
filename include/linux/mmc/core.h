@@ -54,6 +54,8 @@ struct mmc_command {
 
 #define mmc_resp_type(cmd)	((cmd)->flags & (MMC_RSP_PRESENT|MMC_RSP_136|MMC_RSP_CRC|MMC_RSP_BUSY|MMC_RSP_OPCODE))
 
+#define MMC_KEEP_CLK_RUN (1 << 31)		/* Keep card clock on after request */
+
 /*
  * These are the SPI response types for MMC, SD, and SDIO cards.
  * Commands return R1, with maybe more info.  Zero is an error type;
@@ -150,4 +152,5 @@ static inline void mmc_claim_host(struct mmc_host *host)
 	__mmc_claim_host(host, NULL);
 }
 
+extern u32 mmc_vdd_to_ocrmask(int vdd_min, int vdd_max);
 #endif

@@ -1068,6 +1068,14 @@ static int hub_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	desc = intf->cur_altsetting;
 	hdev = interface_to_usbdev(intf);
 
+	/* With OTG enabled, suspending root hub results in gadget not
+	 * working because gadget uses the same root hub. We disable
+	 * this feature when OTG is selected.
+	 */
+#if defined(CONFIG_PM) && defined(CONFIG_USB_EHCI_ARC_OTG)
+	hdev->autosuspend_disabled = 1;
+#endif
+
 #ifdef	CONFIG_USB_OTG_BLACKLIST_HUB
 	if (hdev->parent) {
 		dev_warn(&intf->dev, "ignoring external hub\n");

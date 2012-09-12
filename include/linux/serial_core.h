@@ -158,6 +158,9 @@
 
 #define PORT_SC26XX	82
 
+/* Freescale Semiconductor MXC fmaily */
+#define PORT_MXC        83
+
 #ifdef __KERNEL__
 
 #include <linux/compiler.h>

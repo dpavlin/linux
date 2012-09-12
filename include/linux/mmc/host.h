@@ -13,6 +13,7 @@
 #include <linux/leds.h>
 
 #include <linux/mmc/core.h>
+#include <linux/mmc/pm.h>
 
 struct mmc_ios {
 	unsigned int	clock;			/* clock rate */
@@ -41,6 +42,7 @@ struct mmc_ios {
 
 #define MMC_BUS_WIDTH_1		0
 #define MMC_BUS_WIDTH_4		2
+#define MMC_BUS_WIDTH_8		3
 
 	unsigned char	timing;			/* timing specification used */
 
@@ -53,6 +55,7 @@ struct mmc_host_ops {
 	void	(*request)(struct mmc_host *host, struct mmc_request *req);
 	void	(*set_ios)(struct mmc_host *host, struct mmc_ios *ios);
 	int	(*get_ro)(struct mmc_host *host);
+	int	(*get_cd)(struct mmc_host *host);
 	void	(*enable_sdio_irq)(struct mmc_host *host, int enable);
 };
 
@@ -89,11 +92,17 @@ struct mmc_host {
 	unsigned long		caps;		/* Host capabilities */
 
 #define MMC_CAP_4_BIT_DATA	(1 << 0)	/* Can the host do 4 bit transfers */
-#define MMC_CAP_MULTIWRITE	(1 << 1)	/* Can accurately report bytes sent to card on error */
 #define MMC_CAP_MMC_HIGHSPEED	(1 << 2)	/* Can do MMC high-speed timing */
 #define MMC_CAP_SD_HIGHSPEED	(1 << 3)	/* Can do SD high-speed timing */
 #define MMC_CAP_SDIO_IRQ	(1 << 4)	/* Can signal pending SDIO IRQs */
 #define MMC_CAP_SPI		(1 << 5)	/* Talks only SPI protocols */
+#define MMC_CAP_8_BIT_DATA	(1 << 6)	/* Can the host do 8 bit transfers */
+#define MMC_CAP_NEEDS_POLL	(1 << 7)	/* Needs polling for card-detection */
+#define MMC_CAP_NON_REMOVABLE	(1 << 8)	/* Nonremovable e.g. eMMC */
+#define MMC_CAP_WAIT_WHILE_BUSY	(1 << 9)	/* Host waits while card is busy */
+#define MMC_CAP_SDIO_HIGHSPEED	(1 << 10)	/* Host supports SDIO high speed timings */
+
+	mmc_pm_flag_t		pm_caps;	/* supported pm features */
 
 	/* host specific block data */
 	unsigned int		max_seg_size;	/* see blk_queue_max_segment_size */
@@ -118,6 +127,10 @@ struct mmc_host {
 	unsigned int		removed:1;	/* host is being removed */
 #endif
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	unsigned int		predefined;	/* Use predefined mode or not */
+#endif
+
 	struct mmc_card		*card;		/* device attached to this host */
 
 	wait_queue_head_t	wq;
@@ -131,9 +144,13 @@ struct mmc_host {
 	struct task_struct	*sdio_irq_thread;
 	atomic_t		sdio_irq_thread_abort;
 
+	mmc_pm_flag_t		pm_flags;	/* requested pm features */
+
 #ifdef CONFIG_LEDS_TRIGGERS
 	struct led_trigger	*led;		/* activity led */
 #endif
+	
+	struct dentry		*debugfs_root;
 
 	unsigned long		private[0] ____cacheline_aligned;
 };

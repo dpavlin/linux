@@ -36,6 +36,7 @@
 #include <asm/mach/arch.h>
 #include <asm/mach/irq.h>
 #include <asm/mach/time.h>
+#include <asm/traps.h>
 
 #include "compat.h"
 #include "atags.h"
@@ -67,6 +68,12 @@ unsigned int __machine_arch_type;
 EXPORT_SYMBOL(__machine_arch_type);
 
 unsigned int __atags_pointer __initdata;
+
+unsigned char system_rev16[REVISION16_SIZE];
+EXPORT_SYMBOL(system_rev16);
+
+unsigned char system_serial16[SERIAL16_SIZE];
+EXPORT_SYMBOL(system_serial16);
 
 unsigned int system_rev;
 EXPORT_SYMBOL(system_rev);
@@ -717,9 +724,30 @@ static int __init parse_tag_revision(const struct tag *tag)
 
 __tagtable(ATAG_REVISION, parse_tag_revision);
 
+static int __init parse_tag_serial16(const struct tag *tag)
+{
+	memcpy(system_serial16, tag->u.id16.data, SERIAL16_SIZE);
+#if 0
+	printk(KERN_DEBUG "ATAGS:serial16:str=\"%.*s\"\n", SERIAL16_SIZE, system_serial16);
+#endif
+	return 0;
+}
+
+__tagtable(ATAG_SERIAL16, parse_tag_serial16);
+
+static int __init parse_tag_revision16(const struct tag *tag)
+{
+	memcpy(system_rev16, tag->u.id16.data, REVISION16_SIZE);
+	printk(KERN_DEBUG "ATAGS:rev16:str=\"%.*s\"\n", REVISION16_SIZE, system_rev16);
+	return 0;
+}
+__tagtable(ATAG_REVISION16, parse_tag_revision16);
+
 static int __init parse_tag_cmdline(const struct tag *tag)
 {
+#if 0
 	strlcpy(default_command_line, tag->u.cmdline.cmdline, COMMAND_LINE_SIZE);
+#endif
 	return 0;
 }
 
@@ -737,6 +765,7 @@ static int __init parse_tag(const struct tag *tag)
 
 	for (t = &__tagtable_begin; t < &__tagtable_end; t++)
 		if (tag->hdr.tag == t->tag) {
+			// printk(KERN_DEBUG "ATAGS:tag=0x%08x size=%d\n", tag->hdr.tag, tag->hdr.size);
 			t->parse(tag);
 			break;
 		}
@@ -750,11 +779,12 @@ static int __init parse_tag(const struct tag *tag)
  */
 static void __init parse_tags(const struct tag *t)
 {
-	for (; t->hdr.size; t = tag_next(t))
+	for (; (t->hdr.tag != ATAG_NONE) && t->hdr.size; t = tag_next(t)) {
 		if (!parse_tag(t))
 			printk(KERN_WARNING
 				"Ignoring unrecognised tag 0x%08x\n",
 				t->hdr.tag);
+	}
 }
 
 /*
@@ -853,6 +883,7 @@ void __init setup_arch(char **cmdline_p)
 	conswitchp = &dummy_con;
 #endif
 #endif
+	early_trap_init();
 }
 
 
@@ -980,8 +1011,28 @@ static int c_show(struct seq_file *m, void *v)
 
 	seq_printf(m, "Hardware\t: %s\n", machine_name);
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
-	seq_printf(m, "Serial\t\t: %08x%08x\n",
-		   system_serial_high, system_serial_low);
+
+	/* if 16-byte serial was initialized, print that. */
+	if (system_serial16[0]) {
+		char serial_num[SERIAL16_SIZE + 1];
+
+		memset(serial_num, '\0', sizeof(serial_num));
+		strncpy(serial_num, system_serial16, SERIAL16_SIZE);
+		seq_printf(m, "Serial\t\t: \"%s\"\n", serial_num);
+	} else {
+		/* no 16-byte serial, use the 64-bit one. */
+		seq_printf(m, "Serial\t\t: %08x%08x\n",
+			   system_serial_high, system_serial_low);
+	}
+
+	/* if 16-byte revision was initialized, print that. */
+	if (system_rev16[0]) {
+		char board_id[REVISION16_SIZE + 1];
+
+		memset(board_id, '\0', sizeof(board_id));
+		strncpy(board_id, system_rev16, REVISION16_SIZE);
+		seq_printf(m, "BoardId\t\t: \"%s\"\n", board_id);
+	}
 
 	return 0;
 }

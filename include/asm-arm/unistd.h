@@ -382,6 +382,10 @@
 #define __NR_timerfd_settime		(__NR_SYSCALL_BASE+353)
 #define __NR_timerfd_gettime		(__NR_SYSCALL_BASE+354)
 
+#ifndef __ASSEMBLY__
+#define NR_syscalls			(__NR_fallocate + 1 - __NR_SYSCALL_BASE)
+#endif
+
 /*
  * The following SWIs are ARM private.
  */
@@ -445,6 +449,11 @@
  * Unimplemented (or alternatively implemented) syscalls
  */
 #define __IGNORE_fadvise64_64		1
+#define __IGNORE_fadvise64              1
+#define __IGNORE_migrate_pages          1
+#define __IGNORE_pselect6               1
+#define __IGNORE_ppoll                  1
+#define __IGNORE_epoll_pwait            1
 
 #endif /* __KERNEL__ */
 #endif /* __ASM_ARM_UNISTD_H */

@@ -145,6 +145,8 @@ int v4l2_int_ioctl_0(struct v4l2_int_device *d, int cmd)
 			   (v4l2_int_ioctl_func *)no_such_ioctl_0))(d);
 }
 
+EXPORT_SYMBOL(v4l2_int_ioctl_0);
+
 static int no_such_ioctl_1(struct v4l2_int_device *d, void *arg)
 {
 	return -ENOIOCTLCMD;
@@ -157,4 +159,5 @@ int v4l2_int_ioctl_1(struct v4l2_int_device *d, int cmd, void *arg)
 			   (v4l2_int_ioctl_func *)no_such_ioctl_1))(d, arg);
 }
 
-MODULE_LICENSE("GPL");
+EXPORT_SYMBOL(v4l2_int_ioctl_1);
+

@@ -72,7 +72,7 @@ extern void timer_tick(void);
  * Kernel time keeping support.
  */
 struct timespec;
-extern int (*set_rtc)(void);
+extern int (*set_rtc)(struct timespec now);
 extern void save_time_delta(struct timespec *delta, struct timespec *rtc);
 extern void restore_time_delta(struct timespec *delta, struct timespec *rtc);
 

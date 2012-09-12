@@ -46,6 +46,9 @@
 #include <linux/nfs_fs.h>
 #include <linux/acpi.h>
 #include <linux/reboot.h>
+#include <linux/ftrace.h>
+#include <linux/profile.h>
+#include <linux/futex.h>
 
 #include <asm/uaccess.h>
 #include <asm/processor.h>
@@ -144,6 +147,10 @@ extern int no_unaligned_warning;
 
 #ifdef CONFIG_RT_MUTEXES
 extern int max_lock_depth;
+#endif
+
+#ifdef CONFIG_PREEMPT_RT
+extern int rt_rwlock_limit;
 #endif
 
 #ifdef CONFIG_PROC_SYSCTL
@@ -341,6 +348,74 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= &proc_dointvec,
 	},
 #endif
+#ifdef CONFIG_FUTEX
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "futex_rt_pi_warning",
+		.data		= &futex_rt_pi_warning,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "prof_pid",
+		.data		= &prof_pid,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#ifdef CONFIG_PREEMPT
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "kernel_preemption",
+		.data		= &kernel_preemption,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
+#ifdef CONFIG_PREEMPT_VOLUNTARY
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "voluntary_preemption",
+		.data		= &voluntary_preemption,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
+#if defined(CONFIG_PREEMPT_SOFTIRQS) && !defined(CONFIG_PREEMPT_RT)
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "softirq_preemption",
+		.data		= &softirq_preemption,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
+#if defined(CONFIG_PREEMPT_HARDIRQS) && !defined(CONFIG_PREEMPT_RT)
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "hardirq_preemption",
+		.data		= &hardirq_preemption,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
+#ifdef CONFIG_PREEMPT_RT
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "rwlock_reader_limit",
+		.data		= &rt_rwlock_limit,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
 	{
 		.ctl_name	= KERN_PANIC,
 		.procname	= "panic",
@@ -349,6 +424,16 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
 	},
+#ifdef CONFIG_GENERIC_HARDIRQS
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "debug_direct_keyboard",
+		.data		= &debug_direct_keyboard,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
 	{
 		.ctl_name	= KERN_CORE_USES_PID,
 		.procname	= "core_uses_pid",
@@ -455,6 +540,16 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
 	},
+#ifdef CONFIG_FTRACE
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "ftrace_enabled",
+		.data		= &ftrace_enabled,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &ftrace_enable_sysctl,
+	},
+#endif
 #ifdef CONFIG_KMOD
 	{
 		.ctl_name	= KERN_MODPROBE,
@@ -727,6 +822,17 @@ static struct ctl_table kern_table[] = {
 	},
 #endif
 #ifdef CONFIG_DETECT_SOFTLOCKUP
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "softlockup_reboot",
+		.data		= &softlockup_reboot,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_doulongvec_minmax,
+		.strategy	= &sysctl_intvec,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
 	{
 		.ctl_name	= CTL_UNNUMBERED,
 		.procname	= "softlockup_thresh",

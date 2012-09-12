@@ -36,6 +36,8 @@
 #include <asm/uaccess.h>
 #include <asm/mach/time.h>
 
+DEFINE_RAW_SPINLOCK(futex_atomic_lock);
+
 static const char *processor_modes[] = {
   "USER_26", "FIQ_26" , "IRQ_26" , "SVC_26" , "UK4_26" , "UK5_26" , "UK6_26" , "UK7_26" ,
   "UK8_26" , "UK9_26" , "UK10_26", "UK11_26", "UK12_26", "UK13_26", "UK14_26", "UK15_26",
@@ -164,14 +166,16 @@ void cpu_idle(void)
 		if (!idle)
 			idle = default_idle;
 		leds_event(led_idle_start);
-		tick_nohz_stop_sched_tick();
+		tick_nohz_stop_sched_tick(1);
 		while (!need_resched())
 			idle();
 		leds_event(led_idle_end);
 		tick_nohz_restart_sched_tick();
-		preempt_enable_no_resched();
-		schedule();
+		local_irq_disable();
+		__preempt_enable_no_resched();
+		__schedule();
 		preempt_disable();
+		local_irq_enable();
 	}
 }
 
@@ -185,15 +189,15 @@ int __init reboot_setup(char *str)
 
 __setup("reboot=", reboot_setup);
 
-void machine_halt(void)
-{
-}
-
-
 void machine_power_off(void)
 {
 	if (pm_power_off)
 		pm_power_off();
+}
+
+void machine_halt(void)
+{
+	machine_power_off();
 }
 
 void machine_restart(char * __unused)
@@ -349,6 +353,15 @@ copy_thread(int nr, unsigned long clone_flags, unsigned long stack_start,
 		thread->tp_value = regs->ARM_r3;
 
 	return 0;
+}
+
+/*
+ * Fill in the task's elfregs structure for a core dump.
+ */
+int dump_task_regs(struct task_struct *t, elf_gregset_t *elfregs)
+{
+       elf_core_copy_regs(elfregs, task_pt_regs(t));
+       return 1;
 }
 
 /*

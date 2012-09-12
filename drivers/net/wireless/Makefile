@@ -62,3 +62,4 @@ obj-$(CONFIG_RT2X00)	+= rt2x00/
 obj-$(CONFIG_P54_COMMON)	+= p54/
 
 obj-$(CONFIG_ATH5K)	+= ath5k/
+obj-$(CONFIG_ATHEROS_AR6000)	+= ath6k22.133/

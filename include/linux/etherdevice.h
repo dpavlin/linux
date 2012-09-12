@@ -46,6 +46,11 @@ extern void eth_header_cache_update(struct hh_cache *hh,
 extern struct net_device *alloc_etherdev_mq(int sizeof_priv, unsigned int queue_count);
 #define alloc_etherdev(sizeof_priv) alloc_etherdev_mq(sizeof_priv, 1)
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+extern struct net_device *alloc_etherdev_mq_ar6000(int sizeof_priv, unsigned int queue_count);
+#define alloc_etherdev_ar6000(sizeof_priv) alloc_etherdev_mq_ar6000(sizeof_priv, 1)
+#endif
+
 /**
  * is_zero_ether_addr - Determine if give Ethernet address is all zeros.
  * @addr: Pointer to a six-byte array containing the Ethernet address

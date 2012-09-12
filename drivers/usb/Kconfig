@@ -105,6 +105,8 @@ source "drivers/usb/image/Kconfig"
 
 source "drivers/usb/mon/Kconfig"
 
+source "drivers/usb/usblan/Kconfig"
+
 comment "USB port drivers"
 	depends on USB
 

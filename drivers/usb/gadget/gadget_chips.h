@@ -88,6 +88,12 @@
 #define	gadget_is_pxa27x(g)	0
 #endif
 
+#ifdef CONFIG_USB_GADGET_ARC
+#define	gadget_is_arcotg(g)	!strcmp("fsl-usb2-udc", (g)->name)
+#else
+#define	gadget_is_arcotg(g)	0
+#endif
+
 #ifdef CONFIG_USB_GADGET_ATMEL_USBA
 #define gadget_is_atmel_usba(g)	!strcmp("atmel_usba_udc", (g)->name)
 #else
@@ -212,5 +218,7 @@ static inline int usb_gadget_controller_number(struct usb_gadget *gadget)
 		return 0x20;
 	else if (gadget_is_m66592(gadget))
 		return 0x21;
+	else if (gadget_is_arcotg(gadget))
+		return 0x22;
 	return -ENOENT;
 }

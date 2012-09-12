@@ -20,6 +20,7 @@
 #include <linux/err.h>
 #include <linux/leds.h>
 #include <linux/scatterlist.h>
+#include <linux/log2.h>
 
 #include <linux/mmc/card.h>
 #include <linux/mmc/host.h>
@@ -279,7 +280,8 @@ void mmc_set_data_timeout(struct mmc_data *data, const struct mmc_card *card)
 			(card->host->ios.clock / 1000);
 
 		if (data->flags & MMC_DATA_WRITE)
-			limit_us = 250000;
+			/* Increase to 300ms for crappy cards */
+			limit_us = 300000;
 		else
 			limit_us = 100000;
 
@@ -415,6 +417,80 @@ void mmc_set_bus_width(struct mmc_host *host, unsigned int width)
 	host->ios.bus_width = width;
 	mmc_set_ios(host);
 }
+
+/**
+ * mmc_vdd_to_ocrbitnum - Convert a voltage to the OCR bit number
+ * @vdd:	voltage (mV)
+ * @low_bits:	prefer low bits in boundary cases
+ *
+ * This function returns the OCR bit number according to the provided @vdd
+ * value. If conversion is not possible a negative errno value returned.
+ *
+ * Depending on the @low_bits flag the function prefers low or high OCR bits
+ * on boundary voltages. For example,
+ * with @low_bits = true, 3300 mV translates to ilog2(MMC_VDD_32_33);
+ * with @low_bits = false, 3300 mV translates to ilog2(MMC_VDD_33_34);
+ *
+ * Any value in the [1951:1999] range translates to the ilog2(MMC_VDD_20_21).
+ */
+static int mmc_vdd_to_ocrbitnum(int vdd, bool low_bits)
+{
+	const int max_bit = ilog2(MMC_VDD_35_36);
+	int bit;
+
+	if (vdd < 1650 || vdd > 3600)
+		return -EINVAL;
+
+	if (vdd >= 1650 && vdd <= 1950)
+		return ilog2(MMC_VDD_165_195);
+
+	if (low_bits)
+		vdd -= 1;
+
+	/* Base 2000 mV, step 100 mV, bit's base 8. */
+	bit = (vdd - 2000) / 100 + 8;
+	if (bit > max_bit)
+		return max_bit;
+	return bit;
+}
+
+/**
+ * mmc_vdd_to_ocrmask - Convert a voltage range to the OCR mask
+ * @vdd_min:	minimum voltage value (mV)
+ * @vdd_max:	maximum voltage value (mV)
+ *
+ * This function returns the OCR mask bits according to the provided @vdd_min
+ * and @vdd_max values. If conversion is not possible the function returns 0.
+ *
+ * Notes wrt boundary cases:
+ * This function sets the OCR bits for all boundary voltages, for example
+ * [3300:3400] range is translated to MMC_VDD_32_33 | MMC_VDD_33_34 |
+ * MMC_VDD_34_35 mask.
+ */
+u32 mmc_vdd_to_ocrmask(int vdd_min, int vdd_max)
+{
+	u32 mask = 0;
+
+	if (vdd_max < vdd_min)
+		return 0;
+
+	/* Prefer high bits for the boundary vdd_max values. */
+	vdd_max = mmc_vdd_to_ocrbitnum(vdd_max, false);
+	if (vdd_max < 0)
+		return 0;
+
+	/* Prefer low bits for the boundary vdd_min values. */
+	vdd_min = mmc_vdd_to_ocrbitnum(vdd_min, true);
+	if (vdd_min < 0)
+		return 0;
+
+	/* Fill the mask, from max bit to min bit. */
+	while (vdd_max >= vdd_min)
+		mask |= 1 << vdd_max--;
+
+	return mask;
+}
+EXPORT_SYMBOL(mmc_vdd_to_ocrmask);
 
 /*
  * Mask off any voltages we don't support and select
@@ -638,9 +714,13 @@ void mmc_rescan(struct work_struct *work)
 		 */
 		mmc_bus_put(host);
 
+		if (host->ops->get_cd && host->ops->get_cd(host) == 0)
+			goto out;
+
 		mmc_claim_host(host);
 
 		mmc_power_up(host);
+		sdio_reset(host);
 		mmc_go_idle(host);
 
 		mmc_send_if_cond(host, host->ocr_avail);
@@ -652,7 +732,7 @@ void mmc_rescan(struct work_struct *work)
 		if (!err) {
 			if (mmc_attach_sdio(host, ocr))
 				mmc_power_off(host);
-			return;
+			goto out;
 		}
 
 		/*
@@ -662,7 +742,7 @@ void mmc_rescan(struct work_struct *work)
 		if (!err) {
 			if (mmc_attach_sd(host, ocr))
 				mmc_power_off(host);
-			return;
+			goto out;
 		}
 
 		/*
@@ -672,7 +752,7 @@ void mmc_rescan(struct work_struct *work)
 		if (!err) {
 			if (mmc_attach_mmc(host, ocr))
 				mmc_power_off(host);
-			return;
+			goto out;
 		}
 
 		mmc_release_host(host);
@@ -683,6 +763,10 @@ void mmc_rescan(struct work_struct *work)
 
 		mmc_bus_put(host);
 	}
+
+out:
+	if (host->caps & MMC_CAP_NEEDS_POLL)
+		mmc_schedule_delayed_work(&host->detect, HZ);
 }
 
 void mmc_start_host(struct mmc_host *host)
@@ -700,7 +784,11 @@ void mmc_stop_host(struct mmc_host *host)
 	spin_unlock_irqrestore(&host->lock, flags);
 #endif
 
+	cancel_delayed_work(&host->detect);
 	mmc_flush_scheduled_work();
+
+	/* clear pm flags now and let card drivers set them as needed */
+	host->pm_flags = 0;
 
 	mmc_bus_get(host);
 	if (host->bus_ops && !host->bus_dead) {
@@ -727,6 +815,7 @@ void mmc_stop_host(struct mmc_host *host)
  */
 int mmc_suspend_host(struct mmc_host *host, pm_message_t state)
 {
+	cancel_delayed_work(&host->detect);
 	mmc_flush_scheduled_work();
 
 	mmc_bus_get(host);
@@ -740,11 +829,13 @@ int mmc_suspend_host(struct mmc_host *host, pm_message_t state)
 			mmc_claim_host(host);
 			mmc_detach_bus(host);
 			mmc_release_host(host);
+			host->pm_flags = 0;
 		}
 	}
 	mmc_bus_put(host);
 
-	mmc_power_off(host);
+	if (!(host->pm_flags & MMC_PM_KEEP_POWER))
+		mmc_power_off(host);
 
 	return 0;
 }
@@ -759,7 +850,8 @@ int mmc_resume_host(struct mmc_host *host)
 {
 	mmc_bus_get(host);
 	if (host->bus_ops && !host->bus_dead) {
-		mmc_power_up(host);
+		if (!(host->pm_flags & MMC_PM_KEEP_POWER)) 
+			mmc_power_up(host);
 		BUG_ON(!host->bus_ops->resume);
 		host->bus_ops->resume(host);
 	}

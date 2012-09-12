@@ -18,7 +18,7 @@
 
 #include <asm/irq_regs.h>
 
-static DEFINE_SPINLOCK(print_lock);
+static DEFINE_RAW_SPINLOCK(print_lock);
 
 static DEFINE_PER_CPU(unsigned long, touch_timestamp);
 static DEFINE_PER_CPU(unsigned long, print_timestamp);
@@ -26,6 +26,21 @@ static DEFINE_PER_CPU(struct task_struct *, watchdog_task);
 
 static int __read_mostly did_panic;
 unsigned long __read_mostly softlockup_thresh = 60;
+
+/*
+ * Should we panic (and reboot, if panic_timeout= is set) when a
+ * soft-lockup occurs:
+ */
+unsigned int __read_mostly softlockup_reboot =
+				CONFIG_SOFTLOCKUP_REBOOT_VALUE;
+
+static int __init softlockup_reboot_setup(char *str)
+{
+	softlockup_reboot = simple_strtoul(str, NULL, 0);
+
+	return 1;
+}
+__setup("softlockup_reboot=", softlockup_reboot_setup);
 
 static int
 softlock_panic(struct notifier_block *this, unsigned long event, void *ptr)
@@ -126,6 +141,9 @@ void softlockup_tick(void)
 	else
 		dump_stack();
 	spin_unlock(&print_lock);
+
+	if (softlockup_reboot)
+		panic("softlockup: tasks hung for 60 seconds");
 }
 
 /*
@@ -178,6 +196,9 @@ static void check_hung_task(struct task_struct *t, unsigned long now)
 
 	t->last_switch_timestamp = now;
 	touch_nmi_watchdog();
+
+	if (softlockup_reboot)
+		panic("softlockup: tasks hung for 60 seconds");
 }
 
 /*

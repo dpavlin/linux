@@ -21,6 +21,8 @@
 
 #include "fault.h"
 
+/* Fault status register encodings */
+#define FSR_WRITE	(1 << 11)
 
 #ifdef CONFIG_KPROBES
 static inline int notify_page_fault(struct pt_regs *regs, unsigned int fsr)
@@ -172,18 +174,33 @@ void do_bad_area(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 #define VM_FAULT_BADMAP		0x010000
 #define VM_FAULT_BADACCESS	0x020000
 
+/*
+ * Check that the permissions on the VMA allow for the fault which occurred.
+ * If we encountered a write fault, we must have write permission, otherwise
+ * we allow any permission.
+ */
+static inline bool access_error(unsigned int fsr, struct vm_area_struct *vma)
+{
+	unsigned int mask = VM_READ | VM_WRITE | VM_EXEC;
+
+	if (fsr & FSR_WRITE)
+		mask = VM_WRITE;
+
+	return vma->vm_flags & mask ? false : true;
+}
+
 static int
 __do_page_fault(struct mm_struct *mm, unsigned long addr, unsigned int fsr,
 		struct task_struct *tsk)
 {
 	struct vm_area_struct *vma;
-	int fault, mask;
+	int fault;
 
 	vma = find_vma(mm, addr);
 	fault = VM_FAULT_BADMAP;
-	if (!vma)
+	if (unlikely(!vma))
 		goto out;
-	if (vma->vm_start > addr)
+	if (unlikely(vma->vm_start > addr))
 		goto check_stack;
 
 	/*
@@ -191,14 +208,10 @@ __do_page_fault(struct mm_struct *mm, unsigned long addr, unsigned int fsr,
 	 * memory access, so we can handle it.
 	 */
 good_area:
-	if (fsr & (1 << 11)) /* write? */
-		mask = VM_WRITE;
-	else
-		mask = VM_READ|VM_EXEC|VM_WRITE;
-
-	fault = VM_FAULT_BADACCESS;
-	if (!(vma->vm_flags & mask))
+	if (access_error(fsr, vma)) {
+		fault = VM_FAULT_BADACCESS;
 		goto out;
+	}
 
 	/*
 	 * If for any reason at all we couldn't handle
@@ -239,7 +252,7 @@ out:
 	return fault;
 }
 
-static int __kprobes
+static int notrace __kprobes
 do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	struct task_struct *tsk;
@@ -256,7 +269,7 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	 * If we're in an interrupt or have no user
 	 * context, we must not take the fault..
 	 */
-	if (in_atomic() || !mm)
+	if (in_atomic() || !mm || current->pagefault_disabled)
 		goto no_context;
 
 	/*
@@ -338,7 +351,7 @@ no_context:
  * interrupt or a critical region, and should only copy the information
  * from the master page table, nothing more.
  */
-static int __kprobes
+static int notrace __kprobes
 do_translation_fault(unsigned long addr, unsigned int fsr,
 		     struct pt_regs *regs)
 {
@@ -381,7 +394,7 @@ bad_area:
  * Some section permission faults need to be handled gracefully.
  * They can happen due to a __{get,put}_user during an oops.
  */
-static int
+static notrace int
 do_sect_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	do_bad_area(addr, fsr, regs);
@@ -391,7 +404,7 @@ do_sect_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 /*
  * This abort handler always returns "fault".
  */
-static int
+static notrace int
 do_bad(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	return 1;
@@ -446,7 +459,7 @@ static struct fsr_info {
 	{ do_bad,		SIGBUS,  0,		"unknown 31"			   }
 };
 
-void __init
+void __init notrace
 hook_fault_code(int nr, int (*fn)(unsigned long, unsigned int, struct pt_regs *),
 		int sig, const char *name)
 {
@@ -460,7 +473,7 @@ hook_fault_code(int nr, int (*fn)(unsigned long, unsigned int, struct pt_regs *)
 /*
  * Dispatch a data abort to the relevant handler.
  */
-asmlinkage void __exception
+asmlinkage void __exception notrace
 do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	const struct fsr_info *inf = fsr_info + (fsr & 15) + ((fsr & (1 << 10)) >> 6);
@@ -479,7 +492,7 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	arm_notify_die("", regs, &info, fsr, 0);
 }
 
-asmlinkage void __exception
+asmlinkage void __exception notrace
 do_PrefetchAbort(unsigned long addr, struct pt_regs *regs)
 {
 	do_translation_fault(addr, 0, regs);

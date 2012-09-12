@@ -304,7 +304,7 @@ struct inode *jffs2_iget(struct super_block *sb, unsigned long ino)
 		inode->i_op = &jffs2_file_inode_operations;
 		inode->i_fop = &jffs2_file_operations;
 		inode->i_mapping->a_ops = &jffs2_file_address_operations;
-		inode->i_mapping->nrpages = 0;
+		mapping_nrpages_init(inode->i_mapping);
 		break;
 
 	case S_IFBLK:
@@ -678,7 +678,9 @@ void jffs2_gc_release_page(struct jffs2_sb_info *c,
 static int jffs2_flash_setup(struct jffs2_sb_info *c) {
 	int ret = 0;
 
-	if (jffs2_cleanmarker_oob(c)) {
+	if (c->mtd->type == MTD_NANDFLASH) {
+		if (!(c->mtd->flags & MTD_OOB_WRITEABLE))
+			printk(KERN_INFO "JFFS2 doesn't use OOB.\n");
 		/* NAND flash... do setup accordingly */
 		ret = jffs2_nand_flash_setup(c);
 		if (ret)
@@ -711,7 +713,7 @@ static int jffs2_flash_setup(struct jffs2_sb_info *c) {
 
 void jffs2_flash_cleanup(struct jffs2_sb_info *c) {
 
-	if (jffs2_cleanmarker_oob(c)) {
+	if (c->mtd->type == MTD_NANDFLASH) {
 		jffs2_nand_flash_cleanup(c);
 	}
 

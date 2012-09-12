@@ -849,6 +849,10 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 	 * Check for presence of the EFR when DLAB is set.
 	 * Only ST16C650V1 UARTs pass this test.
 	 */
+#ifndef CONFIG_ARCH_MXC
+	/* This test fails as EFR reads 0, but our uart requires LCR=0xBF
+	 *  to access EFR.
+	 */
 	serial_outp(up, UART_LCR, UART_LCR_DLAB);
 	if (serial_in(up, UART_EFR) == 0) {
 		serial_outp(up, UART_EFR, 0xA8);
@@ -862,6 +866,7 @@ static void autoconfig_16550a(struct uart_8250_port *up)
 		serial_outp(up, UART_EFR, 0);
 		return;
 	}
+#endif
 
 	/*
 	 * Maybe it requires 0xbf to be written to the LCR.
@@ -1373,7 +1378,12 @@ static void transmit_chars(struct uart_8250_port *up)
 
 	count = up->tx_loadsz;
 	do {
+#ifdef CONFIG_ARCH_MXC
+		/* Seems like back-to-back accesses are a problem */
+		serial_out_sync(up, UART_TX, xmit->buf[xmit->tail]);
+#else
 		serial_out(up, UART_TX, xmit->buf[xmit->tail]);
+#endif
 		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
 		up->port.icount.tx++;
 		if (uart_circ_empty(xmit))
@@ -1454,7 +1464,10 @@ static irqreturn_t serial8250_interrupt(int irq, void *dev_id)
 {
 	struct irq_info *i = dev_id;
 	struct list_head *l, *end = NULL;
-	int pass_counter = 0, handled = 0;
+#ifndef CONFIG_PREEMPT_RT
+	int pass_counter = 0;
+#endif
+	int handled = 0;
 
 	DEBUG_INTR("serial8250_interrupt(%d)...", irq);
 
@@ -1492,12 +1505,18 @@ static irqreturn_t serial8250_interrupt(int irq, void *dev_id)
 
 		l = l->next;
 
+		/*
+		 * On preempt-rt we can be preempted and run in our
+		 * own thread.
+		 */
+#ifndef CONFIG_PREEMPT_RT
 		if (l == i->head && pass_counter++ > PASS_LIMIT) {
 			/* If we hit this, we're dead. */
 			printk(KERN_ERR "serial8250: too much work for "
 				"irq%d\n", irq);
 			break;
 		}
+#endif
 	} while (l != end);
 
 	spin_unlock(&i->lock);
@@ -2536,14 +2555,10 @@ serial8250_console_write(struct console *co, const char *s, unsigned int count)
 
 	touch_nmi_watchdog();
 
-	local_irq_save(flags);
-	if (up->port.sysrq) {
-		/* serial8250_handle_port() already took the lock */
-		locked = 0;
-	} else if (oops_in_progress) {
-		locked = spin_trylock(&up->port.lock);
-	} else
-		spin_lock(&up->port.lock);
+	if (up->port.sysrq || oops_in_progress)
+		locked = spin_trylock_irqsave(&up->port.lock, flags);
+	else
+		spin_lock_irqsave(&up->port.lock, flags);
 
 	/*
 	 *	First save the IER then disable the interrupts
@@ -2575,8 +2590,7 @@ serial8250_console_write(struct console *co, const char *s, unsigned int count)
 		check_modem_status(up);
 
 	if (locked)
-		spin_unlock(&up->port.lock);
-	local_irq_restore(flags);
+		spin_unlock_irqrestore(&up->port.lock, flags);
 }
 
 static int __init serial8250_console_setup(struct console *co, char *options)

@@ -26,9 +26,20 @@
 #include <linux/usb.h>
 #include <linux/usb/quirks.h>
 #include <linux/workqueue.h>
+#include <linux/clk.h>
+#include <asm/arch/clock.h>
+
 #include "hcd.h"
 #include "usb.h"
 
+/*
+ * This is the usb_ahb_clk. If the clock is gated while a USB
+ * suspend is invoked, the controller will hang.
+ */
+struct clk *usb_clk;
+
+/* Track status of the usb_clk */
+static int clken = 0;
 
 #ifdef CONFIG_HOTPLUG
 
@@ -790,6 +801,12 @@ static int usb_suspend_device(struct usb_device *udev, pm_message_t msg)
 		udev->do_remote_wakeup = 0;
 		udriver = &usb_generic_driver;
 	}
+
+	/* If the refcnt on the clock is > 0, then the clk is already enabled */
+	if (!clk_get_usecount(usb_clk)) {
+		clk_enable(usb_clk);
+		clken++;
+	}
 	status = udriver->suspend(udev, msg);
 
  done:
@@ -812,6 +829,12 @@ static int usb_resume_device(struct usb_device *udev)
 	if (udev->dev.driver == NULL) {
 		status = -ENOTCONN;
 		goto done;
+	}
+
+	/* Gate the usb_clk only if it was enabled on suspend */
+	if (clken) {
+		clk_disable(usb_clk);
+		clken--;
 	}
 
 	if (udev->quirks & USB_QUIRK_RESET_RESUME)

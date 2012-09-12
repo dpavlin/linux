@@ -31,10 +31,14 @@ static void flush_pfn_alias(unsigned long pfn, unsigned long vaddr)
 
 	asm(	"mcrr	p15, 0, %1, %0, c14\n"
 	"	mcr	p15, 0, %2, c7, c10, 4\n"
+#if __LINUX_ARM_ARCH__ != 6 || defined(CONFIG_SMP)
 	"	mcr	p15, 0, %2, c7, c5, 0\n"
+#else
+	"	bl	v6_icache_inval_all\n"
+#endif
 	    :
 	    : "r" (to), "r" (to + PAGE_SIZE - L1_CACHE_BYTES), "r" (zero)
-	    : "cc");
+	    : "r0", "r1", "lr");
 }
 
 void flush_cache_mm(struct mm_struct *mm)
@@ -47,11 +51,15 @@ void flush_cache_mm(struct mm_struct *mm)
 
 	if (cache_is_vipt_aliasing()) {
 		asm(	"mcr	p15, 0, %0, c7, c14, 0\n"
+		"	mcr	p15, 0, %0, c7, c10, 4\n"
+#if __LINUX_ARM_ARCH__ != 6 || defined(CONFIG_SMP)
 		"	mcr	p15, 0, %0, c7, c5, 0\n"
-		"	mcr	p15, 0, %0, c7, c10, 4"
+#else
+		"	bl	v6_icache_inval_all\n"
+#endif
 		    :
 		    : "r" (0)
-		    : "cc");
+		    : "r0", "r1", "lr", "cc");
 	}
 }
 
@@ -66,11 +74,15 @@ void flush_cache_range(struct vm_area_struct *vma, unsigned long start, unsigned
 
 	if (cache_is_vipt_aliasing()) {
 		asm(	"mcr	p15, 0, %0, c7, c14, 0\n"
+		"	mcr	p15, 0, %0, c7, c10, 4\n"
+#if __LINUX_ARM_ARCH__ != 6 || defined(CONFIG_SMP)
 		"	mcr	p15, 0, %0, c7, c5, 0\n"
-		"	mcr	p15, 0, %0, c7, c10, 4"
+#else
+		"	bl	v6_icache_inval_all\n"
+#endif
 		    :
 		    : "r" (0)
-		    : "cc");
+		    : "r0", "r1", "lr", "cc");
 	}
 }
 
@@ -119,12 +131,17 @@ void flush_ptrace_access(struct vm_area_struct *vma, struct page *page,
 
 void __flush_dcache_page(struct address_space *mapping, struct page *page)
 {
+	void *addr = page_address(page);
+
 	/*
 	 * Writeback any data associated with the kernel mapping of this
 	 * page.  This ensures that data in the physical page is mutually
 	 * coherent with the kernels mapping.
 	 */
-	__cpuc_flush_dcache_page(page_address(page));
+#ifdef CONFIG_HIGHMEM
+	if (addr)
+#endif
+		__cpuc_flush_dcache_page(addr);
 
 	/*
 	 * If this is a page cache page, and we have an aliasing VIPT cache,

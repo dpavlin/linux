@@ -5,6 +5,7 @@
 #include <linux/smp.h>
 #include <linux/threads.h>
 #include <linux/percpu.h>
+#include <linux/interrupt.h>
 #include <linux/cpumask.h>
 #include <asm/cputime.h>
 
@@ -23,12 +24,15 @@ struct cpu_usage_stat {
 	cputime64_t idle;
 	cputime64_t iowait;
 	cputime64_t steal;
+	cputime64_t user_rt;
+	cputime64_t system_rt;
 	cputime64_t guest;
 };
 
 struct kernel_stat {
 	struct cpu_usage_stat	cpustat;
 	unsigned int irqs[NR_IRQS];
+	unsigned int softirqs[MAX_SOFTIRQ];
 };
 
 DECLARE_PER_CPU(struct kernel_stat, kstat);
@@ -38,6 +42,16 @@ DECLARE_PER_CPU(struct kernel_stat, kstat);
 #define kstat_this_cpu	__get_cpu_var(kstat)
 
 extern unsigned long long nr_context_switches(void);
+
+static inline void kstat_incr_softirqs_this_cpu(unsigned int irq)
+{
+	kstat_this_cpu.softirqs[irq]++;
+}
+
+static inline unsigned int kstat_softirqs_cpu(unsigned int irq, int cpu)
+{
+       return kstat_cpu(cpu).softirqs[irq];
+}
 
 /*
  * Number of interrupts per specific IRQ source, since bootup

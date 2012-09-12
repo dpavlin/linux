@@ -138,6 +138,12 @@ endif
  machine-$(CONFIG_ARCH_KS8695)     := ks8695
   incdir-$(CONFIG_ARCH_MXC)	   := mxc
  machine-$(CONFIG_ARCH_MX3)	   := mx3
+ machine-$(CONFIG_ARCH_MX35)	   := mx35
+ machine-$(CONFIG_ARCH_MX37)	   := mx37
+ machine-$(CONFIG_ARCH_MX51)	   := mx51
+ machine-$(CONFIG_ARCH_MX27)	   := mx27
+ machine-$(CONFIG_ARCH_MX25)	   := mx25
+ machine-$(CONFIG_ARCH_MX21)	   := mx21
  machine-$(CONFIG_ARCH_ORION5X)	   := orion5x
  machine-$(CONFIG_ARCH_MSM7X00A)   := msm
 

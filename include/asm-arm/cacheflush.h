@@ -210,6 +210,7 @@ struct outer_cache_fns {
 	void (*inv_range)(unsigned long, unsigned long);
 	void (*clean_range)(unsigned long, unsigned long);
 	void (*flush_range)(unsigned long, unsigned long);
+	void (*flush_all)(void);
 };
 
 /*
@@ -287,6 +288,11 @@ static inline void outer_flush_range(unsigned long start, unsigned long end)
 	if (outer_cache.flush_range)
 		outer_cache.flush_range(start, end);
 }
+static inline void outer_flush_all(void)
+{
+	if (outer_cache.flush_all)
+		outer_cache.flush_all();
+}
 
 #else
 
@@ -295,6 +301,8 @@ static inline void outer_inv_range(unsigned long start, unsigned long end)
 static inline void outer_clean_range(unsigned long start, unsigned long end)
 { }
 static inline void outer_flush_range(unsigned long start, unsigned long end)
+{ }
+static inline void outer_flush_all(void)
 { }
 
 #endif
@@ -421,9 +429,9 @@ static inline void flush_anon_page(struct vm_area_struct *vma,
 }
 
 #define flush_dcache_mmap_lock(mapping) \
-	write_lock_irq(&(mapping)->tree_lock)
+	spin_lock_irq(&(mapping)->priv_lock)
 #define flush_dcache_mmap_unlock(mapping) \
-	write_unlock_irq(&(mapping)->tree_lock)
+	spin_unlock_irq(&(mapping)->priv_lock)
 
 #define flush_icache_user_range(vma,page,addr,len) \
 	flush_dcache_page(page)

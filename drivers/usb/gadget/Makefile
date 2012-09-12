@@ -18,6 +18,7 @@ obj-$(CONFIG_USB_AT91)		+= at91_udc.o
 obj-$(CONFIG_USB_ATMEL_USBA)	+= atmel_usba_udc.o
 obj-$(CONFIG_USB_FSL_USB2)	+= fsl_usb2_udc.o
 obj-$(CONFIG_USB_M66592)	+= m66592-udc.o
+obj-$(CONFIG_USB_ARC)		+= arcotg_udc.o
 
 #
 # USB gadget drivers
@@ -27,8 +28,7 @@ g_ether-objs			:= ether.o usbstring.o config.o epautoconf.o
 g_serial-objs			:= serial.o usbstring.o config.o epautoconf.o
 g_midi-objs			:= gmidi.o usbstring.o config.o epautoconf.o
 gadgetfs-objs			:= inode.o
-g_file_storage-objs		:= file_storage.o usbstring.o config.o \
-					epautoconf.o
+g_file_storage-objs		:= file_storage.o
 g_printer-objs			:= printer.o usbstring.o config.o \
 					epautoconf.o
 

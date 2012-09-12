@@ -1742,6 +1742,8 @@ static int gs_set_config(struct gs_dev *dev, unsigned config)
 				&gs_fullspeed_notify_desc)
 		: NULL;
 
+	gadget->configured = 1;
+
 	ret = usb_ep_enable(dev->dev_in_ep, in);
 	if (ret == 0) {
 		dev->dev_in_ep_desc = in;

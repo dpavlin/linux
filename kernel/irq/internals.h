@@ -9,6 +9,12 @@ extern void irq_chip_set_defaults(struct irq_chip *chip);
 
 /* Set default handler: */
 extern void compat_irq_chip_set_default_handler(struct irq_desc *desc);
+extern void __disable_irq(struct irq_desc *desc, unsigned int irq, bool susp);
+extern void __enable_irq(struct irq_desc *desc, unsigned int irq, bool resume);
+
+extern int redirect_hardirq(struct irq_desc *desc);
+
+void recalculate_desc_flags(struct irq_desc *desc);
 
 #ifdef CONFIG_PROC_FS
 extern void register_irq_proc(unsigned int irq);

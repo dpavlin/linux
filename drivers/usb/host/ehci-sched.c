@@ -323,7 +323,7 @@ static int tt_available (
 		 * already scheduled transactions
 		 */
 		if (125 < usecs) {
-			int ufs = (usecs / 125) - 1;
+			int ufs = (usecs / 125);
 			int i;
 			for (i = uframe; i < (uframe + ufs) && i < 8; i++)
 				if (0 < tt_usecs[i]) {
@@ -437,6 +437,9 @@ static int enable_periodic (struct ehci_hcd *ehci)
 	u32	cmd;
 	int	status;
 
+	if (ehci->periodic_sched++)
+		return 0;
+
 	/* did clearing PSE did take effect yet?
 	 * takes effect only at frame boundaries...
 	 */
@@ -460,6 +463,9 @@ static int disable_periodic (struct ehci_hcd *ehci)
 {
 	u32	cmd;
 	int	status;
+
+	if (--ehci->periodic_sched)
+		return 0;
 
 	/* did setting PSE not take effect yet?
 	 * takes effect only at frame boundaries...
@@ -544,13 +550,10 @@ static int qh_link_periodic (struct ehci_hcd *ehci, struct ehci_qh *qh)
 		: (qh->usecs * 8);
 
 	/* maybe enable periodic schedule processing */
-	if (!ehci->periodic_sched++)
-		return enable_periodic (ehci);
-
-	return 0;
+	return enable_periodic(ehci);
 }
 
-static void qh_unlink_periodic (struct ehci_hcd *ehci, struct ehci_qh *qh)
+static int qh_unlink_periodic(struct ehci_hcd *ehci, struct ehci_qh *qh)
 {
 	unsigned	i;
 	unsigned	period;
@@ -586,9 +589,7 @@ static void qh_unlink_periodic (struct ehci_hcd *ehci, struct ehci_qh *qh)
 	qh_put (qh);
 
 	/* maybe turn off periodic schedule */
-	ehci->periodic_sched--;
-	if (!ehci->periodic_sched)
-		(void) disable_periodic (ehci);
+	return disable_periodic(ehci);
 }
 
 static void intr_deschedule (struct ehci_hcd *ehci, struct ehci_qh *qh)
@@ -759,8 +760,10 @@ static int qh_schedule(struct ehci_hcd *ehci, struct ehci_qh *qh)
 	if (status) {
 		/* "normal" case, uframing flexible except with splits */
 		if (qh->period) {
-			frame = qh->period - 1;
-			do {
+			int		i;
+
+			for (i = qh->period; status && i > 0; --i) {
+				frame = ++ehci->random_frame % qh->period;
 				for (uframe = 0; uframe < 8; uframe++) {
 					status = check_intr_schedule (ehci,
 							frame, uframe, qh,
@@ -768,7 +771,7 @@ static int qh_schedule(struct ehci_hcd *ehci, struct ehci_qh *qh)
 					if (status == 0)
 						break;
 				}
-			} while (status && frame--);
+			}
 
 		/* qh->period == 0 means every uframe */
 		} else {
@@ -917,7 +920,7 @@ iso_stream_init (
 		 */
 		stream->usecs = HS_USECS_ISO (maxp);
 		bandwidth = stream->usecs * 8;
-		bandwidth /= 1 << (interval - 1);
+		bandwidth /= 1 << interval;
 
 	} else {
 		u32		addr;
@@ -950,7 +953,7 @@ iso_stream_init (
 		} else
 			stream->raw_mask = smask_out [hs_transfers - 1];
 		bandwidth = stream->usecs + stream->c_usecs;
-		bandwidth /= 1 << (interval + 2);
+		bandwidth /= 1 << interval << 3;
 
 		/* stream->splits gets created from raw_mask later */
 		stream->address = cpu_to_hc32(ehci, addr);
@@ -1534,7 +1537,7 @@ itd_link_urb (
 					struct ehci_itd, itd_list);
 			list_move_tail (&itd->itd_list, &stream->td_list);
 			itd->stream = iso_stream_get (stream);
-			itd->urb = usb_get_urb (urb);
+			itd->urb = urb;
 			itd_init (ehci, stream, itd);
 		}
 
@@ -1562,9 +1565,7 @@ itd_link_urb (
 	urb->hcpriv = NULL;
 
 	timer_action (ehci, TIMER_IO_WATCHDOG);
-	if (unlikely (!ehci->periodic_sched++))
-		return enable_periodic (ehci);
-	return 0;
+	return enable_periodic(ehci);
 }
 
 #define	ISO_ERRS (EHCI_ISOC_BUF_ERR | EHCI_ISOC_BABBLE | EHCI_ISOC_XACTERR)
@@ -1617,11 +1618,14 @@ itd_complete (
 				desc->status = -EPROTO;
 
 			/* HC need not update length with this error */
-			if (!(t & EHCI_ISOC_BABBLE))
-				desc->actual_length = EHCI_ITD_LENGTH (t);
+			if (!(t & EHCI_ISOC_BABBLE)) {
+				desc->actual_length = EHCI_ITD_LENGTH(t);
+				urb->actual_length += desc->actual_length;
+			}
 		} else if (likely ((t & EHCI_ISOC_ACTIVE) == 0)) {
 			desc->status = 0;
-			desc->actual_length = EHCI_ITD_LENGTH (t);
+			desc->actual_length = EHCI_ITD_LENGTH(t);
+			urb->actual_length += desc->actual_length;
 		} else {
 			/* URB was too late */
 			desc->status = -EXDEV;
@@ -1642,10 +1646,10 @@ itd_complete (
 	ehci_urb_done(ehci, urb, 0);
 	retval = true;
 	urb = NULL;
-	ehci->periodic_sched--;
+	(void) disable_periodic(ehci);
 	ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs--;
 
-	if (unlikely (list_empty (&stream->td_list))) {
+	if (unlikely(list_is_singular(&stream->td_list))) {
 		ehci_to_hcd(ehci)->self.bandwidth_allocated
 				-= stream->bandwidth;
 		ehci_vdbg (ehci,
@@ -1656,7 +1660,6 @@ itd_complete (
 	iso_stream_put (ehci, stream);
 	/* OK to recycle this ITD now that its completion callback ran. */
 done:
-	usb_put_urb(urb);
 	itd->urb = NULL;
 	itd->stream = NULL;
 	list_move(&itd->itd_list, &stream->free_list);
@@ -1935,7 +1938,7 @@ sitd_link_urb (
 				struct ehci_sitd, sitd_list);
 		list_move_tail (&sitd->sitd_list, &stream->td_list);
 		sitd->stream = iso_stream_get (stream);
-		sitd->urb = usb_get_urb (urb);
+		sitd->urb = urb;
 
 		sitd_patch(ehci, stream, sitd, sched, packet);
 		sitd_link (ehci, (next_uframe >> 3) % ehci->periodic_size,
@@ -1951,9 +1954,7 @@ sitd_link_urb (
 	urb->hcpriv = NULL;
 
 	timer_action (ehci, TIMER_IO_WATCHDOG);
-	if (!ehci->periodic_sched++)
-		return enable_periodic (ehci);
-	return 0;
+	return enable_periodic(ehci);
 }
 
 /*-------------------------------------------------------------------------*/
@@ -2001,7 +2002,8 @@ sitd_complete (
 			desc->status = -EPROTO;
 	} else {
 		desc->status = 0;
-		desc->actual_length = desc->length - SITD_LENGTH (t);
+		desc->actual_length = desc->length - SITD_LENGTH(t);
+		urb->actual_length += desc->actual_length;
 	}
 	stream->depth -= stream->interval << 3;
 
@@ -2019,10 +2021,10 @@ sitd_complete (
 	ehci_urb_done(ehci, urb, 0);
 	retval = true;
 	urb = NULL;
-	ehci->periodic_sched--;
+	(void) disable_periodic(ehci);
 	ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs--;
 
-	if (list_empty (&stream->td_list)) {
+	if (list_is_singular(&stream->td_list)) {
 		ehci_to_hcd(ehci)->self.bandwidth_allocated
 				-= stream->bandwidth;
 		ehci_vdbg (ehci,
@@ -2033,7 +2035,6 @@ sitd_complete (
 	iso_stream_put (ehci, stream);
 	/* OK to recycle this SITD now that its completion callback ran. */
 done:
-	usb_put_urb(urb);
 	sitd->urb = NULL;
 	sitd->stream = NULL;
 	list_move(&sitd->sitd_list, &stream->free_list);
@@ -2243,8 +2244,7 @@ restart:
 			if (unlikely (modified)) {
 				if (likely(ehci->periodic_sched > 0))
 					goto restart;
-				/* maybe we can short-circuit this scan! */
-				disable_periodic(ehci);
+				/* short-circuit this scan */
 				now_uframe = clock;
 				break;
 			}

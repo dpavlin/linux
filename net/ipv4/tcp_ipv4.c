@@ -72,13 +72,13 @@
 #include <net/timewait_sock.h>
 #include <net/xfrm.h>
 #include <net/netdma.h>
+#include <net/sock.h>
 
 #include <linux/inet.h>
 #include <linux/ipv6.h>
 #include <linux/stddef.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-
 #include <linux/crypto.h>
 #include <linux/scatterlist.h>
 
@@ -2212,6 +2212,140 @@ static int tcp_seq_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+
+#define ADDR_LH		0x0100007F
+
+typedef struct __reset_port_skip_tag {
+	__u16 port;
+	struct __reset_port_skip_tag *next;
+} __reset_port_skip;
+
+static void tcp_force_reset(int skip_lh, __reset_port_skip *rps)
+{
+	int bucket;
+
+	for (bucket = 0; bucket < tcp_hashinfo.ehash_size; ++bucket) {
+		struct sock *sk;
+		struct hlist_node *node;
+
+		sk_for_each(sk, node, &tcp_hashinfo.ehash[bucket].chain) {
+			int reset = 1;
+
+			struct inet_sock *inet = inet_sk(sk);
+
+			bh_lock_sock(sk);
+			
+			if (skip_lh && inet->saddr == ADDR_LH) {
+				reset = 0;
+			}
+
+			if (reset) {
+				__reset_port_skip *r = rps;
+				while (r != NULL) {
+					if (r->port == inet->num) {
+						printk("skipping TCP reset for port %d\n", r->port);
+
+						reset = 0;
+						break;
+					}
+					
+					r = r->next;
+				}
+			}
+
+			if (reset) {
+				tcp_send_active_reset(sk, GFP_ATOMIC);
+
+				sk->sk_err = ETIMEDOUT;
+				sk->sk_error_report(sk);
+		
+				tcp_done(sk);
+			}
+
+			bh_unlock_sock(sk);
+		}
+	}
+}
+
+#define N_PROC_TCPRESET		"tcpreset"
+
+static struct proc_dir_entry *proc_tcpreset = NULL;
+
+static int
+proc_tcpreset_write(
+	struct file *file,
+	const char __user *buf,
+	unsigned long count,
+	void *data)
+{
+	char lbuf[256], *p;
+	int len;
+
+	memset(lbuf, 0, sizeof(lbuf));
+
+	len = min((int)count, (int)(sizeof(lbuf) - 1));
+
+	if (copy_from_user(lbuf, buf, len)) {
+		return -EFAULT;
+	}
+
+	p = lbuf;
+
+	if (*p++ == '4') {
+		int reset_mode = -1;
+
+		if (*p == '2') {
+			reset_mode = 0;
+		} else if (*p == '3') {
+			reset_mode = 1;
+		}
+
+		if (reset_mode != -1) {
+			__reset_port_skip *rps = NULL;
+			char *q;
+
+			if (p[1] == ',') {
+				++p;
+			}
+
+			do {
+				unsigned long v;
+
+				q = strchr(++p, ',');
+				if (q != NULL) {
+					*q = '\0';
+				}
+
+				v = simple_strtoul(p, NULL, 10);
+				if (v != 0) {
+					__reset_port_skip *r =
+						kmalloc(sizeof(__reset_port_skip), GFP_ATOMIC);
+					if (r != NULL) {
+						r->next = rps;
+						r->port = (__u16)v;
+						rps = r;
+					}
+				}
+
+				p = q;
+			} while (p != NULL);
+
+			tcp_force_reset(reset_mode, rps);
+
+			while (rps != NULL) {
+				__reset_port_skip *next = rps->next;
+				kfree(rps);
+				rps = next;
+			}
+		}
+	}
+
+	return count;
+}
+
+#endif
+
 int tcp_proc_register(struct net *net, struct tcp_seq_afinfo *afinfo)
 {
 	int rc = 0;
@@ -2230,12 +2364,28 @@ int tcp_proc_register(struct net *net, struct tcp_seq_afinfo *afinfo)
 			     &afinfo->seq_fops, afinfo);
 	if (!p)
 		rc = -ENOMEM;
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	proc_tcpreset = create_proc_entry(N_PROC_TCPRESET, S_IWUGO, NULL);
+	if (proc_tcpreset != NULL) {
+		proc_tcpreset->data = NULL;
+		proc_tcpreset->read_proc = NULL;
+		proc_tcpreset->write_proc = proc_tcpreset_write;
+	}
+#endif
 	return rc;
 }
 
 void tcp_proc_unregister(struct net *net, struct tcp_seq_afinfo *afinfo)
 {
 	proc_net_remove(net, afinfo->name);
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	if (proc_tcpreset != NULL) {
+		remove_proc_entry(N_PROC_TCPRESET, NULL);
+
+		proc_tcpreset = NULL;
+	}
+#endif
 }
 
 static void get_openreq4(struct sock *sk, struct request_sock *req,

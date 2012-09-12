@@ -9,6 +9,8 @@
 #include <linux/linkage.h>
 #include <linux/bitops.h>
 #include <linux/lockdep.h>
+#include <linux/plist.h>
+#include <linux/sched_prio.h>
 #include <asm/atomic.h>
 
 struct workqueue_struct;
@@ -27,7 +29,7 @@ struct work_struct {
 #define WORK_STRUCT_PENDING 0		/* T if work item pending execution */
 #define WORK_STRUCT_FLAG_MASK (3UL)
 #define WORK_STRUCT_WQ_DATA_MASK (~WORK_STRUCT_FLAG_MASK)
-	struct list_head entry;
+	struct plist_node entry;
 	work_func_t func;
 #ifdef CONFIG_LOCKDEP
 	struct lockdep_map lockdep_map;
@@ -39,6 +41,7 @@ struct work_struct {
 struct delayed_work {
 	struct work_struct work;
 	struct timer_list timer;
+	int prio;
 };
 
 struct execute_work {
@@ -59,7 +62,7 @@ struct execute_work {
 
 #define __WORK_INITIALIZER(n, f) {				\
 	.data = WORK_DATA_INIT(),				\
-	.entry	= { &(n).entry, &(n).entry },			\
+	.entry	= PLIST_NODE_INIT(n.entry, MAX_PRIO),		\
 	.func = (f),						\
 	__WORK_INIT_LOCKDEP_MAP(#n, &(n))			\
 	}
@@ -100,14 +103,14 @@ struct execute_work {
 									\
 		(_work)->data = (atomic_long_t) WORK_DATA_INIT();	\
 		lockdep_init_map(&(_work)->lockdep_map, #_work, &__key, 0);\
-		INIT_LIST_HEAD(&(_work)->entry);			\
+		plist_node_init(&(_work)->entry, -1);			\
 		PREPARE_WORK((_work), (_func));				\
 	} while (0)
 #else
 #define INIT_WORK(_work, _func)						\
 	do {								\
 		(_work)->data = (atomic_long_t) WORK_DATA_INIT();	\
-		INIT_LIST_HEAD(&(_work)->entry);			\
+		plist_node_init(&(_work)->entry, -1);			\
 		PREPARE_WORK((_work), (_func));				\
 	} while (0)
 #endif
@@ -149,11 +152,11 @@ struct execute_work {
 
 extern struct workqueue_struct *
 __create_workqueue_key(const char *name, int singlethread,
-		       int freezeable, struct lock_class_key *key,
+		       int freezeable, int rt, struct lock_class_key *key,
 		       const char *lock_name);
 
 #ifdef CONFIG_LOCKDEP
-#define __create_workqueue(name, singlethread, freezeable)	\
+#define __create_workqueue(name, singlethread, freezeable, rt)	\
 ({								\
 	static struct lock_class_key __key;			\
 	const char *__lock_name;				\
@@ -164,17 +167,21 @@ __create_workqueue_key(const char *name, int singlethread,
 		__lock_name = #name;				\
 								\
 	__create_workqueue_key((name), (singlethread),		\
-			       (freezeable), &__key,		\
+			       (freezeable), (rt), &__key,	\
 			       __lock_name);			\
 })
 #else
-#define __create_workqueue(name, singlethread, freezeable)	\
-	__create_workqueue_key((name), (singlethread), (freezeable), NULL, NULL)
+#define __create_workqueue(name, singlethread, freezeable, rt)	\
+	__create_workqueue_key((name), (singlethread), (freezeable), (rt), NULL, NULL)
 #endif
 
-#define create_workqueue(name) __create_workqueue((name), 0, 0)
-#define create_freezeable_workqueue(name) __create_workqueue((name), 1, 1)
-#define create_singlethread_workqueue(name) __create_workqueue((name), 1, 0)
+#define create_workqueue(name) __create_workqueue((name), 0, 0, 0)
+#define create_rt_workqueue(name) __create_workqueue((name), 0, 0, 1)
+#define create_freezeable_workqueue(name) __create_workqueue((name), 1, 1, 0)
+#define create_singlethread_workqueue(name) __create_workqueue((name), 1, 0, 0)
+ 
+extern void set_workqueue_prio(struct workqueue_struct *wq, int policy,
+			       int rt_priority, int nice);
 
 extern void destroy_workqueue(struct workqueue_struct *wq);
 
@@ -191,12 +198,14 @@ extern int schedule_work(struct work_struct *work);
 extern int schedule_delayed_work(struct delayed_work *work, unsigned long delay);
 extern int schedule_delayed_work_on(int cpu, struct delayed_work *work,
 					unsigned long delay);
-extern int schedule_on_each_cpu(work_func_t func);
+extern int schedule_on_each_cpu_wq(struct workqueue_struct *wq, work_func_t func);
+extern int schedule_on_each_cpu(void (*func)(void *info), void *info, int retry, int wait);
 extern int current_is_keventd(void);
 extern int keventd_up(void);
 
 extern void init_workqueues(void);
 int execute_in_process_context(work_func_t fn, struct execute_work *);
+
 
 extern int cancel_work_sync(struct work_struct *work);
 

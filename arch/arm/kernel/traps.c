@@ -29,10 +29,15 @@
 #include <asm/traps.h>
 #include <asm/io.h>
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+#include <asm/arch/boot_globals.h>
+#endif
+
 #include "ptrace.h"
 #include "signal.h"
 
 static const char *handler[]= { "prefetch abort", "data abort", "address exception", "interrupt" };
+extern void mxc_wd_reset(void);
 
 #ifdef CONFIG_DEBUG_USER
 unsigned int user_debug;
@@ -43,6 +48,14 @@ static int __init user_debug_setup(char *str)
 	return 1;
 }
 __setup("user_debug=", user_debug_setup);
+#endif
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+char bug_buffer[100];
+static int bug_buffer_filled = 0;
+
+int kernel_oops_counter = 0;
+EXPORT_SYMBOL(kernel_oops_counter);
 #endif
 
 static void dump_mem(const char *str, unsigned long bottom, unsigned long top);
@@ -205,13 +218,45 @@ void show_stack(struct task_struct *tsk, unsigned long *sp)
 #define S_SMP ""
 #endif
 
+char die_buffer[OOPS_SAVE_SIZE];
+char *die_start;
+unsigned die_len;
+static unsigned die_oops_enable;
+
+void insert_oops_chars(char c)
+{
+	if (!die_oops_enable)
+		return;
+
+	die_buffer[die_len++] = c;
+}
+EXPORT_SYMBOL(insert_oops_chars);
+
 static void __die(const char *str, int err, struct thread_info *thread, struct pt_regs *regs)
 {
 	struct task_struct *tsk = thread->task;
 	static int die_counter;
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	die_len = 0; /* Initialize */
+	die_start = die_buffer;
+	kernel_oops_counter++;
+
+	die_buffer[die_len++] = 'O';
+	die_buffer[die_len++] = 'O';
+	die_buffer[die_len++] = 'P';
+	die_buffer[die_len++] = 'S';
+	die_buffer[die_len++] = ':';
+	die_start += die_len;
+
+	if (bug_buffer_filled == 1) {
+		die_len += sprintf(die_start, "%s\n", bug_buffer);
+		die_start += die_len;
+	}
+#endif
 	printk("Internal error: %s: %x [#%d]" S_PREEMPT S_SMP "\n",
 	       str, err, ++die_counter);
+	sysfs_printk_last_file();
 	print_modules();
 	__show_regs(regs);
 	printk("Process %s (pid: %d, stack limit = 0x%p)\n",
@@ -225,7 +270,11 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
 	}
 }
 
-DEFINE_SPINLOCK(die_lock);
+DEFINE_RAW_SPINLOCK(die_lock);
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+extern void *oops_start;
+#endif
 
 /*
  * This function is protected against re-entrancy.
@@ -233,24 +282,39 @@ DEFINE_SPINLOCK(die_lock);
 NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 {
 	struct thread_info *thread = current_thread_info();
-
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	void *die_oops_start = oops_start;
+	memset(die_oops_start, 0, OOPS_SAVE_SIZE);
+	die_oops_enable = 1;
+#endif
 	oops_enter();
 
-	console_verbose();
 	spin_lock_irq(&die_lock);
+	console_verbose();
 	bust_spinlocks(1);
 	__die(str, err, thread, regs);
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	die_oops_enable = 0;
+	die_buffer[die_len++] = '\0';
+#endif
 	bust_spinlocks(0);
 	add_taint(TAINT_DIE);
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	memcpy((void *)die_oops_start, (void *)die_buffer, OOPS_SAVE_SIZE);
+#endif
 	spin_unlock_irq(&die_lock);
+	oops_exit();
 
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	if (bug_buffer_filled)
+		mxc_wd_reset();
+#endif
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
 
 	if (panic_on_oops)
 		panic("Fatal exception");
 
-	oops_exit();
 	do_exit(SIGSEGV);
 }
 
@@ -268,7 +332,7 @@ void arm_notify_die(const char *str, struct pt_regs *regs,
 }
 
 static LIST_HEAD(undef_hook);
-static DEFINE_SPINLOCK(undef_lock);
+static DEFINE_RAW_SPINLOCK(undef_lock);
 
 void register_undef_hook(struct undef_hook *hook)
 {
@@ -288,14 +352,27 @@ void unregister_undef_hook(struct undef_hook *hook)
 	spin_unlock_irqrestore(&undef_lock, flags);
 }
 
+static int call_arm_undef_hook(struct pt_regs *regs, unsigned int instr)
+{
+	struct undef_hook *hook;
+	unsigned long flags;
+	int (*fn)(struct pt_regs *regs, unsigned int instr) = NULL;
+
+	spin_lock_irqsave(&undef_lock, flags);
+	list_for_each_entry(hook, &undef_hook, node)
+		if ((instr & hook->instr_mask) == hook->instr_val &&
+			(regs->ARM_cpsr & hook->cpsr_mask) == hook->cpsr_val)
+				fn = hook->fn;
+	spin_unlock_irqrestore(&undef_lock, flags);
+	return fn ? fn(regs, instr) : 1;
+}
+
 asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 {
 	unsigned int correction = thumb_mode(regs) ? 2 : 4;
 	unsigned int instr;
-	struct undef_hook *hook;
 	siginfo_t info;
 	void __user *pc;
-	unsigned long flags;
 
 	/*
 	 * According to the ARM ARM, PC is 2 or 4 bytes ahead,
@@ -325,17 +402,8 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 	}
 #endif
 
-	spin_lock_irqsave(&undef_lock, flags);
-	list_for_each_entry(hook, &undef_hook, node) {
-		if ((instr & hook->instr_mask) == hook->instr_val &&
-		    (regs->ARM_cpsr & hook->cpsr_mask) == hook->cpsr_val) {
-			if (hook->fn(regs, instr) == 0) {
-				spin_unlock_irqrestore(&undef_lock, flags);
-				return;
-			}
-		}
-	}
-	spin_unlock_irqrestore(&undef_lock, flags);
+	if (call_arm_undef_hook(regs, instr) == 0)
+		return;
 
 #ifdef CONFIG_DEBUG_USER
 	if (user_debug & UDBG_UNDEFINED) {
@@ -357,6 +425,7 @@ asmlinkage void do_unexp_fiq (struct pt_regs *regs)
 {
 	printk("Hmm.  Unexpected FIQ received, but trying to continue\n");
 	printk("You may have a hardware problem...\n");
+	print_preempt_trace(current);
 }
 
 /*
@@ -556,7 +625,7 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 		   if not implemented, rather than raising SIGILL.  This
 		   way the calling program can gracefully determine whether
 		   a feature is supported.  */
-		if (no <= 0x7ff)
+		if ((no & 0xffff) <= 0x7ff)
 			return -ENOSYS;
 		break;
 	}
@@ -660,7 +729,16 @@ baddataabort(int code, unsigned long instr, struct pt_regs *regs)
 
 void __attribute__((noreturn)) __bug(const char *file, int line)
 {
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	unsigned tlen;
+	char *start = bug_buffer;
+
+	tlen = sprintf(start, "kernel BUG at %s:%d!\n", file, line);
+	printk(KERN_CRIT"%s\n", bug_buffer);
+	bug_buffer_filled = 1;
+#else
 	printk(KERN_CRIT"kernel BUG at %s:%d!\n", file, line);
+#endif
 	*(int *)0 = 0;
 
 	/* Avoid "noreturn function does return" */
@@ -707,6 +785,11 @@ void abort(void)
 EXPORT_SYMBOL(abort);
 
 void __init trap_init(void)
+{
+	return;
+}
+
+void __init early_trap_init(void)
 {
 	unsigned long vectors = CONFIG_VECTORS_BASE;
 	extern char __stubs_start[], __stubs_end[];

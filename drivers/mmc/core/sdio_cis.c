@@ -246,7 +246,7 @@ static int sdio_read_cis(struct mmc_card *card, struct sdio_func *func)
 			this->size = tpl_link;
 			*prev = this;
 			prev = &this->next;
-			printk(KERN_DEBUG
+			printk(KERN_INFO
 			       "%s: queuing CIS tuple 0x%02x length %u\n",
 			       mmc_hostname(card->host), tpl_code, tpl_link);
 		} else {

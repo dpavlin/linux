@@ -126,6 +126,17 @@ struct tag_cmdline {
 	char	cmdline[1];	/* this is the minimum size */
 };
 
+/* 16 byte id for serial number. "64-bits wasn't enough for us." */
+#define ATAG_SERIAL16   0x5441000a
+
+/* 16 byte id for a board revision. */
+#define ATAG_REVISION16 0x5441000b
+
+/* 16 digit alphanumeric id used for serial numbers, board ids, etc. */
+struct tag_id16 {
+	__u8 data[16];
+};
+
 /* acorn RiscPC specific information */
 #define ATAG_ACORN	0x41000101
 
@@ -155,6 +166,7 @@ struct tag {
 		struct tag_revision	revision;
 		struct tag_videolfb	videolfb;
 		struct tag_cmdline	cmdline;
+		struct tag_id16 id16;
 
 		/*
 		 * Acorn specific

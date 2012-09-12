@@ -16,6 +16,7 @@
 #include <linux/platform_device.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
+#include <sound/driver.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/control.h>
@@ -193,6 +194,24 @@ struct soc_enum;
 struct snd_soc_ac97_ops;
 struct snd_soc_clock_info;
 
+/*
+ * Bias levels
+ *
+ * @ON:      Bias is fully on for audio playback and capture operations.
+ * @PREPARE: Prepare for audio operations. Called before DAPM switching for
+ *           stream start and stop operations.
+ * @STANDBY: Low power standby state when no playback/capture operations are
+ *           in progress. NOTE: The transition time between STANDBY and ON
+ *           should be as fast as possible and no longer than 10ms.
+ * @OFF:     Power Off. No restrictions on transition times.
+ */
+enum snd_soc_bias_level {
+	SND_SOC_BIAS_ON,
+	SND_SOC_BIAS_PREPARE,
+	SND_SOC_BIAS_STANDBY,
+	SND_SOC_BIAS_OFF,
+};
+
 typedef int (*hw_write_t)(void *,const char* ,int);
 typedef int (*hw_read_t)(void *,char* ,int);
 
@@ -202,6 +221,12 @@ extern struct snd_ac97_bus_ops soc_ac97_ops;
 void snd_soc_free_pcms(struct snd_soc_device *socdev);
 int snd_soc_new_pcms(struct snd_soc_device *socdev, int idx, const char *xid);
 int snd_soc_register_card(struct snd_soc_device *socdev);
+
+/* Utility functions to get clock rates from various things */
+int snd_soc_calc_frame_size(int sample_size, int channels, int tdm_slots);
+int snd_soc_params_to_frame_size(struct snd_pcm_hw_params *params);
+int snd_soc_calc_bclk(int fs, int sample_size, int channels, int tdm_slots);
+int snd_soc_params_to_bclk(struct snd_pcm_hw_params *parms);
 
 /* set runtime hw params */
 int snd_soc_set_runtime_hwparams(struct snd_pcm_substream *substream,
@@ -226,6 +251,8 @@ void snd_soc_free_ac97_codec(struct snd_soc_codec *codec);
  */
 struct snd_kcontrol *snd_soc_cnew(const struct snd_kcontrol_new *_template,
 	void *data, char *long_name);
+int snd_soc_add_controls(struct snd_soc_codec *codec,
+	const struct snd_kcontrol_new *controls, int num_controls);
 int snd_soc_info_enum_double(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_info *uinfo);
 int snd_soc_info_enum_ext(struct snd_kcontrol *kcontrol,
@@ -238,7 +265,8 @@ int snd_soc_info_volsw(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_info *uinfo);
 int snd_soc_info_volsw_ext(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_info *uinfo);
-#define snd_soc_info_bool_ext		snd_ctl_boolean_mono_info
+int snd_soc_info_bool_ext(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_info *uinfo);
 int snd_soc_get_volsw(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol);
 int snd_soc_put_volsw(struct snd_kcontrol *kcontrol,
@@ -503,3 +531,4 @@ struct soc_enum {
 };
 
 #endif
+

@@ -17,6 +17,9 @@ typedef unsigned long elf_freg_t[3];
 typedef elf_greg_t elf_gregset_t[ELF_NGREG];
 
 typedef struct user_fp elf_fpregset_t;
+
+int dump_task_regs(struct task_struct *t, elf_gregset_t *elfregs);
+
 #endif
 
 #define EM_ARM	40
@@ -78,6 +81,8 @@ extern char elf_platform[];
 #define ELF_26BIT_OK(x) \
 	((elf_hwcap & HWCAP_26BIT && (x)->e_flags & EF_ARM_APCS26) || \
 	  ((x)->e_flags & EF_ARM_APCS26) == 0)
+
+#define ELF_CORE_COPY_TASK_REGS		dump_task_regs	 
 
 #define USE_ELF_CORE_DUMP
 #define ELF_EXEC_PAGESIZE	4096

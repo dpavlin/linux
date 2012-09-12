@@ -12,8 +12,11 @@ config ARM
 	select RTC_LIB
 	select SYS_SUPPORTS_APM_EMULATION
 	select HAVE_OPROFILE
+	select HAVE_ARCH_KGDB
 	select HAVE_KPROBES if (!XIP_KERNEL)
 	select HAVE_KRETPROBES if (HAVE_KPROBES)
+	select HAVE_FTRACE if (!XIP_KERNEL)
+	select HAVE_DYNAMIC_FTRACE if (HAVE_FTRACE)
 	help
 	  The ARM series is a line of low-power-consumption RISC chip designs
 	  licensed by ARM Ltd and targeted at embedded applications and
@@ -33,6 +36,10 @@ config GENERIC_TIME
 	bool
 	default n
 
+config GENERIC_CMOS_UPDATE
+	bool
+	default y
+
 config GENERIC_CLOCKEVENTS
 	bool
 	default n
@@ -41,6 +48,10 @@ config GENERIC_CLOCKEVENTS_BROADCAST
 	bool
 	depends on GENERIC_CLOCKEVENTS
 	default y if SMP && !LOCAL_TIMERS
+
+config STACKTRACE_SUPPORT
+	bool
+	default y
 
 config MMU
 	bool
@@ -368,6 +379,8 @@ config ARCH_NS9XXX
 config ARCH_MXC
 	bool "Freescale MXC/iMX-based"
 	select ARCH_MTD_XIP
+	select GENERIC_TIME
+	select GENERIC_CLOCKEVENTS
 	help
 	  Support for Freescale MXC/iMX-based family of processors
 
@@ -690,18 +703,7 @@ config LOCAL_TIMERS
 	  accounting to be spread across the timer interval, preventing a
 	  "thundering herd" at every timer tick.
 
-config PREEMPT
-	bool "Preemptible Kernel (EXPERIMENTAL)"
-	depends on EXPERIMENTAL
-	help
-	  This option reduces the latency of the kernel when reacting to
-	  real-time or interactive events by allowing a low priority process to
-	  be preempted even if it is in kernel mode executing a system call.
-	  This allows applications to run more reliably even when the system is
-	  under load.
-
-	  Say Y here if you are building a kernel for a desktop, embedded
-	  or real-time system.  Say N if you are unsure.
+source kernel/Kconfig.preempt
 
 config NO_IDLE_HZ
 	bool "Dynamic tick timer"
@@ -795,7 +797,7 @@ config LEDS
 		   ARCH_OMAP || ARCH_P720T || ARCH_PXA_IDP || \
 		   ARCH_SA1100 || ARCH_SHARK || ARCH_VERSATILE || \
 		   ARCH_AT91 || MACH_TRIZEPS4 || ARCH_DAVINCI || \
-		   ARCH_KS8695 || MACH_RD88F5182
+		   ARCH_KS8695 || MACH_RD88F5182 || ARCH_MXC
 	help
 	  If you say Y here, the LEDs on your machine will be used
 	  to provide useful information about your current system status.
@@ -954,7 +956,7 @@ config ATAGS_PROC
 
 endmenu
 
-if (ARCH_SA1100 || ARCH_INTEGRATOR || ARCH_OMAP || ARCH_IMX || ARCH_PXA)
+if (ARCH_SA1100 || ARCH_INTEGRATOR || ARCH_OMAP || ARCH_IMX || ARCH_PXA || ARCH_MXC)
 
 menu "CPU Frequency scaling"
 
@@ -995,6 +997,12 @@ config CPU_FREQ_PXA
 	depends on CPU_FREQ && ARCH_PXA && PXA25x
 	default y
 	select CPU_FREQ_DEFAULT_GOV_USERSPACE
+
+config CPU_FREQ_IMX
+         tristate "CPUfreq driver for i.MX CPUs"
+         depends on ARCH_MXC && CPU_FREQ && REGULATOR
+         help
+           This enables the CPUfreq driver for i.MX CPUs.
 
 endmenu
 
@@ -1105,6 +1113,8 @@ if ALIGNMENT_TRAP || !CPU_CP15_MMU
 source "drivers/mtd/Kconfig"
 endif
 
+source "drivers/regulator/Kconfig"
+
 source "drivers/parport/Kconfig"
 
 source "drivers/pnp/Kconfig"
@@ -1140,6 +1150,8 @@ source "drivers/input/Kconfig"
 source "drivers/char/Kconfig"
 
 source "drivers/i2c/Kconfig"
+
+source "drivers/i2c-slave/Kconfig"
 
 source "drivers/spi/Kconfig"
 
@@ -1180,6 +1192,10 @@ source "drivers/dma/Kconfig"
 source "drivers/dca/Kconfig"
 
 source "drivers/uio/Kconfig"
+
+if ARCH_MXC
+source "drivers/mxc/Kconfig"
+endif
 
 endmenu
 

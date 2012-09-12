@@ -62,6 +62,7 @@ static int debug;
 static struct usb_serial *serial_table[SERIAL_TTY_MINORS];	/* initially all NULL */
 static DEFINE_MUTEX(table_lock);
 static LIST_HEAD(usb_serial_driver_list);
+static ushort maxSize = 0;
 
 struct usb_serial *usb_serial_get_by_index(unsigned index)
 {
@@ -812,7 +813,7 @@ int usb_serial_probe(struct usb_interface *interface,
 			dev_err(&interface->dev, "No free urbs available\n");
 			goto probe_error;
 		}
-		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 		port->bulk_in_size = buffer_size;
 		port->bulk_in_endpointAddress = endpoint->bEndpointAddress;
 		port->bulk_in_buffer = kmalloc (buffer_size, GFP_KERNEL);
@@ -836,7 +837,7 @@ int usb_serial_probe(struct usb_interface *interface,
 			dev_err(&interface->dev, "No free urbs available\n");
 			goto probe_error;
 		}
-		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+		buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 		port->bulk_out_size = buffer_size;
 		port->bulk_out_endpointAddress = endpoint->bEndpointAddress;
 		port->bulk_out_buffer = kmalloc (buffer_size, GFP_KERNEL);
@@ -861,7 +862,7 @@ int usb_serial_probe(struct usb_interface *interface,
 				dev_err(&interface->dev, "No free urbs available\n");
 				goto probe_error;
 			}
-			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 			port->interrupt_in_endpointAddress = endpoint->bEndpointAddress;
 			port->interrupt_in_buffer = kmalloc (buffer_size, GFP_KERNEL);
 			if (!port->interrupt_in_buffer) {
@@ -888,7 +889,7 @@ int usb_serial_probe(struct usb_interface *interface,
 				dev_err(&interface->dev, "No free urbs available\n");
 				goto probe_error;
 			}
-			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize);
+			buffer_size = le16_to_cpu(endpoint->wMaxPacketSize > maxSize ? endpoint->wMaxPacketSize : maxSize);
 			port->interrupt_out_size = buffer_size;
 			port->interrupt_out_endpointAddress = endpoint->bEndpointAddress;
 			port->interrupt_out_buffer = kmalloc (buffer_size, GFP_KERNEL);
@@ -1226,3 +1227,6 @@ MODULE_LICENSE("GPL");
 
 module_param(debug, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Debug enabled or not");
+module_param(maxSize, ushort, 0);
+MODULE_PARM_DESC(maxSize, "User specified USB endpoint size");
+

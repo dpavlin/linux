@@ -79,6 +79,23 @@ config USB_GADGET_DEBUG_FS
 	   Enable these files by choosing "Y" here.  If in doubt, or
 	   to conserve kernel memory, say "N".
 
+config USB_GADGET_VBUS_DRAW
+	int "Maximum VBUS Power usage (2-500 mA)"
+	range 2 500
+	default 500
+	help
+	   Some devices need to draw power from USB when they are
+	   configured, perhaps to operate circuitry or to recharge
+	   batteries.  This is in addition to any local power supply,
+	   such as an AC adapter or batteries.
+
+	   Enter the maximum power your device draws through USB, in
+	   milliAmperes.  The permitted range of values is 2 - 500 mA;
+	   0 mA would be legal, but can make some hosts misbehave.
+
+	   This value will be used except for system-specific gadget
+	   drivers that have more specific information.
+
 config	USB_GADGET_SELECTED
 	boolean
 
@@ -305,16 +322,29 @@ config USB_OMAP
 	default USB_GADGET
 	select USB_GADGET_SELECTED
 
-config USB_OTG
-	boolean "OTG Support"
-	depends on USB_GADGET_OMAP && ARCH_OMAP_OTG && USB_OHCI_HCD
+config USB_GADGET_ARC
+	boolean "Freescale USB Device Controller"
+	depends on ARCH_MXC
+	select USB_GADGET_DUALSPEED if USB_GADGET_FSL_1504 || USB_GADGET_FSL_UTMI
 	help
-	   The most notable feature of USB OTG is support for a
-	   "Dual-Role" device, which can act as either a device
-	   or a host.  The initial role choice can be changed
-	   later, when two dual-role devices talk to each other.
+	   Some Freescale processors have a USBOTG controller,
+	   which supports device mode.
 
-	   Select this only if your OMAP board has a Mini-AB connector.
+	   Say "y" to link the driver statically, or "m" to build a
+	   dynamically linked module called "arc_udc" and force all
+	   gadget drivers to also be dynamically linked.
+
+config USB_STATIC_IRAM_PPH
+	bool "Apply static IRAM patch"
+	depends on USB_GADGET_ARC && (ARCH_MX37 || ARCH_MX3 || ARCH_MX35)
+	help
+	   Apply static IRAM patch to peripheral driver.  
+
+config USB_ARC
+	tristate
+	depends on USB_GADGET_ARC
+	default USB_GADGET
+	select USB_GADGET_SELECTED
 
 config USB_GADGET_S3C2410
 	boolean "S3C2410 USB Device Controller"
@@ -389,6 +419,19 @@ config USB_DUMMY_HCD
 
 endchoice
 
+config USB_OTG
+	boolean "OTG Support"
+	depends on (USB_GADGET_OMAP && ARCH_OMAP_OTG && USB_OHCI_HCD) || \
+		   (USB_GADGET_ARC && (ARCH_MX3 || ARCH_MX27 || ARCH_MXC91221) && \
+		   USB_EHCI_HCD)
+	help
+	   The most notable feature of USB OTG is support for a
+	   "Dual-Role" device, which can act as either a device
+	   or a host.  The initial role choice can be changed
+	   later, when two dual-role devices talk to each other.
+
+	   Select this only if your board has a Mini-AB connector.
+
 config USB_GADGET_DUALSPEED
 	bool
 	depends on USB_GADGET
@@ -396,6 +439,63 @@ config USB_GADGET_DUALSPEED
 	help
 	  Means that gadget drivers should include extra descriptors
 	  and code to handle dual-speed controllers.
+
+config USB_GADGET_ARC_OTG
+	bool "Support for DR peripheral port on Freescale controller"
+	depends on USB_GADGET_ARC
+	default y
+	help
+	  Enable support for the Freescale Dual Role port in peripheral mode.
+
+config USB_GADGET_WAKE_UP
+	bool "Support gadget wake up by DR port"
+	depends on USB_GADGET_ARC_OTG
+	default n
+	help
+	  Enable system wake up from SR or DSM mode by connected host.
+choice
+	prompt "Select transceiver for DR port"
+	depends on USB_GADGET_ARC_OTG
+	help
+	  Choose the transceiver to use with the Freescale DR port.
+
+config USB_GADGET_FSL_MC13783
+	bool "Freescale MC13783"
+	depends on !USB_EHCI_FSL_1301 && !USB_EHCI_FSL_1504 && !USB_EHCI_FSL_UTMI && !MACH_MX25_3DS
+	---help---
+	  Enable support for the Full Speed Freescale MC13783 transceiver.
+
+	  The mx27ads, mx31ads and mx32ads boards require modifications
+	  to support this transceiver.
+
+config USB_GADGET_FSL_1301
+	bool "Philips ISP1301"
+	depends on !USB_EHCI_FSL_MC13783 && !USB_EHCI_FSL_1504 && !USB_EHCI_FSL_UTMI && !MACH_MX25_3DS
+	---help---
+	  Enable support for the Full Speed Philips ISP1301 transceiver.
+
+	  This is the factory default for the mx27ads board.
+	  The mx31ads and mx32ads boards require modifications
+	  to support this transceiver.
+
+config USB_GADGET_FSL_1504
+	bool "Philips ISP1504"
+	depends on !USB_EHCI_FSL_MC13783 && !USB_EHCI_FSL_1301 && !USB_EHCI_FSL_UTMI && !MACH_MX25_3DS
+	---help---
+	  Enable support for the High Speed Philips ISP1504 transceiver.
+
+	  This is the factory default for the mx31ads and mx32ads boards.
+	  The mx27ads board requires modifications to support this transceiver.
+
+config USB_GADGET_FSL_UTMI
+	bool "On-chip UTMI"
+	depends on !USB_EHCI_FSL_MC13783 && !USB_EHCI_FSL_1301 && !USB_EHCI_FSL_1504
+	---help---
+	  Enable support for the High Speed Philips ISP1504 transceiver.
+
+	  This is the factory default for the mx35 board.
+
+endchoice
 
 #
 # USB Gadget Drivers
@@ -448,7 +548,7 @@ config USB_ZERO
 
 config USB_ZERO_HNPTEST
 	boolean "HNP Test Device"
-	depends on USB_ZERO && USB_OTG
+	depends on USB_ZERO && USB_OTG2
 	help
 	  You can configure this device to enumerate using the device
 	  identifiers of the USB-OTG test device.  That means that when

@@ -235,6 +235,10 @@ MODULE_PARM_DESC(host_addr, "Host Ethernet Address");
 #define	DEV_CONFIG_CDC
 #endif
 
+#ifdef CONFIG_USB_GADGET_ARC
+#define DEV_CONFIG_CDC
+#endif
+
 #ifdef CONFIG_USB_GADGET_S3C2410
 #define DEV_CONFIG_CDC
 #endif
@@ -464,7 +468,7 @@ eth_config = {
 	.bConfigurationValue =	DEV_CONFIG_VALUE,
 	.iConfiguration =	STRING_CDC,
 	.bmAttributes =		USB_CONFIG_ATT_ONE | USB_CONFIG_ATT_SELFPOWER,
-	.bMaxPower =		50,
+	.bMaxPower =		CONFIG_USB_GADGET_VBUS_DRAW / 2,
 };
 
 #ifdef	CONFIG_USB_ETH_RNDIS
@@ -478,7 +482,7 @@ rndis_config = {
 	.bConfigurationValue =  DEV_RNDIS_CONFIG_VALUE,
 	.iConfiguration =       STRING_RNDIS,
 	.bmAttributes =		USB_CONFIG_ATT_ONE | USB_CONFIG_ATT_SELFPOWER,
-	.bMaxPower =            50,
+	.bMaxPower =            CONFIG_USB_GADGET_VBUS_DRAW / 2,
 };
 #endif
 
@@ -1188,6 +1192,7 @@ eth_set_config (struct eth_dev *dev, unsigned number, gfp_t gfp_flags)
 			eth_reset_config (dev);
 		usb_gadget_vbus_draw(dev->gadget,
 				gadget_is_otg(dev->gadget) ? 8 : 100);
+		gadget->configured = 1;
 	} else {
 		char *speed;
 		unsigned power;
@@ -1204,6 +1209,7 @@ eth_set_config (struct eth_dev *dev, unsigned number, gfp_t gfp_flags)
 		}
 
 		dev->config = number;
+		gadget->configured = 1;
 		INFO (dev, "%s speed config #%d: %d mA, %s, using %s\n",
 				speed, number, power, driver_desc,
 				rndis_active(dev)
@@ -1603,6 +1609,8 @@ eth_disconnect (struct usb_gadget *gadget)
 	netif_carrier_off (dev->net);
 	eth_reset_config (dev);
 	spin_unlock_irqrestore (&dev->lock, flags);
+
+	gadget->configured = 0;
 
 	/* FIXME RNDIS should enter RNDIS_UNINITIALIZED */
 
@@ -2227,6 +2235,8 @@ eth_unbind (struct usb_gadget *gadget)
 	/* assuming we used keventd, it must quiesce too */
 	flush_scheduled_work ();
 	set_gadget_data (gadget, NULL);
+
+	gadget->configured = 0;
 }
 
 static u8 __init nibble (unsigned char c)
@@ -2606,6 +2616,7 @@ eth_suspend (struct usb_gadget *gadget)
 
 	DEBUG (dev, "suspend\n");
 	dev->suspended = 1;
+	gadget->configured = 0;
 }
 
 static void

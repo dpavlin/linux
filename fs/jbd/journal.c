@@ -36,6 +36,7 @@
 #include <linux/poison.h>
 #include <linux/proc_fs.h>
 #include <linux/debugfs.h>
+#include <linux/ioprio.h>
 
 #include <asm/uaccess.h>
 #include <asm/page.h>
@@ -130,6 +131,8 @@ static int kjournald(void *arg)
 
 	printk(KERN_INFO "kjournald starting.  Commit interval %ld seconds\n",
 			journal->j_commit_interval / HZ);
+
+	set_task_ioprio(current, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 4));
 
 	/*
 	 * And now, wait forever for commit wakeup events.
