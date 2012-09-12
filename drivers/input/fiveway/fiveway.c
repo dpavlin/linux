@@ -611,7 +611,7 @@ static irqreturn_t fiveway_irq (int irq, void *data, struct pt_regs *r)
         return IRQ_HANDLED;
 
   if (fiveway_datain(SELECT_LINE) == 0)
-	schedule_delayed_work(&select_work, msecs_to_jiffies(1900));
+	schedule_delayed_work(&select_work, msecs_to_jiffies(900));
 
   if ( !disabled_up_irq && (fiveway_datain(UP_LINE) == 0) && (irq == FIVEWAY_UP_IRQ))  {
       if (ignore_up_line && (line_state[UP_LINE] == LINE_ASSERTED)) {

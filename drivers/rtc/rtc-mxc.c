@@ -39,6 +39,10 @@
 #include <linux/device.h>
 #include <linux/pmic_external.h>
 #include <asm/hardware.h>
+
+/* MakeFile generated header*/
+#include <linux/kindle_version.h>
+
 #define RTC_INPUT_CLK_32768HZ	(0x00 << 5)
 #define RTC_INPUT_CLK_32000HZ	(0x01 << 5)
 #define RTC_INPUT_CLK_38400HZ	(0x02 << 5)
@@ -776,14 +780,14 @@ static void mxc_check_boot_reason(void)
 
 	if (reg_memory_a & 0x2) {
 		pmic_write_reg(REG_MEM_A, (0 << 1), (1 << 1));
-		printk(KERN_ERR "boot: I def:rbt:reset=user_reboot:\n");
+		printk(KERN_ERR "boot: I def:rbt:reset=user_reboot,version=%s:\n", VERSION_TAG);
 		boot_reason = 1;
 		goto out;
 	}
 
 	if (reg_memory_a & 0x4) {
 		pmic_write_reg(REG_MEM_A, (0 << 2), (1 << 2));
-		printk(KERN_ERR "boot: W def:hlt:halt=Device:\n");
+		printk(KERN_ERR "boot: W def:hlt:halt=Device,version=%s:\n", VERSION_TAG);	
 		boot_reason = 1;
 		goto out;
 	}
@@ -792,7 +796,7 @@ out:
 	if (reg_memory_a & 0x10) {
 		/* Clear out bit #4 */
 		pmic_write_reg(REG_MEM_A, (0 << 4), (1 << 4));
-		printk(KERN_ERR "boot: W def:crit:reset=critical_battery:\n");
+		printk(KERN_ERR "boot: W def:crit:reset=critical_battery,version=%s:\n", VERSION_TAG);
 		boot_reason = 1;
 	}
 
@@ -859,15 +863,16 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	if (!boot_reason && (saved_last_seconds != 0) && (boot_seconds > saved_last_seconds)) {
 		if ( ((boot_seconds - saved_last_seconds) > WDOG_LOWER_THRESHOLD) &&
 			((boot_seconds - saved_last_seconds) <= WDOG_HIGHER_THRESHOLD) ) {
-			printk(KERN_ERR "boot: C def:rst:reset=watchdog:\n");
+			printk(KERN_ERR "boot: C def:rst:reset=watchdog,version=%s:\n", VERSION_TAG);
+		
 		}
 		else {
-			printk(KERN_ERR "boot: C def:rst:reset=hard:\n");
+			printk(KERN_ERR "boot: C def:rst:reset=hard,version=%s:\n", VERSION_TAG);
 		}
 	}
 	else {
-		if (!boot_reason && !saved_last_seconds)
-			printk(KERN_ERR "boot: C def:bcut:batterycut=1:\n");
+		if (!boot_reason && !saved_last_seconds)	
+			printk(KERN_ERR "boot: C def:bcut:batterycut=1,version=%s:\n", VERSION_TAG) ;
 	}
 
 	/*

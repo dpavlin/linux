@@ -647,7 +647,7 @@ static void mx35_configure_rtc(int atlas_3_1)
 	pmic_rtc_set_time_alarm(&pmic_time);
 }
 
-#define PMIC_BUTTON_DEBOUNCE_VALUE	0x2
+#define PMIC_BUTTON_DEBOUNCE_VALUE	0x3
 #define PMIC_BUTTON_DEBOUNCE_MASK	0x3
 
 static void mxc_configure_pb_debounce(void)
@@ -660,6 +660,11 @@ static void mxc_configure_pb_debounce(void)
 
 	/* Configure debounce time for power button 3 */
 	pmic_write_reg(REG_POWER_CTL2, (PMIC_BUTTON_DEBOUNCE_VALUE << 8), (PMIC_BUTTON_DEBOUNCE_MASK << 8));
+
+	pmic_write_reg(REG_POWER_CTL2, (0 << 3), (1 << 3));
+	pmic_write_reg(REG_POWER_CTL2, (0 << 1), (1 << 1));
+	pmic_write_reg(REG_POWER_CTL2, (0 << 2), (1 << 2));
+	pmic_write_reg(23, (1 << 24), (1 << 24));
 }
 
 /*!
