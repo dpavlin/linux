@@ -143,16 +143,6 @@ static int sdhci_pio_counter = 0;
 
 static struct regulator *vsd_reg;
 
-static void sdhci_vgen2_off(void)
-{
-	pmic_write_reg(32, (0 << 12), (1 << 12));
-}
-
-static void sdhci_vgen2_on(void)
-{
-	pmic_write_reg(32, (1 << 12), (1 << 12));
-}
-
 struct sdhci_host *sdio_host;
 
 /* Always follow the driver's idle pm model */
@@ -196,7 +186,7 @@ static void sdio_mmc1_resume_work(struct work_struct *work)
 static DECLARE_DELAYED_WORK(sdio_mmc1_clk_wq, sdio_mmc1_clk_work);
 static DECLARE_DELAYED_WORK(sdio_mmc1_resume_wq, sdio_mmc1_resume_work);
 
-static int sdio_lpm_threshold_level = 1000;	/* After 10ms */
+static int sdio_lpm_threshold_level = 1000;	/* After 1s */
 
 DEFINE_SPINLOCK(sdio_lpm_mutex);
 
@@ -475,8 +465,8 @@ static void sdhci_sdio_clk(int enable)
         if (enable) {
 		/* Enable the clock */
                 if (!sdio_host->plat_data->clk_flg) {
+			sdio_host->plat_data->clk_flg = 1;
                         clk_enable(sdio_host->clk);
-                        sdio_host->plat_data->clk_flg = 1;
                 }
         }
         else {
@@ -495,7 +485,6 @@ static void sdhci_sdio_clk(int enable)
 static void sdhci_idle_bus_adjust(struct sdhci_host *host, u8 idle)
 {
 	u32 ctrl;
-	u32 flags;
 
 	if (host->flags & SDHCI_IN_4BIT_MODE) {
 		/* while bus is idle, leave it in 1-bit mode at the controller level */
@@ -508,8 +497,8 @@ static void sdhci_idle_bus_adjust(struct sdhci_host *host, u8 idle)
 		}
 		writel(ctrl, host->ioaddr + SDHCI_HOST_CONTROL); 
 		if (idle) {
-		//	schedule_delayed_work(&sdio_lpm_work,
-		//		msecs_to_jiffies(sdio_lpm_threshold_level));
+			schedule_delayed_work(&sdio_lpm_work,
+				msecs_to_jiffies(sdio_lpm_threshold_level));
 		}
 	}
 }
@@ -1249,9 +1238,6 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	}
 	spin_unlock_irqrestore(&host->lock, flags);
 
-//	if ((host->id == 1) && !sdio_mmc1_clock)
-//		sdhci_sdio_clk(0);
-
 	host->mrq = mrq;
 	if (!(host->flags & SDHCI_CD_PRESENT)) {
 		host->mrq->cmd->error = -ENOMEDIUM;
@@ -1532,8 +1518,8 @@ static void sdhci_tasklet_finish(unsigned long param)
 	host->cmd = NULL;
 	host->data = NULL;
 
-//	if (host->id == 1)
-//		sdhci_idle_bus_adjust(host, 1);
+	if (host->id == 1)
+		sdhci_idle_bus_adjust(host, 1);
 	sdhci_deactivate_led(host);
 
 	mmiowb();

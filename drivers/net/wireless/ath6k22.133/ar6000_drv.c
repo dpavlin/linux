@@ -665,25 +665,12 @@ static int ar6000_probe(struct platform_device *pdev)
 
 static int ar6000_remove(struct platform_device *pdev)
 {
-    int i = 0;
-    struct net_device *ar6000_netdev;
-
 #ifdef ADAPTIVE_POWER_THROUGHPUT_CONTROL
     /* Delete the Adaptive Power Control timer */
     if (timer_pending(&aptcTimer)) {
         del_timer_sync(&aptcTimer);
     }
 #endif /* ADAPTIVE_POWER_THROUGHPUT_CONTROL */
-
-   HIFShutDownDevice(NULL);
-
-    for (i=0; i < MAX_AR6000; i++) {
-        if (ar6000_devices[i] != NULL) {
-            ar6000_netdev = ar6000_devices[i];
-            ar6000_devices[i] = NULL;
-            ar6000_destroy(ar6000_netdev, 1);
-        }
-    }
 
     AR_DEBUG_PRINTF("ar6000_cleanup: success\n");
 
@@ -1007,6 +994,25 @@ static int __init ar6000_init_module(void)
 
 static void __exit ar6000_cleanup_module(void)
 {
+	int i = 0;
+	struct net_device *ar6000_netdev;
+
+	printk(KERN_INFO "ar6000_cleanup_module\n");
+
+	for (i=0; i < MAX_AR6000; i++) {
+		if (ar6000_devices[i] != NULL) {
+			ar6000_netdev = ar6000_devices[i];
+			ar6000_devices[i] = NULL;
+			ar6000_destroy(ar6000_netdev, 1);
+		}
+	}
+
+	printk(KERN_INFO "ar6000_destroy\n");
+
+	HIFShutDownDevice(NULL);
+
+	printk(KERN_INFO "HIFShutDownDevice\n");
+
 	platform_driver_unregister(&ar6000_pdev_driver);
 	(void)platform_device_unregister(&ar6000_dummy_device);
 }

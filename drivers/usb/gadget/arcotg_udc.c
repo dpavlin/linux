@@ -4696,6 +4696,8 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 
 	INIT_WORK(&udc_controller->usbtest_work, usbtest_workqueue_handler);
 
+	schedule_delayed_work(&charger_misc_work, msecs_to_jiffies(CHARGER_MISC));
+
 	fsl_udc_init_debugfs(udc_controller);
 
 	udc_controller->lobatli = 0;

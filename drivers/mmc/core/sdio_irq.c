@@ -78,7 +78,7 @@ static int sdio_irq_thread(void *_host)
 	 * asynchronous notification of pending SDIO card interrupts
 	 * hence we poll for them in that case.
 	 */
-	period = MAX_SCHEDULE_TIMEOUT;
+	period = idle_period = MAX_SCHEDULE_TIMEOUT;
 
 	pr_debug("%s: IRQ thread started (poll period = %lu jiffies)\n",
 		 mmc_hostname(host), period);

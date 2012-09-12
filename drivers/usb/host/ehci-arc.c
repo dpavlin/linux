@@ -566,7 +566,6 @@ extern void usb_wakeup_set(struct device *wkup_dev, int para);
 #endif
 
 extern int ehci_suspending;
-extern void usb_idle_thread(int enable);
 
 static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 				pm_message_t message)
@@ -599,7 +598,6 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 
 	pr_debug("%s: suspending...\n", __func__);
 
-	usb_idle_thread(0);
 	msleep(20);
 
 	hcd->state = HC_STATE_SUSPENDED;
@@ -753,8 +751,6 @@ static int ehci_fsl_drv_resume(struct platform_device *pdev)
 	schedule_delayed_work(&ehci->dwork, msecs_to_jiffies(EHCI_IDLE_SUSPEND_THRESHOLD));
 
 	schedule_delayed_work(&toggle_idle_lp, msecs_to_jiffies(EHCI_ARC_TOGGLE_LPM));
-
-	usb_idle_thread(1);
 
 	return 0;
 }

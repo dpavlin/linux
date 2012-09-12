@@ -645,35 +645,35 @@ static irqreturn_t fiveway_irq (int irq, void *data, struct pt_regs *r)
 
    if (( fiveway_datain(UP_LINE) == 1 ) &&
        ( line_state[UP_LINE] != LINE_DEASSERTED ) && (irq == FIVEWAY_UP_IRQ)) {
-      cancel_delayed_work_sync(&fiveway_repeat_up_tq_d);
+      cancel_delayed_work(&fiveway_repeat_up_tq_d);
       RELEASED("UP", FIVEWAY_KEYCODE_UP, UP_LINE, FIVEWAY_UP_IRQ);
       enable_other_irqs(irq, 1);
       ignore_up_line = 0;
    }
    else if (( fiveway_datain(DOWN_LINE) == 1 ) &&
             ( line_state[DOWN_LINE] != LINE_DEASSERTED ) && (irq == FIVEWAY_DOWN_IRQ)) {
-      cancel_delayed_work_sync(&fiveway_repeat_down_tq_d);
+      cancel_delayed_work(&fiveway_repeat_down_tq_d);
       RELEASED("DOWN", FIVEWAY_KEYCODE_DOWN, DOWN_LINE, FIVEWAY_DOWN_IRQ);
       enable_other_irqs(irq, 1);
       ignore_down_line = 0;
    }
    else if (( fiveway_datain(LEFT_LINE) == 1 ) &&
             ( line_state[LEFT_LINE] != LINE_DEASSERTED ) && (irq == FIVEWAY_LEFT_IRQ)) {
-      cancel_delayed_work_sync(&fiveway_repeat_left_tq_d);
+      cancel_delayed_work(&fiveway_repeat_left_tq_d);
       RELEASED("LEFT", FIVEWAY_KEYCODE_LEFT, LEFT_LINE, FIVEWAY_LEFT_IRQ);
       enable_other_irqs(irq, 1);
       ignore_left_line = 0;
    }
    else if (( fiveway_datain(RIGHT_LINE) == 1 ) &&
             ( line_state[RIGHT_LINE] != LINE_DEASSERTED ) && (irq == FIVEWAY_RIGHT_IRQ)) {
-       cancel_delayed_work_sync(&fiveway_repeat_right_tq_d);
+       cancel_delayed_work(&fiveway_repeat_right_tq_d);
        RELEASED("RIGHT", FIVEWAY_KEYCODE_RIGHT, RIGHT_LINE, FIVEWAY_RIGHT_IRQ);
        enable_other_irqs(irq, 1);
        ignore_right_line = 0;
    }
    else if (( fiveway_datain(SELECT_LINE) == 1 ) &&
             ( line_state[SELECT_LINE] != LINE_DEASSERTED ) && (irq == FIVEWAY_SELECT_IRQ))  {
-       cancel_delayed_work_sync(&fiveway_repeat_select_tq_d);
+       cancel_delayed_work(&fiveway_repeat_select_tq_d);
        RELEASED("SELECT", FIVEWAY_KEYCODE_SELECT, SELECT_LINE, FIVEWAY_SELECT_IRQ);
        enable_other_irqs(irq, 1);
       ignore_select_line = 0;
