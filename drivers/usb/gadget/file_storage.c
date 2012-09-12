@@ -229,6 +229,7 @@
 #include <linux/fcntl.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/interrupt.h>
 #include <linux/kref.h>
 #include <linux/kthread.h>
 #include <linux/limits.h>
@@ -713,6 +714,11 @@ struct fsg_dev {
 	unsigned int		nluns;
 	struct lun		*luns;
 	struct lun		*curlun;
+#define SC_KEEPALIVE_DELAY	2000 /* 2 secs */
+	int			ms_keepalive;
+	struct delayed_work	synchronize_cache_work;
+
+    	struct tasklet_struct	susp_task;
 };
 
 typedef void (*fsg_routine_t)(struct fsg_dev *);
@@ -1940,6 +1946,36 @@ static void fsync_all(struct fsg_dev *fsg)
 		fsync_sub(&fsg->luns[i]);
 }
 
+static void do_synchronize_cache_work(struct work_struct *work)
+{
+	struct fsg_dev *fsg = 
+		container_of(work, struct fsg_dev, synchronize_cache_work.work);
+	struct lun	*curlun = fsg->curlun;
+
+	/* If the host is still pinging us, don't unload */
+	if (fsg->ms_keepalive) {
+	    DBG(fsg, "Device still alive: not stopping\n");
+	    return;
+	}
+
+	DBG(fsg, "Device stopping after SYNCHRONIZE_CACHE..\n");
+
+	/* Shut down the backing file */
+	down_write(&fsg->filesem);
+	close_backing_file(curlun);
+	up_write(&fsg->filesem);
+			
+	/* Send event to userspace */
+	if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
+	    kobject_uevent_atomic(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE)) {
+	    printk(KERN_ERR __FILE__ ", line %d: kobject_uevent_atomic failed\n", __LINE__);
+	}
+
+	set_drivemode_online(0);
+
+	DBG(fsg, "..complete\n");
+}
+
 static int do_synchronize_cache(struct fsg_dev *fsg)
 {
 	struct lun	*curlun = fsg->curlun;
@@ -1950,6 +1986,15 @@ static int do_synchronize_cache(struct fsg_dev *fsg)
 	rc = fsync_sub(curlun);
 	if (rc)
 		curlun->sense_data = SS_WRITE_ERROR;
+	
+	cancel_delayed_work(&fsg->synchronize_cache_work);
+
+	/* Check to see if Windows is still there */
+	if (fsg->ms_keepalive) {
+	    fsg->ms_keepalive = 0;
+	    schedule_delayed_work(&fsg->synchronize_cache_work, msecs_to_jiffies(SC_KEEPALIVE_DELAY));
+	}
+
 	return 0;
 }
 
@@ -2277,6 +2322,8 @@ static int do_start_stop(struct fsg_dev *fsg)
 			return -EINVAL;
 		}
 		if (loej) {		// Simulate an unload/eject
+			cancel_delayed_work(&fsg->synchronize_cache_work);	
+
 			up_read(&fsg->filesem);
 			down_write(&fsg->filesem);
 			close_backing_file(curlun);
@@ -2325,6 +2372,7 @@ static int do_prevent_allow(struct fsg_dev *fsg)
 	}
 
 	prevent = fsg->cmnd[4] & 0x01;
+	DBG(fsg, "prevent=%d\n", prevent);
 	if ((fsg->cmnd[4] & ~0x01) != 0) {		// Mask away Prevent
 		curlun->sense_data = SS_INVALID_FIELD_IN_CDB;
 		return -EINVAL;
@@ -2744,7 +2792,6 @@ static int check_command(struct fsg_dev *fsg, int cmnd_size,
 
 	/* Verify the length of the command itself */
 	if (cmnd_size != fsg->cmnd_size) {
-
 		/* Special case workaround: MS-Windows issues REQUEST SENSE
 		 * with cbw->Length == 12 (it should be 6). */
 		if (fsg->cmnd[0] == SC_REQUEST_SENSE && fsg->cmnd_size == 12)
@@ -2835,6 +2882,7 @@ static int do_scsi_command(struct fsg_dev *fsg)
 	}
 	fsg->phase_error = 0;
 	fsg->short_packet_received = 0;
+	fsg->ms_keepalive = 1;
 
 	down_read(&fsg->filesem);	// We're using the backing file
 	switch (fsg->cmnd[0]) {
@@ -3794,6 +3842,8 @@ static void /* __init_or_exit */ fsg_unbind(struct usb_gadget *gadget)
 
 	DBG(fsg, "unbind\n");
 	clear_bit(REGISTERED, &fsg->atomic_bitflags);
+	
+	cancel_delayed_work(&fsg->synchronize_cache_work);
 
 	/* Unregister the sysfs attribute files and the LUNs */
 	for (i = 0; i < fsg->nluns; ++i) {
@@ -4156,6 +4206,9 @@ static int __init fsg_bind(struct usb_gadget *gadget)
 
 	set_bit(REGISTERED, &fsg->atomic_bitflags);
 
+	fsg->ms_keepalive = 0;
+	INIT_DELAYED_WORK(&fsg->synchronize_cache_work, do_synchronize_cache_work);
+
 	/* Tell the thread to start working */
 	wake_up_process(fsg->thread_task);
 	return 0;
@@ -4172,6 +4225,14 @@ out:
 	return rc;
 }
 
+void suspend_tasklet(unsigned long arg) 
+{
+    struct fsg_dev *fsg = (struct fsg_dev *) arg;
+
+    if (kobject_uevent_atomic(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE)) {
+	printk(KERN_ERR __FILE__ ", line %d: kobject_uevent_atomic failed\n", __LINE__);
+    }
+}
 
 /*-------------------------------------------------------------------------*/
 
@@ -4179,14 +4240,15 @@ static void fsg_suspend(struct usb_gadget *gadget)
 {
 	struct fsg_dev		*fsg = get_gadget_data(gadget);
 
+	cancel_delayed_work(&fsg->synchronize_cache_work);
+
 	DBG(fsg, "suspend\n");
 	set_bit(SUSPENDED, &fsg->atomic_bitflags);
 
 	if (fsg->curlun != NULL) {
 		fsg->curlun->prevent_medium_removal = 0;
-		if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) &&
-			kobject_uevent_atomic(&fsg->gadget->dev.parent->kobj, KOBJ_OFFLINE)) {
-				printk(KERN_ERR __FILE__ ", line %d: kobject_uevent failed\n", __LINE__);
+		if (test_and_clear_bit(ONLINE, &fsg->atomic_bitflags) ) {
+		    tasklet_schedule(&fsg->susp_task);
 		}
 
 		set_drivemode_online(test_bit(ONLINE, &fsg->atomic_bitflags));
@@ -4240,6 +4302,8 @@ static int __init fsg_alloc(void)
 	kref_init(&fsg->ref);
 	init_completion(&fsg->thread_notifier);
 
+	tasklet_init(&fsg->susp_task, suspend_tasklet, (unsigned long) fsg);
+
 	the_fsg = fsg;
 	return 0;
 }
@@ -4266,6 +4330,8 @@ module_init(fsg_init);
 static void __exit fsg_cleanup(void)
 {
 	struct fsg_dev	*fsg = the_fsg;
+	
+	tasklet_kill(&fsg->susp_task);
 
 	/* Unregister the driver iff the thread hasn't already done so */
 	if (test_and_clear_bit(REGISTERED, &fsg->atomic_bitflags))
