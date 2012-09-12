@@ -79,11 +79,16 @@ static void fiveway_repeat_down_work(struct work_struct *);
 
 DEFINE_RAW_SPINLOCK(fiveway_spinlock);
 
-// Proc entry structure and global variable.
-#define FIVEWAY_PROC_FILE "fiveway"
-#define PROC_CMD_LEN 50
-static struct proc_dir_entry *proc_entry;
+// Proc entry structures and global variables.
+
+#define FIVEWAY_PROC_FIVEWAY "fiveway"
+#define PROC_FIVEWAY_CMD_LEN 50
+static struct proc_dir_entry *proc_fiveway_entry;
 static int fiveway_lock = 0;  // 0=unlocked; non-zero=locked
+
+#define FIVEWAY_PROC_FIVEWAY_WE "fiveway_wake"
+static struct proc_dir_entry *proc_fiveway_we_entry;
+static int fiveway_wake_enable = 0;  // 0=disabled; 1=enabled
 
 
 // Module parameters
@@ -584,6 +589,19 @@ static void enable_other_irqs(int irq, int enable)
 
 static int fiveway_initialized = 0;
 
+static void select_worker(struct work_struct *work);
+static DECLARE_DELAYED_WORK(select_work, select_worker);
+
+static void select_worker(struct work_struct *work)
+{
+	//char *envp[] = { "fiveway=wake", NULL };
+	if (fiveway_datain(SELECT_LINE) == 0) {
+		printk("Fiveway wakeup\n");
+	//	kobject_uevent_env(&fiveway_dev->dev.kobj, KOBJ_CHANGE, envp);
+		kobject_uevent(&fiveway_dev->dev.kobj, KOBJ_ADD);
+	}
+}
+
 static irqreturn_t fiveway_irq (int irq, void *data, struct pt_regs *r)
 {
   if (fiveway_irq_disabled(irq))
@@ -591,6 +609,9 @@ static irqreturn_t fiveway_irq (int irq, void *data, struct pt_regs *r)
 
   if (!fiveway_initialized)
         return IRQ_HANDLED;
+
+  if (fiveway_datain(SELECT_LINE) == 0)
+	schedule_delayed_work(&select_work, msecs_to_jiffies(1900));
 
   if ( !disabled_up_irq && (fiveway_datain(UP_LINE) == 0) && (irq == FIVEWAY_UP_IRQ))  {
       if (ignore_up_line && (line_state[UP_LINE] == LINE_ASSERTED)) {
@@ -722,12 +743,12 @@ void fiveway_off(void)
    atomic_set(&fiveway_is_locked, 1);
 
    disable_irq(FIVEWAY_RIGHT_IRQ);
-   disable_irq(FIVEWAY_SELECT_IRQ);
+   //disable_irq(FIVEWAY_SELECT_IRQ);
    disable_irq(FIVEWAY_UP_IRQ);
    disable_irq(FIVEWAY_DOWN_IRQ);
    disable_irq(FIVEWAY_LEFT_IRQ);
 
-   gpio_fiveway_inactive();
+   //gpio_fiveway_inactive();
 }
 
 
@@ -761,7 +782,7 @@ void fiveway_on(void)
 {
    LLOG_DEBUG0("Enabling GPIOs and IRQs...\n");
 
-   gpio_fiveway_active();
+   //gpio_fiveway_active();
 
    if (fiveway_datain(UP_LINE) == 0) {
 	line_state[UP_LINE] = LINE_ASSERTED;
@@ -807,6 +828,8 @@ void fiveway_on(void)
         line_state[SELECT_LINE] = LINE_DEASSERTED;
         set_irq_type(FIVEWAY_SELECT_IRQ, IRQF_TRIGGER_FALLING);
    }
+
+   disable_irq(FIVEWAY_SELECT_IRQ);
 
    enable_irq(FIVEWAY_UP_IRQ);
    enable_irq(FIVEWAY_DOWN_IRQ);
@@ -871,8 +894,8 @@ static void fiveway_close(struct input_dev *dev)
 /*
  * This function returns the current state of the fiveway device
  */
-int fiveway_proc_read( char *page, char **start, off_t off,
-                      int count, int *eof, void *data )
+int fiveway_proc_fiveway_read( char *page, char **start, off_t off,
+                               int count, int *eof, void *data )
 {
    int len;
 
@@ -898,14 +921,14 @@ int fiveway_proc_read( char *page, char **start, off_t off,
  *    send   = send a fiveway event, simulating a line detection
  *    debug  = set the debug level for logging messages (0=off)
  */
-ssize_t fiveway_proc_write( struct file *filp, const char __user *buff,
-                            unsigned long len, void *data )
+int fiveway_proc_fiveway_write( struct file *filp, const char __user *buff,
+                                unsigned long len, void *data )
 
 {
-   char command[PROC_CMD_LEN];
+   char command[PROC_FIVEWAY_CMD_LEN];
    int  keycode;
 
-   if (len > PROC_CMD_LEN) {
+   if (len > PROC_FIVEWAY_CMD_LEN) {
       LLOG_ERROR("proc_len", "", "Fiveway command is too long!\n");
       return -ENOSPC;
    }
@@ -967,6 +990,48 @@ ssize_t fiveway_proc_write( struct file *filp, const char __user *buff,
    return len;
 }
 
+
+int
+fiveway_proc_fiveway_we_read(
+	char *page,
+	char **start,
+	off_t off,
+	int len,
+	int *eof,
+	void *data)
+{
+	*eof = 1;
+
+	return sprintf(page, "%d\n", fiveway_wake_enable);
+}
+
+
+int
+fiveway_proc_fiveway_we_write(
+	struct file *filp,
+	const char __user *buf,
+	unsigned long len,
+	void *data)
+{
+	int enable;
+	char ch;
+
+	if (copy_from_user(&ch, buf, sizeof(ch))) {
+		return -EFAULT;
+	}
+
+	enable = ch != '0';
+
+	if (fiveway_wake_enable != enable) {
+		LLOG_INFO("wake_enable", "", "enable=%d\n", enable);
+
+		set_irq_wake(FIVEWAY_SELECT_IRQ, fiveway_wake_enable = enable);
+	}
+
+        return len;
+}
+
+
 static int show_fiveway_dbg_state(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	char *curr = buf;
@@ -1008,23 +1073,36 @@ static int __devinit fiveway_probe(struct platform_device *pdev)
 
    LLOG_INFO("probe0", "", "Starting...\n");
 
-   /* Create proc entry */
-   proc_entry = create_proc_entry(FIVEWAY_PROC_FILE, 0644, NULL);
-   if (proc_entry == NULL) {
+   /* Create proc entry for "fiveway" */
+   proc_fiveway_entry = create_proc_entry(FIVEWAY_PROC_FIVEWAY, S_IWUSR | S_IRUGO, NULL);
+   if (proc_fiveway_entry == NULL) {
       LLOG_ERROR("probe1", "", "Fiveway could not create proc entry\n");
       err = -ENOMEM;
       goto exit_probe;
    } else {
-      proc_entry->read_proc = fiveway_proc_read;
-      proc_entry->write_proc = fiveway_proc_write;
-      proc_entry->owner = THIS_MODULE;
+      proc_fiveway_entry->read_proc = fiveway_proc_fiveway_read;
+      proc_fiveway_entry->write_proc = fiveway_proc_fiveway_write;
+      proc_fiveway_entry->owner = THIS_MODULE;
+   }
+
+   /* Create proc entry for "fiveway_we" */
+   proc_fiveway_we_entry = create_proc_entry(FIVEWAY_PROC_FIVEWAY_WE, S_IWUSR | S_IRUGO, NULL);
+   if (proc_fiveway_we_entry == NULL) {
+      LLOG_ERROR("probe1", "", "Fiveway could not create proc wake enable entry\n");
+      err = -ENOMEM;
+      remove_proc_entry(FIVEWAY_PROC_FIVEWAY, NULL);
+      goto exit_probe;
+   } else {
+      proc_fiveway_we_entry->read_proc = fiveway_proc_fiveway_we_read;
+      proc_fiveway_we_entry->write_proc = fiveway_proc_fiveway_we_write;
+      proc_fiveway_we_entry->owner = THIS_MODULE;
    }
 
    // Set up the necessary GPIO lines for the 5-Way inputs
    err = gpio_fiveway_active();
    if (err) {
       LLOG_ERROR("gpio_fail", "", "Failed to set GPIO lines\n");
-      goto del_proc_entry;
+      goto del_proc_entries;
    }
 
    // Initialize the line state array
@@ -1136,8 +1214,9 @@ release_up_irq:
    free_irq(FIVEWAY_UP_IRQ, NULL);
 release_gpios:
    gpio_fiveway_inactive();
-del_proc_entry:
-   remove_proc_entry(FIVEWAY_PROC_FILE, NULL);
+del_proc_entries:
+   remove_proc_entry(FIVEWAY_PROC_FIVEWAY, NULL);
+   remove_proc_entry(FIVEWAY_PROC_FIVEWAY_WE, NULL);
 exit_probe:
    return err;
 }
@@ -1175,7 +1254,8 @@ static int __devexit fiveway_remove(struct platform_device *pdev)
    cancel_delayed_work_sync(&fiveway_repeat_select_tq_d);
    cancel_delayed_work_sync(&fiveway_repeat_down_tq_d);
 
-   remove_proc_entry(FIVEWAY_PROC_FILE, NULL);
+   remove_proc_entry(FIVEWAY_PROC_FIVEWAY, NULL);
+   remove_proc_entry(FIVEWAY_PROC_FIVEWAY_WE, NULL);
    input_unregister_device(fiveway_dev);
 
    LLOG_INFO("exit", "", "IRQs released and work functions stopped.\n");
