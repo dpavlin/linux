@@ -218,7 +218,7 @@ static int udc_suspended_mode = 0; /* gadget driver suspended state */
 #define BPSNS_VOLTAGE_THRESH	3600	/* 3.6V BPSNS threshold */
 #define PMIC_REG_PC_0		13	/* PMIC Register 13 */
 #define BPSNS_OFFSET		16	/* BPSNS OFFSET in Register 13 */
-#define GREEN_LED_THRESHOLD	90	/* Turn Charge LED to Green */
+#define GREEN_LED_THRESHOLD	95	/* Turn Charge LED to Green */
 #define BATTCYCL_THRESHOLD	4105	/* Restart charging if not done automatically */
 #define CHRGLEDEN		18 	/* offset 18 in REG_CHARGE */
 #define CHRGCYCLB		22	/* BATTCYCL to restart charging at 95% full */

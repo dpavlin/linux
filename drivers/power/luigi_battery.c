@@ -46,8 +46,9 @@
 #define LUIGI_BATTERY_INTERVAL		20000	/* 20 second duration */
 #define LUIGI_BATTERY_INTERVAL_START	5000	/* 5 second timer on startup */
 #define LUIGI_BATTERY_INTERVAL_ERROR	10000	/* 10 second timer after an error */
+#define LUIGI_BATTERY_INTERVAL_EARLY	1000	/* 1 second after probe */
 
-#define DRIVER_NAME			"Luigi Battery"
+#define DRIVER_NAME			"Luigi_Battery"
 #define DRIVER_VERSION			"1.0"
 #define DRIVER_AUTHOR			"Manish Lachwani"
 
@@ -309,10 +310,7 @@ static void luigi_battery_sysdev_ctrl_exit(void)
 	sysdev_class_unregister(&luigi_battery_sysclass);
 }
 
-static int luigi_battery_detect(struct i2c_adapter *adapter, int address, int type);
-static int luigi_battery_attach_adapter(struct i2c_adapter *adapter);
-static int luigi_battery_detach_client(struct i2c_client *client);
-static struct i2c_client luigi_battery_i2c_client;
+static struct i2c_client *luigi_battery_i2c_client;
 
 int luigi_battery_present = 0;
 EXPORT_SYMBOL(luigi_battery_present);
@@ -321,7 +319,7 @@ static int luigi_i2c_read(unsigned char reg_num, unsigned char *value)
 {
 	s32 error;
 
-	error = i2c_smbus_read_byte_data(&luigi_battery_i2c_client, reg_num);
+	error = i2c_smbus_read_byte_data(luigi_battery_i2c_client, reg_num);
 	if (error < 0) {
 		printk(KERN_INFO "luigi_battery: i2c read retry\n");
 		return -EIO;
@@ -629,18 +627,22 @@ out_done:
 	return;
 }
 
+static int luigi_probe(struct i2c_client *client, const struct i2c_device_id *id);
+static int luigi_remove(struct i2c_client *client);
+
+static const struct i2c_device_id luigi_i2c_id[] =  {
+        { "Luigi_Battery", 0 },
+        { },
+};
+MODULE_DEVICE_TABLE(i2c, luigi_i2c_id);
+
 static struct i2c_driver luigi_i2c_driver = {
 	.driver = {
 			.name = DRIVER_NAME,
 		  },
-	.attach_adapter = luigi_battery_attach_adapter,
-	.detach_client = luigi_battery_detach_client,
-};
-
-static struct i2c_client luigi_battery_i2c_client = {
-	.name = DRIVER_NAME,
-	.addr = LUIGI_I2C_ADDRESS,
-	.driver = &luigi_i2c_driver,
+	.probe = luigi_probe,
+	.remove = luigi_remove,
+	.id_table = luigi_i2c_id,
 };
 
 static unsigned short normal_i2c[] = { LUIGI_I2C_ADDRESS, I2C_CLIENT_END };
@@ -700,26 +702,51 @@ void luigi_battery_resume_stats(void)
 }
 EXPORT_SYMBOL(luigi_battery_resume_stats);
 	
-static int luigi_battery_detect(struct i2c_adapter *adapter, int address, int type)
+struct luigi_info {
+        struct i2c_client *client;
+};
+
+static int luigi_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
-	luigi_battery_i2c_client.adapter = adapter;
+        struct luigi_info  *info;
+
+        info = kzalloc(sizeof(*info), GFP_KERNEL);
+        if (!info) {
+                return -ENOMEM;
+        }
+
+        client->addr = LUIGI_I2C_ADDRESS;
+        i2c_set_clientdata(client, info);
+        info->client = client;
+        luigi_battery_i2c_client = info->client;
+        luigi_battery_i2c_client->addr = LUIGI_I2C_ADDRESS;
+
+	if (luigi_battery_read_id(&luigi_battery_id) < 0)
+		return -ENODEV;
+
 	luigi_battery_present = 1;
 
 	if (luigi_battery_sysdev_ctrl_init() < 0)
 		printk(KERN_ERR "luigi battery: could not create sysfs entries\n");
 
-	battery_handle_work((struct work_struct *)0);
-	return 0;
+        schedule_delayed_work(&battery_work, msecs_to_jiffies(LUIGI_BATTERY_INTERVAL_EARLY));
+
+        return 0;
 }
 
-static int luigi_battery_attach_adapter(struct i2c_adapter *adapter)
+static int luigi_remove(struct i2c_client *client)
 {
-	return i2c_probe(adapter, &addr_data, luigi_battery_detect);
-}
+        struct luigi_info *info = i2c_get_clientdata(client);
 
-static int luigi_battery_detach_client(struct i2c_client *client)
-{
-	return i2c_detach_client(client);
+        if (luigi_battery_present) {
+                battery_driver_stopped = 1;
+                cancel_rearming_delayed_work(&battery_work);
+                luigi_battery_sysdev_ctrl_exit();
+        }
+
+        i2c_set_clientdata(client, info);
+
+        return 0;
 }
 
 static int __init luigi_battery_init(void)

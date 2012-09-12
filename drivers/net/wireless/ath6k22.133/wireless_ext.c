@@ -567,6 +567,7 @@ ar6000_ioctl_siwessid(struct net_device *dev,
         wait_event_interruptible_timeout(arEvent,
             ar->arTxPending[wmi_get_control_ep(ar->arWmi)] == 0, wmitimeout * HZ);
         if (signal_pending(current)) {
+            up(&ar->arSem); 
             return -EINTR;
         }
     }
@@ -2059,8 +2060,10 @@ ar6000_ioctl_siwmlme(struct net_device *dev,
         A_UINT8 arNetworkType;
         struct iw_mlme mlme;
 
-        if (copy_from_user(&mlme, data->pointer, sizeof(struct iw_mlme)))
+        if (copy_from_user(&mlme, data->pointer, sizeof(struct iw_mlme))) {
+            up(&ar->arSem);
             return -EIO;
+        }
 
         switch (mlme.cmd) {
 

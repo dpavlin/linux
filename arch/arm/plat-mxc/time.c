@@ -146,8 +146,6 @@ static struct clock_event_device gpt_clockevent = {
 	.set_mode = mxc_gpt_set_mode,
 };
 
-extern void mxc_kick_wd(void);
-
 /*!
  * This is the timer interrupt service routine to do required tasks.
  * It also services the WDOG timer at the frequency of twice per WDOG
@@ -171,8 +169,6 @@ static irqreturn_t mxc_timer_interrupt(int irq, void *dev_id)
 
 		gpt_clockevent.event_handler(&gpt_clockevent);
 	}
-
-	mxc_kick_wd();
 
 	return IRQ_HANDLED;
 }
@@ -244,7 +240,7 @@ void __init mxc_init_time(void)
 
 	gpt_clockevent.mult = div_sc(rate, NSEC_PER_SEC, gpt_clockevent.shift);
 	gpt_clockevent.max_delta_ns = clockevent_delta2ns(-1, &gpt_clockevent);
-	gpt_clockevent.min_delta_ns = clockevent_delta2ns(1, &gpt_clockevent);
+	gpt_clockevent.min_delta_ns = clockevent_delta2ns(32, &gpt_clockevent);
 
 	gpt_clockevent.cpumask = cpumask_of_cpu(0);
 	clockevents_register_device(&gpt_clockevent);

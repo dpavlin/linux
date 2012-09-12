@@ -89,7 +89,7 @@ static struct dbs_tuners {
 	unsigned int ignore_nice;
 	unsigned int powersave_bias;
 } dbs_tuners_ins = {
-	.up_threshold = MIN_FREQUENCY_UP_THRESHOLD,
+	.up_threshold = DEF_FREQUENCY_UP_THRESHOLD,
 	.ignore_nice = 0,
 	.powersave_bias = 0,
 };
@@ -245,6 +245,7 @@ static ssize_t store_up_threshold(struct cpufreq_policy *unused,
 		return -EINVAL;
 	}
 
+	dbs_tuners_ins.up_threshold = input;
 	mutex_unlock(&dbs_mutex);
 
 	return count;
@@ -546,7 +547,6 @@ static int cpufreq_governor_dbs(struct cpufreq_policy *policy,
 			if (def_sampling_rate < MIN_STAT_SAMPLING_RATE)
 				def_sampling_rate = MIN_STAT_SAMPLING_RATE;
 
-			def_sampling_rate = MIN_SAMPLING_RATE;
 			dbs_tuners_ins.sampling_rate = def_sampling_rate;
 		}
 		dbs_timer_init(this_dbs_info);

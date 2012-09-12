@@ -241,6 +241,8 @@ struct _mmc_csd {
 #define CSD_STRUCT_VER_1_2  2           /* Valid for system specification 3.1 - 3.2 - 3.31 - 4.0 - 4.1 */
 #define CSD_STRUCT_EXT_CSD  3           /* Version is coded in CSD_STRUCTURE in EXT_CSD */
 
+#define EXT_CSD_CARD_TYPE_MASK 0x3	/* Mask */
+
 #define CSD_SPEC_VER_0      0           /* Implements system specification 1.0 - 1.2 */
 #define CSD_SPEC_VER_1      1           /* Implements system specification 1.4 */
 #define CSD_SPEC_VER_2      2           /* Implements system specification 2.0 - 2.2 */

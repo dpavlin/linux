@@ -419,6 +419,10 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 	info.si_addr  = pc;
 
 	arm_notify_die("Oops - undefined instruction", regs, &info, 0, 6);
+
+	printk(KERN_INFO "%s (%d): undefined instruction: pc=%p\n",
+		current->comm, task_pid_nr(current), pc);
+	dump_instr(regs);
 }
 
 asmlinkage void do_unexp_fiq (struct pt_regs *regs)
@@ -472,6 +476,10 @@ static int bad_syscall(int n, struct pt_regs *regs)
 			 (thumb_mode(regs) ? 2 : 4);
 
 	arm_notify_die("Oops - bad syscall", regs, &info, n, 0);
+
+	printk(KERN_ERR "[%d] %s: obsolete system call %08x.\n",
+		task_pid_nr(current), current->comm, n);
+	dump_instr(regs);
 
 	return regs->ARM_r0;
 }
@@ -651,6 +659,15 @@ asmlinkage int arm_syscall(int no, struct pt_regs *regs)
 			 (thumb_mode(regs) ? 2 : 4);
 
 	arm_notify_die("Oops - bad syscall(2)", regs, &info, no, 0);
+
+	printk("[%d] %s: arm syscall %d\n",
+			task_pid_nr(current), current->comm, no);
+	dump_instr(regs);
+	if (user_mode(regs)) {
+		__show_regs(regs);
+		c_backtrace(regs->ARM_fp, processor_mode(regs));
+	}
+
 	return 0;
 }
 
@@ -725,6 +742,11 @@ baddataabort(int code, unsigned long instr, struct pt_regs *regs)
 	info.si_addr  = (void __user *)addr;
 
 	arm_notify_die("unknown data abort code", regs, &info, instr, 0);
+
+	printk(KERN_ERR "[%d] %s: bad data abort: code %d instr 0x%08lx\n",
+		task_pid_nr(current), current->comm, code, instr);
+	dump_instr(regs);
+	show_pte(current->mm, addr);
 }
 
 void __attribute__((noreturn)) __bug(const char *file, int line)

@@ -117,6 +117,8 @@ static int broadsheet_flash_size        = BROADSHEET_FLASH_SIZE;
 static int bs_orientation               = EINKFB_ORIENT_PORTRAIT;
 static int bs_upside_down               = false;
 
+static int bs_temperature               = BS_TEMP_INVALID;
+
 static bool broadsheet_watchdog_timer_active = false;
 static bool broadsheet_watchdog_timer_primed = false;
 static struct timer_list broadsheet_watchdog_timer;
@@ -272,7 +274,7 @@ static int recent_commands_read(char *page, char **start, off_t off, int count, 
     return ( EINKFB_PROC_SYSFS_RW_LOCK(page, NULL, off, 0, eof, 0, read_recent_commands) );
 }
 
-// /proc/eink_fb/temperature (read-only)
+// /proc/eink_fb/temperature (read/write)
 //
 static int read_temperature(char *page, unsigned long off, int count)
 {
@@ -289,6 +291,29 @@ static int read_temperature(char *page, unsigned long off, int count)
 static int temperature_read(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
     return ( EINKFB_PROC_SYSFS_RW_LOCK(page, NULL, off, 0, eof, 0, read_temperature) );
+}
+
+static int write_temperataure(char *buf, unsigned long count, int unused)
+{
+    char temperature_string[16] = { 0 };
+    int result = -EINVAL;
+    
+    if ( (16 > count) && sscanf(buf, "%s", temperature_string) )
+    {
+        bs_temperature = (int)simple_strtol(temperature_string, NULL, 0);
+        
+        if ( !IN_RANGE(bs_temperature, BS_TEMP_MIN, BS_TEMP_MAX) )
+            bs_temperature = BS_TEMP_INVALID;
+        
+        result = count;
+    }
+
+    return ( result );
+}
+
+static int temperature_write(struct file *file, const char __user *buf, unsigned long count, void *data)
+{
+    return ( EINKFB_PROC_SYSFS_RW_NO_LOCK((char *)buf, NULL, count, 0, NULL, 0, write_temperataure) );
 }
 
 // /proc/eink_fb/hardware_fb (read-only)
@@ -1015,6 +1040,11 @@ void broadsheet_prime_watchdog_timer(bool delay_timer)
     }
 }
 
+int broadsheet_get_temperature(void)
+{
+    return ( bs_temperature );
+}
+
 #if PRAGMAS
     #pragma mark -
     #pragma mark HAL module operations
@@ -1130,7 +1160,7 @@ static void broadsheet_create_proc_entries(void)
         recent_commands_read, NULL);
 
     einkfb_proc_temperature = einkfb_create_proc_entry(EINKFB_PROC_TEMPERATURE, EINKFB_PROC_CHILD_R,
-        temperature_read, NULL);
+        temperature_read, temperature_write);
 
     einkfb_proc_hardwarefb = einkfb_create_proc_entry(EINKFB_PROC_HARDWAREFB, EINKFB_PROC_CHILD_R,
         hardwarefb_read, NULL);

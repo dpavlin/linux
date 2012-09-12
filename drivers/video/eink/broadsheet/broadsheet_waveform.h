@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_waveform.h --
  *  eInk frame buffer device HAL broadsheet waveform defs
  *
- *      Copyright (C) 2005-2010 Amazon Technologies
+ *      Copyright (C) 2005-2010 Amazon Technologies, Inc.
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -33,9 +33,9 @@
 
 #define EINK_ADDR_WAVEFORM_VERSION      0x0011  // 1 byte  (BCD)
 #define EINK_ADDR_WAVEFORM_SUBVERSION   0x0012  // 1 byte  (BCD)
-#define EINK_ADDR_WAVEFORM_TYPE         0x0013  // 1 byte  (0x0B=TE, 0x0E=WE, 0x15=WJ, 0x16=WK, 0x17=WL)
-#define EINK_ADDR_WAVEFORM_TUNING_BIAS  0x0016  // 1 byte  (0x00=Standard, 0x01=Increased DS Blooming V1XX, 0x02=Increased DS Blooming V2XX)
-
+#define EINK_ADDR_WAVEFORM_TYPE         0x0013  // 1 byte  (0x0B=TE, 0x0E=WE, 0x15=WJ, 0x16=WK, 0x17=WL, 0x18=VJ)
+#define EINK_ADDR_WAVEFORM_TUNING_BIAS  0x0016  // 1 byte  (0x00=Standard, 0x01=Increased DS Blooming V110/V110E, 0x02=Increased DS Blooming V220/V220E,
+                                                //          0x03=0x02=Increased DS Blooming V220/V220E & Improved Temperature Range V220/V220E)
 #define EINK_ADDR_FPL_RATE              0x00017 // 1 byte  (0x50=50Hz, 0x60=60Hz, 0x85=85Hz)
 
 #define EINK_FPL_SIZE_60                0x3C    // 6.0-inch panel,  800 x  600
@@ -46,6 +46,8 @@
 #define EINK_FPL_RATE_50                0x50    // 50Hz waveform
 #define EINK_FPL_RATE_60                0x60    // 60Hz waveform
 #define EINK_FPL_RATE_85                0x85    // 85Hz waveform
+
+#define EINK_IMPROVED_TEMP_RANGE        0x03    // Don't clip the temperature if we see this value in EINK_ADDR_WAVEFORM_TUNING_BIAS.
 
 struct broadsheet_waveform_info_t
 {

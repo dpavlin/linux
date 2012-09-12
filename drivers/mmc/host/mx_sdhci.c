@@ -190,24 +190,35 @@ static int sdio_lpm_threshold_level = 1000;	/* After 1s */
 
 DEFINE_SPINLOCK(sdio_lpm_mutex);
 
+static int sdio_do_not_gate_clk = 0;
+
 static void sdio_lpm_func(struct work_struct *unused);
 DECLARE_DELAYED_WORK(sdio_lpm_work, sdio_lpm_func);
+
+static void sdhci_idle_bus_adjust(struct sdhci_host *host, u8 idle);
 
 void sdhci_touch_mmc1_clk(int enable)
 {
 	if (enable) {
 		sdio_mmc1_clock = 0;
+		sdio_do_not_gate_clk = 0;
 		if (!sdio_host->plat_data->clk_flg) {
 			clk_enable(sdio_host->clk);
 			sdio_host->plat_data->clk_flg = 1;
 		}
 	}
 	else {
-		/* Gate clock after 100 ms */
-		schedule_delayed_work(&sdio_mmc1_clk_wq, msecs_to_jiffies(1000));
+		sdio_mmc1_clk_work((void *)0);
 	}
 }
 EXPORT_SYMBOL(sdhci_touch_mmc1_clk);
+
+void sdhci_sdio_stop_gating(void)
+{
+	sdhci_idle_bus_adjust(sdio_host, 0);
+	sdio_do_not_gate_clk = 1;
+}
+EXPORT_SYMBOL(sdhci_sdio_stop_gating);
 
 static int cardint_sdio_irq = 0;
 static int cardint_stat = 0;
@@ -222,7 +233,7 @@ static void sdio_lpm_func(struct work_struct *unused)
 {
 	u32 ctrl = 0;
 
-	if (sdio_lpm_enabled)
+	if (sdio_lpm_enabled || sdio_do_not_gate_clk)
 		return;
 
 	disable_irq(sdio_host->irq);
@@ -486,6 +497,9 @@ static void sdhci_idle_bus_adjust(struct sdhci_host *host, u8 idle)
 {
 	u32 ctrl;
 
+	if (sdio_do_not_gate_clk)
+		return;
+
 	if (host->flags & SDHCI_IN_4BIT_MODE) {
 		/* while bus is idle, leave it in 1-bit mode at the controller level */
 		sdhci_sdio_clk(1);
@@ -740,7 +754,7 @@ static void sdhci_prepare_data(struct sdhci_host *host, struct mmc_data *data)
 		host->flags &= ~SDHCI_REQ_USE_DMA;
 	}
 
-	if (((data->blksz * data->blocks) <= 128)) {
+	if (((data->blksz * data->blocks) <= 128) && (host->id == 1) ) {
 		host->flags &= ~SDHCI_REQ_USE_DMA;
 		DBG("Reverting to PIO in small data transfer.\n");
 		writel(readl(host->ioaddr + SDHCI_INT_ENABLE)
@@ -855,7 +869,7 @@ static void sdhci_prepare_data(struct sdhci_host *host, struct mmc_data *data)
 	}
 
 	/* We do not handle DMA boundaries, so set it to max (512 KiB) */
-	writel((data->blocks << 16) | SDHCI_MAKE_BLKSZ(0, data->blksz),
+	writel((data->blocks << 16) | SDHCI_MAKE_BLKSZ(7, data->blksz),
 	       host->ioaddr + SDHCI_BLOCK_SIZE);
 }
 
@@ -898,7 +912,18 @@ static void sdhci_finish_data(struct sdhci_host *host)
 
 	sd_turn_of_dma = sd2_turn_of_dma | sd1_turn_of_dma;
 
-	tasklet_schedule(&host->finish_tasklet);
+	if (data->stop) {
+		/*
+		 * The controller needs a reset of internal state machines
+		 * upon error conditions.
+		 */
+		if (data->error) {
+			sdhci_reset(host, SDHCI_RESET_CMD);
+			sdhci_reset(host, SDHCI_RESET_DATA);
+		}
+		sdhci_send_command(host, data->stop);
+	} else
+		tasklet_schedule(&host->finish_tasklet);
 }
 
 static void sdhci_send_command(struct sdhci_host *host, struct mmc_command *cmd)
@@ -965,10 +990,7 @@ static void sdhci_send_command(struct sdhci_host *host, struct mmc_command *cmd)
 	if (cmd->data != NULL) {
 		mode = SDHCI_TRNS_BLK_CNT_EN | SDHCI_TRNS_DPSEL;
 		if (cmd->data->blocks > 1) {
-			if (host->mmc->predefined == 0 && (host->id == 0))
-				mode |= SDHCI_TRNS_MULTI | SDHCI_TRNS_ACMD12;
-			else
-				mode |= SDHCI_TRNS_MULTI;
+			mode |= SDHCI_TRNS_MULTI;
 			tmp = readl(host->ioaddr + SDHCI_INT_ENABLE);
 			tmp &= ~SDHCI_INT_ACMD12ERR;
 			writel(tmp, host->ioaddr + SDHCI_INT_ENABLE);
@@ -1381,6 +1403,8 @@ static void sdhci_enable_sdio_irq(struct mmc_host *mmc, int enable)
 		}
 	}
 
+	sdhci_sdio_clk(1);
+
 	ier = readl(host->ioaddr + SDHCI_INT_ENABLE);
 	ier &= ~SDHCI_INT_CARD_INT;
 
@@ -1408,6 +1432,9 @@ static void sdhci_enable_sdio_irq(struct mmc_host *mmc, int enable)
 	writel(clk, host->ioaddr + SDHCI_CLOCK_CONTROL);
 
 	mmiowb();
+
+	if (sdio_lpm_enabled)
+		sdhci_sdio_clk(0);
 	spin_unlock_irqrestore(&host->lock, flags);
 }
 
@@ -2427,6 +2454,8 @@ static void sdhci_remove_slot(struct platform_device *pdev, int slot)
 	host = chip->hosts[slot];
 	mmc = host->mmc;
 
+	clk_enable(host->clk);
+
 	mmc_remove_host(mmc);
 
 	sdhci_reset(host, SDHCI_RESET_ALL);
@@ -2447,10 +2476,12 @@ static void sdhci_remove_slot(struct platform_device *pdev, int slot)
 	if (host->flags & SDHCI_USE_DMA)
 		kfree(adma_des_table);
 	release_mem_region(host->res->start, resource_size(host->res));
-	clk_disable(host->clk);
+
 	host->plat_data->clk_flg = 0;
 	mmc_free_host(mmc);
 	gpio_sdhc_inactive(pdev->id);
+
+	clk_disable(host->clk);
 
 	if (pdev->id == 2)
 		regulator_disable(vsd_reg);

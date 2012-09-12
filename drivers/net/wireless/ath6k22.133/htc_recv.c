@@ -639,6 +639,12 @@ A_STATUS HTCRecvMessagePendingHandler(void *Context, A_UINT32 *LookAhead, A_BOOL
         }
     }
 
+    if (HTC_STOPPING(target)) {
+            AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+                (" HTC stopping... blocking receiver to finish the stop \n"));
+            DevStopRecv(&target->Device, asyncProc ? DEV_STOP_RECV_ASYNC : DEV_STOP_RECV_SYNC);
+    }
+
     AR_DEBUG_PRINTF(ATH_DEBUG_RECV,("-HTCRecvMessagePendingHandler \n"));
 
     return status;

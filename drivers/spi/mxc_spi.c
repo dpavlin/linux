@@ -1214,7 +1214,7 @@ static struct platform_driver mxc_spi_driver = {
 		   .owner = THIS_MODULE,
 		   },
 	.probe = mxc_spi_probe,
-	.remove = mxc_spi_remove,
+//	.remove = mxc_spi_remove,
 	.suspend_late = mxc_spi_suspend,
 	.resume_early = mxc_spi_resume,
 };

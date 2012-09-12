@@ -127,6 +127,14 @@ static void led_timer_handle_work(struct work_struct *work)
 	}
 }
 
+static void led_timer_fn(unsigned long dummy);
+static DEFINE_TIMER(led_timer, led_timer_fn, 0, 0);
+
+static void led_timer_fn(unsigned long dummy)
+{
+	schedule_delayed_work(&led_timer_work, 0);
+}
+
 /*
  * Interrupt triggered when button pressed
  */
@@ -141,7 +149,7 @@ static void luigi_button_handler(void *param)
 		/* Set the green LED only if charger not connected */
 		pmic_enable_green_led(1);	
 		luigi_button_green_led = 1;
-		schedule_delayed_work(&led_timer_work, msecs_to_jiffies(LED_BLINK_THRESHOLD));
+		mod_timer(&led_timer, jiffies + msecs_to_jiffies(LED_BLINK_THRESHOLD));
 	}
 
 	/*

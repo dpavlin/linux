@@ -111,6 +111,9 @@ struct rtc_plat_data {
 	int alrm_mday;
 };
 
+#define WDOG_LOWER_THRESHOLD	127	/* WDOG timeout is 127 seconds */
+#define WDOG_HIGHER_THRESHOLD	157	/* 30 seconds since the last refresh */
+
 /*!
  * @defgroup RTC Real Time Clock (RTC) Driver
  */
@@ -143,7 +146,10 @@ static void do_rtc_work(struct work_struct *work);
 static DECLARE_DELAYED_WORK(rtc_work, do_rtc_work);
 
 /* The last good value of the rtc time */
-extern u32 saved_last_seconds;
+u32 saved_last_seconds = 0;
+EXPORT_SYMBOL(saved_last_seconds);
+
+static u32 boot_seconds = 0;
 
 /*!
  * Early charging
@@ -151,6 +157,17 @@ extern u32 saved_last_seconds;
 #define PMIC_ICHRG_DEFAULT_VALUE	0x3	/* Max current draw of 293mA */
 #define PMIC_ICHRG_MASK			0xf	/* ICHRG is 4 bits */
 #define PMIC_ICHRG_LSH			3	/* Bits 3-6 are for ICHRG */
+
+static void rtc_last_good_time(void)
+{
+	unsigned int regA = 0;
+	unsigned int regB = 0;
+
+	/* Get the last good saved seconds */
+	pmic_read_reg(REG_MEM_A, &regA, (0xff << 16));
+	pmic_read_reg(REG_MEM_B, &regB, 0x00ffffff);
+	saved_last_seconds = (regA << 8)| regB;
+}
 
 /*!
  * Both MEMA and MEMB are 24-bit registers. The pmic rtc time is 32-bit.
@@ -207,6 +224,12 @@ static int show_rtc_saved_last_seconds(struct device *dev, struct device_attribu
 	return sprintf(buf, "%x\n", saved_last_seconds);
 }
 static DEVICE_ATTR(rtc_saved_last_seconds, 0666, show_rtc_saved_last_seconds, NULL);
+
+static int show_rtc_boot_seconds(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%x\n", boot_seconds);
+}
+static DEVICE_ATTR(rtc_boot_seconds, 0666, show_rtc_boot_seconds, NULL);
 
 /*!
  * This function reads the RTC value from some external source.
@@ -743,6 +766,39 @@ static DEVICE_ATTR(wakeup_enable, 0644, wakeup_enable_show, wakeup_enable_store)
 /*! MXC RTC Power management control */
 
 static struct timespec mxc_rtc_delta;
+static int boot_reason = 0;
+
+static void mxc_check_boot_reason(void)
+{
+	unsigned int reg_memory_a;
+
+	pmic_read_reg(REG_MEM_A, &reg_memory_a, (0x1f << 0));
+
+	if (reg_memory_a & 0x2) {
+		pmic_write_reg(REG_MEM_A, (0 << 1), (1 << 1));
+		printk(KERN_ERR "boot: I def:rbt:reset=user_reboot:\n");
+		boot_reason = 1;
+		goto out;
+	}
+
+	if (reg_memory_a & 0x4) {
+		pmic_write_reg(REG_MEM_A, (0 << 2), (1 << 2));
+		printk(KERN_ERR "boot: W def:hlt:halt=Device:\n");
+		boot_reason = 1;
+		goto out;
+	}
+
+out:
+	if (reg_memory_a & 0x10) {
+		/* Clear out bit #4 */
+		pmic_write_reg(REG_MEM_A, (0 << 4), (1 << 4));
+		printk(KERN_ERR "boot: W def:crit:reset=critical_battery:\n");
+		boot_reason = 1;
+	}
+
+	pmic_write_reg(REG_MEM_A, (0 << 0), (0x1f << 0));
+}
+
 
 static int mxc_rtc_probe(struct platform_device *pdev)
 {
@@ -754,6 +810,7 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	struct rtc_plat_data *pdata = NULL;
 	u32 sec, reg;
 	int ret;
+	struct timeval tmp;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
@@ -791,12 +848,35 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, pdata);
 	ret = get_ext_rtc_time(&sec);
 
+	rtc_last_good_time();
+
+	boot_seconds = sec;
+
+	printk("mxc_rtc: saved=0x%x boot=0x%x\n", saved_last_seconds, boot_seconds);
+
+	mxc_check_boot_reason();
+
+	if (!boot_reason && (saved_last_seconds != 0) && (boot_seconds > saved_last_seconds)) {
+		if ( ((boot_seconds - saved_last_seconds) > WDOG_LOWER_THRESHOLD) &&
+			((boot_seconds - saved_last_seconds) <= WDOG_HIGHER_THRESHOLD) ) {
+			printk(KERN_ERR "boot: C def:rst:reset=watchdog:\n");
+		}
+		else {
+			printk(KERN_ERR "boot: C def:rst:reset=hard:\n");
+		}
+	}
+	else {
+		if (!boot_reason && !saved_last_seconds)
+			printk(KERN_ERR "boot: C def:bcut:batterycut=1:\n");
+	}
+
 	/*
 	 * If the current time is less than the saved time, use the saved time
 	 */
 	if (sec < saved_last_seconds) {
 		sec = saved_last_seconds;
 		set_ext_rtc_time(sec);
+		boot_seconds = sec;
 	}
 
 	if (ret == MXC_EXTERNAL_RTC_OK) {
@@ -842,6 +922,9 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	if (device_create_file(&pdev->dev, &dev_attr_rtc_saved_last_seconds) < 0)
 		printk (KERN_ERR "mxc_rtc: error creating rtc_saved_last_seconds entry\n");
 
+	if (device_create_file(&pdev->dev, &dev_attr_rtc_boot_seconds) < 0)
+		printk (KERN_ERR "mxc_rtc: error creating rtc_boot_seconds entry\n");
+
 	return ret;
 }
 
@@ -856,6 +939,7 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 	sysfs_remove_file(&mxc_rtc_dev->kobj, &dev_attr_wakeup_enable.attr);
 	device_remove_file(&pdev->dev, &dev_attr_rtc_pmic_epoch_time);
 	device_remove_file(&pdev->dev, &dev_attr_rtc_saved_last_seconds);
+	device_remove_file(&pdev->dev, &dev_attr_rtc_boot_seconds);
 	clk_disable(pdata->clk);
 	clk_put(pdata->clk);
 	kfree(pdata);

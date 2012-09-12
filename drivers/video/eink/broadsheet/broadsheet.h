@@ -283,6 +283,8 @@ extern void broadsheet_set_override_upd_mode(int upd_mode);
 extern int  broadsheet_get_override_upd_mode(void);
 extern bool broadsheet_get_promote_flashing_updates(void);
 
+extern int  broadsheet_get_temperature(void);
+
 extern bool broadsheet_ignore_hw_ready(void);
 extern void broadsheet_set_ignore_hw_ready(bool value);
 extern bool broadsheet_force_hw_not_ready(void);
@@ -331,5 +333,58 @@ extern bs_panel_data panel_data;
 // Broadsheet EEPROM API (broadsheet_eeprom.c)
 //
 #include "broadsheet_eeprom.h"
+
+// Build Specifics
+//
+#define BATTERY_TEMP_FORMAT_F       "temp=%dF:from battery\n"
+#define BATTERY_TEMP_FORMAT_C       "temp=%dC:from battery\n"
+
+#define PMIC_TEMP_FORMAT_NORMAL_C   "temp=%dC:from pmic\n"
+#define PMIC_TEMP_FORMAT_WARN_C_m_M "temp=%dC:from pmic, outside of ideal range of %dC to %dC\n"
+
+#define TEMP_FORMAT_C_WHICH         "temp=%dC:from %s\n"
+#define TEMP_WHICH_C_BATT           "battery"
+#define TEMP_WHICH_C_PMIC           "pmic"
+
+#define CLIPPED_TEMP_FORMAT_C       "temp=%dC:clipped\n"
+
+#define OVERRIDE_TEMP_FORMAT_C      "temp=%dC:overridden\n"
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,26))
+extern int luigi_temperature;
+
+static inline void log_battery_temperature(void)
+{
+    if ( IS_LUIGI_PLATFORM() )
+        einkfb_print_warn(BATTERY_TEMP_FORMAT_F, luigi_temperature);
+}
+
+static inline int get_battery_temperature(void)
+{
+    int temp = BS_TEMP_INVALID;
+    
+    if ( IS_LUIGI_PLATFORM() )
+    {
+        int f_to_c[BS_MAX_F-BS_MIN_F+1] =
+        {
+            0,  1,  1,  2,  2,  3,  3,  4,  4,  5,  6,  6,  7,  7,  8,  8,  9,  9, 10,
+           11, 11, 12, 12, 13, 13, 14, 14, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 21,
+           21, 22, 22, 23, 23, 24, 24, 25, 26, 26, 27, 27, 28, 28, 29, 29, 30, 31, 31,
+           32, 32, 33, 33, 34, 34, 35, 36, 36, 37, 37, 38, 38, 39, 39, 40, 41, 41, 42,
+           42, 43, 43, 44, 44, 45, 46, 46, 47, 47, 48, 48, 49, 49, 50
+        };
+        
+        temp = luigi_temperature;
+        
+        if ( IN_RANGE(temp, BS_MIN_F, BS_MAX_F) )
+            temp = f_to_c[temp-BS_MIN_F];
+    }
+    
+    return ( temp );
+}
+#else
+#define log_battery_temperature() do { } while (0)
+#define get_battery_temperature() BS_TEMP_INVALID
+#endif
 
 #endif // _BROADSHEET_H

@@ -119,12 +119,14 @@ static int sdio_irq_thread(void *_host)
 		 * that an interrupt will be closely followed by more.
 		 * This has a substantial benefit for network devices.
 		 */
-		if (ret > 0)
-			period /= 2;
-		else {
-			period++;
-			if (period > idle_period)
-				period = idle_period;
+		if (!(host->caps & MMC_CAP_SDIO_IRQ)) {
+			if (ret > 0)
+				period /= 2;
+			else {
+				period++;
+				if (period > idle_period)
+					period = idle_period;
+			}
 		}
 
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -135,10 +137,12 @@ static int sdio_irq_thread(void *_host)
 		set_current_state(TASK_RUNNING);
 	} while (!kthread_should_stop());
 
+	printk("IRQ thread exiting\n");
+
 	if (host->caps & MMC_CAP_SDIO_IRQ)
 		host->ops->enable_sdio_irq(host, 0);
 
-	pr_debug("%s: IRQ thread exiting with code %d\n",
+	printk("%s: IRQ thread exiting with code %d\n",
 		 mmc_hostname(host), ret);
 
 	return ret;
@@ -239,13 +243,22 @@ int sdio_release_irq(struct sdio_func *func)
 	BUG_ON(!func);
 	BUG_ON(!func->card);
 
-	pr_debug("SDIO: Disabling IRQ for %s...\n", sdio_func_id(func));
+	printk("SDIO: Disabling IRQ for %s...\n", sdio_func_id(func));
+
+	if (func->irq_handler) {
+                func->irq_handler = NULL;
+                sdio_card_irq_put(func->card);
+        }
+
+	printk("SDIO: sdio_card_irq_put\n");
 
 	ret = mmc_io_rw_direct(func->card, 0, 0, SDIO_CCCR_IENx, 0, &reg);
 	if (ret)
 		return ret;
 
 	reg &= ~(1 << func->num);
+
+	printk("SDIO: mmc_io_rw_direct\n");
 
 	/* Disable master interrupt with the last function interrupt */
 	if (!(reg & 0xFE))
@@ -255,10 +268,8 @@ int sdio_release_irq(struct sdio_func *func)
 	if (ret)
 		return ret;
 
-	if (func->irq_handler) {
-		func->irq_handler = NULL;
-		sdio_card_irq_put(func->card);
-	}
+	printk("SDIO: mmc_io_rw_direct 1\n");
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(sdio_release_irq);

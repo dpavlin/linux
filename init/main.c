@@ -574,7 +574,11 @@ asmlinkage void __init start_kernel(void)
 	boot_cpu_init();
 	page_address_init();
 	printk(KERN_NOTICE);
+#ifdef CONFIG_MACH_LUIGI_LAB126
+	printk(linux_banner_lab126);
+#else
 	printk(linux_banner);
+#endif
 	setup_arch(&command_line);
 	mm_init_owner(&init_mm, &init_task);
 	setup_command_line(command_line);

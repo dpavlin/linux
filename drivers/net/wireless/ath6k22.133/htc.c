@@ -391,10 +391,17 @@ void HTCStop(HTC_HANDLE HTCHandle)
          * all pending HIF I/O has completed, we can safely flush the queues */
     DevMaskInterrupts(&target->Device);
 
+    printk("DevMaskInterrupts\n");
+
         /* flush all send packets */
     HTCFlushSendPkts(target);
+
+    printk("HTCFlushSendPkts\n");
+
         /* flush all recv buffers */
     HTCFlushRecvBuffers(target);
+
+    printk("HTCFlushRecvBuffers\n");
 
     ResetEndpointStates(target);
    

@@ -110,10 +110,10 @@ extern int kernel_oops_counter;
 #define MX35_CGR1_IPU_MASK	0xc0000
 
 /* SDMA, SPBA, UART1, USBOTG, MAX, WDOG */
-#define MX35_CGR2_MASK		0x0cc303F0
+#define MX35_CGR2_MASK		0x0fc303F0
 
 /* SDMA, SPBA, UART1, MAX, WDOG */
-#define MX35_CGR2_USBOTG_MASK	0x0c0303F0
+#define MX35_CGR2_USBOTG_MASK	0x0f0303F0
 
 /* All gated except the ones marked as reserved and IIM */
 #define MX35_CGR3_MASK		0xffffffc0
@@ -289,10 +289,6 @@ static inline void disable_cgr_clks(void)
 
 	reg = MX35_CGR0_MASK;
 
-	/* Check the count on the cspi_clk */
-	if (!cspi_clk->usecount)
-		reg &= ~(0xc00);
-
 	__raw_writel(reg, MXC_CCM_CGR0);
 
 	if (check_i2c_clk()) {
@@ -303,9 +299,9 @@ static inline void disable_cgr_clks(void)
 #endif
 	} else {
 #ifdef CONFIG_FEC
-		reg = MX35_CGR1_MASK_I2C_FEC;
+		reg = MX35_CGR1_MASK_FEC;
 #else
-		reg = MX35_CGR1_MASK_I2C;
+		reg = MX35_CGR1_MASK;
 #endif
 	}
 	if (eink_doze_disable_cnt)
@@ -326,6 +322,17 @@ static inline void disable_cgr_clks(void)
 	__raw_writel(MX35_CGR3_MASK, MXC_CCM_CGR3);
 	
 }
+
+/* Enable the watchdog clock */
+void watchdog_enable_clock(void)
+{
+	unsigned long reg = __raw_readl(MXC_CCM_CGR2);
+
+	/* Enable the watchdog clock - bits 24, 25 */
+	reg |= 0x03000000;
+	__raw_writel(reg, MXC_CCM_CGR2);
+}
+EXPORT_SYMBOL(watchdog_enable_clock);
 
 /*!
  * cko_clk needed during audio and video
@@ -510,6 +517,8 @@ void arch_idle(void)
 			reduce_nfc_clk_speed();
 		}
 
+		local_fiq_disable();
+
 		disable_cgr_clks();
 		if (eink_doze_counter())
 			cko1_disable();
@@ -560,6 +569,8 @@ void arch_idle(void)
 		clk_enable(ipu_clk);
 		cko1_enable();
 		enable_cgr_clks();
+
+		local_fiq_enable();
 	}
 	else {
 		mxc_cpu_lp_set(WAIT_UNCLOCKED);
@@ -582,9 +593,12 @@ void arch_reset(char mode)
 	unsigned long reg;
 	unsigned long reg_1 = 0xffffffff;
 
+	doze_disable();
+
 	reg = __raw_readl(MXC_CCM_CGR0);
 	reg |= (MXC_CCM_CGR0_ESDHC1_MASK | MXC_CCM_CGR0_ESDHC2_MASK |
-		MXC_CCM_CGR0_ESDHC3_MASK);
+		MXC_CCM_CGR0_ESDHC3_MASK | MXC_CCM_CGR0_CSPI1_MASK |
+		MXC_CCM_CGR0_CSPI2_MASK);
 	__raw_writel(reg, MXC_CCM_CGR0);
 
 	reg = __raw_readl(MXC_CCM_CGR3);
@@ -604,8 +618,6 @@ void arch_reset(char mode)
 
 	/* Turn on bit #1 */
 	pmic_write_reg(REG_MEM_A, (1 << 1), (1 << 1));
-
-	doze_disable();
 
 	/* Turn off VSD */
 	pmic_write_reg(REG_MODE_1, (0 << 18), (1 << 18));

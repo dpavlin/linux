@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet.c
  *  -- eInk frame buffer device HAL broadsheet sw
  *
- *      Copyright (C) 2005-2010 Amazon Technologies
+ *      Copyright (C) 2005-2010 Amazon Technologies, Inc.
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -125,6 +125,8 @@ static int wfm_trc  = 0;
 static int wfm_eb   = 0;
 static int wfm_sb   = 0;
 static int wfm_wmta = 0;
+
+static bool bs_clip_temp = true;
 
 static int bs_fpl_size = 0;
 static int bs_fpl_rate = 0;
@@ -767,13 +769,14 @@ static char *panel_skus[] =
 {
     // 6.0-inch panels
     //
-    "ED060SC4!!", "ED060SC4H1", "ED060SC4H2", "ED060SC5!!", "ED060SC5H1", "ED060SC5H2",
-    "ED060SC7!!", "ED060SC7H1", "ED060SC7H2", "ED060SC5C1", "ED060SC7C1", 
+    "ED060SC4!!!!!!!!", "ED060SC4H1!!!!!!", "ED060SC4H2!!!!!!", "ED060SC5!!!!!!!!", "ED060SC5H1!!!!!!", "ED060SC5H2!!!!!!",
+    "ED060SC7!!!!!!!!", "ED060SC7H1!!!!!!", "ED060SC7H2!!!!!!", "ED060SC5C1!!!!!!", "ED060SC7C1!!!!!!", "ED060SC7T1!!!!!!",
+    "LB060S03-RD01!!!", "LB060S03-RD02!!!",
     
     // 9.7-inch panels
     //
-    "ED097OC1!!", "ED097OC1H1", "ED097OC1H2", "EF097OC3!!", "EF097OC3H1", "EF097OC3H2",
-    "EF097OC4!!", "EF097OC4H1", "EF097OC4H2", "ED097OC4!!", "ED097OC4H1", "ED097OC4H2",
+    "ED097OC1!!!!!!!!", "ED097OC1H1!!!!!!", "ED097OC1H2!!!!!!", "EF097OC3!!!!!!!!", "EF097OC3H1!!!!!!", "EF097OC3H2!!!!!!",
+    "EF097OC4!!!!!!!!", "EF097OC4H1!!!!!!", "EF097OC4H2!!!!!!", "ED097OC4!!!!!!!!", "ED097OC4H1!!!!!!", "ED097OC4H2!!!!!!",
     
     // EOL
     //
@@ -785,7 +788,8 @@ static char *panel_mmms[] =
     // 6.0-inch panels
     //
     "M01", "M03", "M04", "M06", "M0B", "M0C",
-    "M12", "M13", "M14", "M23", "M24",
+    "M12", "M13", "M14", "M23", "M24", "M3D",
+    "MA1", "MA2",
     
     // 9.7-inch panels
     //
@@ -2574,21 +2578,154 @@ static void bs_cmd_ld_img_upd_data_which(bs_cmd cmd, fx_type update_mode, u8 *da
 
         if ( !skip_buffer_display )
         {
+            int  temp = broadsheet_get_temperature();
+            bool set_temp = false;
+            
             // Check to see whether we need to externally drive the temperature and
             // manually drive VCOM.
             //
             if ( BS_HAS_PMIC() )
             {
-                u16 temp;
-                
                 bs_pmic_set_power_state(bs_pmic_power_state_active);
+                set_temp = true;
                 
-                temp = (u16)BS_GET_TEMP_CACHED();
-                bs_cmd_wr_reg(BS_TEMP_VALUE_REG, temp);
-                einkfb_debug("PMIC temp = %d\n", temp);
-                
+                // Check to see whether we should get the temperature from Papyrus or not.
+                //
+                if ( !IN_RANGE(temp, BS_TEMP_MIN, BS_TEMP_MAX) )
+                {
+                    int  temp_batt = get_battery_temperature();
+                    bool temp_batt_in_use = false;
+                    
+                    // Papyrus has an issue where it can potentially get stuck returning
+                    // a temperature that's outside both the acceptable as well the
+                    // ideal temperature range.
+                    //
+                    temp = BS_GET_TEMP_CACHED();
+                    
+                    // To get around the problem where Papyrus is stuck returning a
+                    // bogus (-10C) temperature...
+                    //
+                    if ( BS_TEMP_STUCK == temp )
+                    {
+                        // ...use the battery's temperature if it's in range.
+                        //
+                        // Notes: Only log the bogus Papyrus temperature on
+                        //        flashing updates to keep the logging traffic
+                        //        to a relative minimum.
+                        //
+                        //        If we're clipping the temperature and the
+                        //        temperature that the battery returns needs
+                        //        to be clipped, that will still happen.
+                        //
+                        //        If the battery's temperature is also out
+                        //        of range, we'll just leave things alone:
+                        //        maybe it really is very cold!
+                        //
+                        //        We do this for both non-flashing and flashing
+                        //        updates since Papyrus is presumably stuck
+                        //        returning a bogus value.
+                        //
+                        if ( fx_update_full == local_update_mode )
+                        {
+                            einkfb_print_warn(PMIC_TEMP_FORMAT_WARN_C_m_M, temp, BS_TEMP_MIN_IDEAL,
+                                BS_TEMP_MAX_IDEAL);
+                        }
+                        
+                        if ( IN_RANGE(temp_batt, BS_TEMP_MIN, BS_TEMP_MAX) )
+                        {
+                            temp_batt_in_use = true;
+                            temp = temp_batt;
+                        }
+                    }
+                    
+                    if ( bs_clip_temp && !IN_RANGE(temp, BS_TEMP_MIN_IDEAL, BS_TEMP_MAX_IDEAL) )
+                    {
+                        // Only warn/clip that we're outside of the ideal temperature range when we
+                        // get a flashing (page-turn-like) update.
+                        //
+                        if ( fx_update_full == local_update_mode )
+                        {
+                            log_battery_temperature();
+                            
+                            einkfb_print_warn(PMIC_TEMP_FORMAT_WARN_C_m_M, temp, BS_TEMP_MIN_IDEAL,
+                                BS_TEMP_MAX_IDEAL);
+
+                            // Papyrus is showing that we're outside the ideal temperature range.  If
+                            // it's hotter than the ideal temperature range, we're going to clip it.
+                            //
+                            if ( BS_TEMP_MAX_IDEAL < temp )
+                            {
+                                // If the battery temperature is in the ideal range...
+                                //
+                                if ( IN_RANGE(temp_batt, BS_TEMP_MIN_IDEAL, BS_TEMP_MAX_IDEAL) )
+                                {
+                                    // ...and it's less than what Papyrus is showing, use it.
+                                    //
+                                    if ( BS_TEMP_MAX_IDEAL > temp_batt )
+                                    {
+                                        einkfb_print_warn(BATTERY_TEMP_FORMAT_C, temp_batt);
+                                        temp = temp_batt;
+                                    }
+                                }
+                                
+                                // Clip it to max if necessary.
+                                //
+                                if ( BS_TEMP_MAX_IDEAL < temp )
+                                {
+                                    einkfb_print_warn(CLIPPED_TEMP_FORMAT_C, BS_TEMP_MAX_IDEAL);
+                                    temp = BS_TEMP_MAX_IDEAL;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        char *which = temp_batt_in_use ? TEMP_WHICH_C_BATT : TEMP_WHICH_C_PMIC;
+                        
+                        // We now always want to log the temperature on flashing (page-turn like)
+                        // updates.
+                        //
+                        // Note:  If we substituted the battery's temperature for that of 
+                        //        Papyrus because Papyrus is stuck returning a bogus one,
+                        //        we'll see both the bogus tempature and the substitute
+                        //        in the log.
+                        //
+                        if ( fx_update_full == local_update_mode )
+                        {
+                            einkfb_print_info(TEMP_FORMAT_C_WHICH, temp, which);
+                        }
+                        else
+                            einkfb_debug(TEMP_FORMAT_C_WHICH, temp, which);
+                    }
+                }
+                else
+                {
+                    if ( fx_update_full == local_update_mode )
+                    {
+                        einkfb_print_info(OVERRIDE_TEMP_FORMAT_C, temp);
+                    }
+                    else
+                        einkfb_debug(OVERRIDE_TEMP_FORMAT_C, temp);
+                }
+
                 BS_VCOM_ALWAYS_ON();
             }
+            else
+            {
+                // Check to see whether we're manually overriding the temperature.
+                //
+                if ( IN_RANGE(temp, BS_TEMP_MIN, BS_TEMP_MAX) )
+                {
+                    bs_cmd_wr_reg(BS_TEMP_DEV_SELECT_REG, BS_TEMP_DEV_EXT);
+                    einkfb_debug(OVERRIDE_TEMP_FORMAT_C, temp);
+                    set_temp = true;
+                }
+                else
+                    bs_cmd_wr_reg(BS_TEMP_DEV_SELECT_REG, BS_TEMP_DEV_INT);
+            }
+            
+            if ( set_temp )
+                bs_cmd_wr_reg(BS_TEMP_VALUE_REG, (u16)temp);
             
             // Set up to display the loaded image data.
             //
@@ -3986,6 +4123,9 @@ static void bs_get_fpl_info(unsigned char *size, unsigned char *rate)
                 *rate = bs_fpl_rate = waveform_info.fpl_rate;
             else
                 bs_fpl_rate = *rate;
+                
+            if ( EINK_IMPROVED_TEMP_RANGE == waveform_info.tuning_bias )
+                bs_clip_temp = false;
         }
         else
         {
@@ -4555,36 +4695,39 @@ void bs_iterate_cmd_queue(bs_cmd_queue_iterator_t bs_cmd_queue_iterator, int max
 
 int bs_read_temperature(void)
 {
-    int temp = 0;
-    
-    if ( BS_HAS_PMIC() )
+    int temp = broadsheet_get_temperature();
+
+    if ( !IN_RANGE(temp, BS_TEMP_MIN, BS_TEMP_MAX) )
     {
-        // The act of moving Papyrus to the active state causes the temperature to be read,
-        // so, we just need to read back the value that was just cached.
-        //
-        bs_pmic_set_power_state(bs_pmic_power_state_active);
-        temp = BS_GET_TEMP_CACHED();
-    }
-    else
-    {
-        int raw_temp;
-    
-        bs_cmd_wr_reg(0x214, 0x0001);           // Trigger a temperature-sensor read.
-        bs_cmd_wait_for_bit(0x212, 0, 0);       // Wait for the sensor to be idle.
-    
-        raw_temp = (int)bs_cmd_rd_reg(0x216);   // Read the result.
-    
-        // The temperature sensor is actually returning a signed, 8-bit
-        // value from -25C to 80C.  But we go ahead and use the entire
-        // 8-bit range:  0x00..0x7F ->  0C to  127C
-        //               0xFF..0x80 -> -1C to -128C
-        //
-        if ( IN_RANGE(raw_temp, 0x0000, 0x007F) )
-            temp = raw_temp;
+        if ( BS_HAS_PMIC() )
+        {
+            // The act of moving Papyrus to the active state causes the temperature to be read,
+            // so, we just need to read back the value that was just cached.
+            //
+            bs_pmic_set_power_state(bs_pmic_power_state_active);
+            temp = BS_GET_TEMP_CACHED();
+        }
         else
         {
-            raw_temp &= 0x00FF;
-            temp = raw_temp - 0x0100;
+            int raw_temp;
+        
+            bs_cmd_wr_reg(0x214, 0x0001);           // Trigger a temperature-sensor read.
+            bs_cmd_wait_for_bit(0x212, 0, 0);       // Wait for the sensor to be idle.
+        
+            raw_temp = (int)bs_cmd_rd_reg(0x216);   // Read the result.
+        
+            // The temperature sensor is actually returning a signed, 8-bit
+            // value from -25C to 80C.  But we go ahead and use the entire
+            // 8-bit range:  0x00..0x7F ->  0C to  127C
+            //               0xFF..0x80 -> -1C to -128C
+            //
+            if ( IN_RANGE(raw_temp, 0x0000, 0x007F) )
+                temp = raw_temp;
+            else
+            {
+                raw_temp &= 0x00FF;
+                temp = raw_temp - 0x0100;
+            }
         }
     }
 

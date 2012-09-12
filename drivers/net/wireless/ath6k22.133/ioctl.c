@@ -2881,8 +2881,8 @@ int ar6000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
             if (copy_to_user(userdata, &getKeepAlive, sizeof(getKeepAlive))) {
                ret = -EFAULT;
             }
-            up(&ar->arSem);
             }
+            up(&ar->arSem);
             break;
         }
         case AR6000_XIOCTL_WMI_SET_APPIE:

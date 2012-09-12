@@ -1126,6 +1126,10 @@ static void fsg_disconnect(struct usb_gadget *gadget)
 	struct fsg_dev		*fsg = get_gadget_data(gadget);
 
 	DBG(fsg, "disconnect or port reset\n");
+
+	if (fsg->state == FSG_STATE_DISCONNECT)
+		return;
+
 	raise_exception(fsg, FSG_STATE_DISCONNECT);
 }
 

@@ -2,19 +2,15 @@
 // <copyright file="hif.c" company="Atheros">
 //    Copyright (c) 2004-2008 Atheros Corporation.  All rights reserved.
 // 
-// The software source and binaries included in this development package are
-// licensed, not sold. You, or your company, received the package under one
-// or more license agreements. The rights granted to you are specifically
-// listed in these license agreement(s). All other rights remain with Atheros
-// Communications, Inc., its subsidiaries, or the respective owner including
-// those listed on the included copyright notices.  Distribution of any
-// portion of this package must be in strict compliance with the license
-// agreement(s) terms.
-// </copyright>
-// 
-// <summary>
-// 	Wifi driver for AR6002
-// </summary>
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
 //
 //------------------------------------------------------------------------------
 //==============================================================================
@@ -461,10 +457,12 @@ hifIRQHandler(struct sdio_func *func)
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: +hifIRQHandler\n"));
 
     device = getHifDevice(func);
+    atomic_set(&device->irqHandling, 1);
     /* release the host during ints so we can pick it back up when we process cmds */
     sdio_release_host(device->func);
     status = device->htcCallbacks.dsrHandler(device->htcCallbacks.context);
     sdio_claim_host(device->func);
+    atomic_set(&device->irqHandling, 0);
     AR_DEBUG_ASSERT(status == A_OK);
     AR_DEBUG_PRINTF(ATH_DEBUG_TRACE, ("AR6000: -hifIRQHandler\n"));
 }
@@ -599,7 +597,7 @@ HIFUnMaskInterrupt(HIF_DEVICE *device)
 
 void HIFMaskInterrupt(HIF_DEVICE *device)
 {
-    int ret;;
+    int ret;
 
     AR_DEBUG_ASSERT(device != NULL);
     AR_DEBUG_ASSERT(device->func != NULL);
@@ -608,9 +606,23 @@ void HIFMaskInterrupt(HIF_DEVICE *device)
 
     /* Mask our function IRQ */
     sdio_claim_host(device->func);
+
+    printk("sdio_claim_host\n");
+
+    while (atomic_read(&device->irqHandling)) {
+         sdio_release_host(device->func);
+         schedule_timeout(HZ/10);
+         sdio_claim_host(device->func);
+    }
+
     ret = sdio_release_irq(device->func);
+
+    printk("sdio_release_irq\n");
+
     sdio_release_host(device->func);
     AR_DEBUG_ASSERT(ret == 0);
+
+    printk("sdio_release_host\n");
 }
 
 static BUS_REQUEST *hifAllocateBusRequest(HIF_DEVICE *device)

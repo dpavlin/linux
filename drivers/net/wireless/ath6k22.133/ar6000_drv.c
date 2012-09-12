@@ -680,6 +680,7 @@ static int ar6000_remove(struct platform_device *pdev)
     gpio_wifi_power_enable(0);
 
     atomic_set(&sdio_removed, 1);
+
     return 0;
 }
 
@@ -992,18 +993,25 @@ static int __init ar6000_init_module(void)
 	return platform_driver_register(&ar6000_pdev_driver);
 }
 
+extern void sdhci_sdio_stop_gating(void);
+
 static void __exit ar6000_cleanup_module(void)
 {
 	int i = 0;
 	struct net_device *ar6000_netdev;
+	AR_SOFTC_T *ar;
 
 	printk(KERN_INFO "ar6000_cleanup_module\n");
+
+	sdhci_sdio_stop_gating();
 
 	for (i=0; i < MAX_AR6000; i++) {
 		if (ar6000_devices[i] != NULL) {
 			ar6000_netdev = ar6000_devices[i];
+			ar = (AR_SOFTC_T*)netdev_priv(ar6000_netdev);
 			ar6000_devices[i] = NULL;
 			ar6000_destroy(ar6000_netdev, 1);
+			A_UNTIMEOUT(&ar->disconnect_timer);
 		}
 	}
 
@@ -1816,7 +1824,7 @@ ar6000_destroy(struct net_device *dev, unsigned int unregister)
 {
     AR_SOFTC_T *ar;
 
-    AR_DEBUG_PRINTF("+ar6000_destroy \n");
+    printk("+ar6000_destroy: %d\n", bypasswmi);
 
     if((dev == NULL) || ((ar = netdev_priv(dev)) == NULL))
     {
@@ -1862,11 +1870,11 @@ ar6000_destroy(struct net_device *dev, unsigned int unregister)
 #endif
         }
 
-         AR_DEBUG_PRINTF("%s(): WMI stopped\n", __func__);
+         printk("%s(): WMI stopped\n", __func__);
     }
     else
     {
-        AR_DEBUG_PRINTF("%s(): WMI not ready 0x%08x 0x%08x\n",
+        printk("%s(): WMI not ready 0x%08x 0x%08x\n",
             __func__, (unsigned int) ar, (unsigned int) ar->arWmi);
 
         /* Shut down WMI if we have started it */
@@ -1880,11 +1888,16 @@ ar6000_destroy(struct net_device *dev, unsigned int unregister)
     }
 
     if (ar->arHtcTarget != NULL) {
-        AR_DEBUG_PRINTF(" Shuting down HTC .... \n");
+        printk(" Shuting down HTC .... \n");
         /* stop HTC */
         HTCStop(ar->arHtcTarget);
+
+	printk(" After HTCStop\n");
+
         /* destroy HTC */
         HTCDestroy(ar->arHtcTarget);
+
+	printk("HTCDestroy\n");
     }
 
     if (resetok) {
@@ -1899,12 +1912,16 @@ ar6000_destroy(struct net_device *dev, unsigned int unregister)
         AR_DEBUG_PRINTF(" Host does not want target reset. \n");
     }
 
+    printk("ar6000_reset_device\n");
+
     if (ar->arHifDevice != NULL) {
         /*release the device so we do not get called back on remove incase we
          * we're explicity destroyed by module unload */
         HIFReleaseDevice(ar->arHifDevice);
         HIFShutDownDevice(ar->arHifDevice);
     }
+
+    printk("HIFShutDownDevice\n");
 
        /* Done with cookies */
     ar6000_cookie_cleanup(ar);
@@ -1931,8 +1948,7 @@ ar6000_destroy(struct net_device *dev, unsigned int unregister)
 #else
     free_netdev(dev);
 #endif
-
-    AR_DEBUG_PRINTF("-ar6000_destroy \n");
+    printk("-ar6000_destroy \n");
 }
 
 static void disconnect_timer_handler(unsigned long ptr)

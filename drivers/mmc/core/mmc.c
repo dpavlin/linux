@@ -261,7 +261,9 @@ static int mmc_read_ext_csd(struct mmc_card *card)
 		}
 	}
 
-	switch (ext_csd[EXT_CSD_CARD_TYPE]) {
+	printk(KERN_INFO "ext_csd: 0x%x\n", ext_csd[EXT_CSD_CARD_TYPE]);
+
+	switch (ext_csd[EXT_CSD_CARD_TYPE] & EXT_CSD_CARD_TYPE_MASK) {
 	case EXT_CSD_CARD_TYPE_52 | EXT_CSD_CARD_TYPE_26:
 		card->ext_csd.hs_max_dtr = 52000000;
 		break;
@@ -400,34 +402,34 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 		switch (manufacturer_id) {
 		case SAMSUNG_MANF_ID:
 				if (IS_SHASTA() && (IS_DVT() || IS_PVT())) {
-					printk(KERN_INFO "%s: Using open-ended mode on Samsung eMMC\n",
+					printk(KERN_INFO "emmc: I def:mmcpartinfo:vendor=samsung, mode=open-ended, host=%s:\n",
 						mmc_hostname(host));
 					host->predefined = 0;
 				}
 				else { 
-					printk(KERN_INFO "%s: Using predefined mode on Samsung eMMC\n", 
+					printk(KERN_INFO "emmc: I def:mmcpartinfo:vendor=samsung, mode=predefined, host=%s:\n",
 						mmc_hostname(host));
 					host->predefined = 1;
 				}
 				break;
 		case SANDISK_MANF_ID:
-				printk(KERN_INFO "%s: Using open-ended mode on Sandisk eMMC\n",
-						mmc_hostname(host));
+				printk(KERN_INFO "emmc: I def:mmcpartinfo:vendor=sandisk, mode=open-ended, host=%s:\n",
+					mmc_hostname(host));
 				host->predefined = 0;
 				break;
 		case TOSHIBA_MANF_ID:
-				printk(KERN_INFO "%s: Using open-ended mode on Toshiba eMMC\n",
-						mmc_hostname(host));
+				printk(KERN_INFO "emmc: I def:mmcpartinfo:vendor=toshiba, mode=open-ended, host=%s:\n",
+					mmc_hostname(host));
 				host->predefined = 0;
 				break;
 		case HYNIX_MANF_ID:
-				printk(KERN_INFO "%s: Using open-ended mode on Hynix eMMC\n",
-						mmc_hostname(host));
-				host->predefined = 0;
+				printk(KERN_INFO "emmc: I def:mmcpartinfo:vendor=hynix, mode=predefined, host=%s:\n",
+					mmc_hostname(host));
+				host->predefined = 1;
 				break;
 		default:
-				printk(KERN_INFO "%s: Using open-ended mode on eMMC\n",
-						mmc_hostname(host));
+				printk(KERN_INFO "emmc: I def:mmcpartinfo:vendor=na, mode=open-ended, host=%s:\n",
+					mmc_hostname(host));
 				host->predefined = 0;
 				break;
 		}

@@ -82,6 +82,14 @@ ENTRY(cpu_v6_do_idle)
 	mcr p15, 0, r0, c7, c14, 0	@D-cache
 	mov r0, #0
 	mcr p15, 0, r0, c7, c0, 4	@Enter WFI
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
 	mrc p15, 0, r0, c1, c0, 0	@Read system control reg
 	orr r0, r0, #0x00001000		@Enable I-cache
 	orr r0, r0, #0x00000004		@Enable D-cache

@@ -42,3 +42,10 @@ const char linux_proc_banner[] =
 	"%s version %s"
 	" (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
 	" (" LINUX_COMPILER ") %s\n";
+
+#ifdef CONFIG_MACH_LUIGI_LAB126
+
+const char linux_banner_lab126[] =
+	"Linux " UTS_VERSION "\n";
+
+#endif

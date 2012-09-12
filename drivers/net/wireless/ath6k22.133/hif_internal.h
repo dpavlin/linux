@@ -83,6 +83,7 @@ struct hif_device {
     HTC_CALLBACKS htcCallbacks;
     A_UINT8     *dma_buffer;
     wait_queue_head_t wait;
+    atomic_t     irqHandling;
 };
 
 #define HIF_DMA_BUFFER_SIZE (32 * 1024)

@@ -142,6 +142,16 @@
 #define TEMPERATURE_REFRESHED   true
 #define TEMPERATURE_CACHED      false
 
+#define BS_TEMP_MIN             0
+#define BS_TEMP_MAX             50
+#define BS_TEMP_MIN_IDEAL       15
+#define BS_TEMP_MAX_IDEAL       32
+#define BS_TEMP_INVALID         (-1)
+#define BS_TEMP_STUCK           (-10)
+
+#define BS_MIN_F                32  // BS_TEMP_MIN is in C
+#define BS_MAX_F                122 // BS_TEMP_MAX is in C
+
 #define BS_GET_TEMP_FRESH()     bs_pmic_get_temperature(TEMPERATURE_REFRESHED)
 #define BS_GET_TEMP_CACHED()    bs_pmic_get_temperature(TEMPERATURE_CACHED)
 

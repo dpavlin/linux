@@ -19,6 +19,7 @@
 
 extern const char linux_banner[];
 extern const char linux_proc_banner[];
+extern const char linux_banner_lab126[];
 
 #define USHORT_MAX	((u16)(~0U))
 #define SHORT_MAX	((s16)(USHORT_MAX>>1))

@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_eeprom.h --
  *  eInk frame buffer device HAL broadsheet panel EEPROM defs
  *
- *      Copyright (C) 2009-2010 Amazon Technologies
+ *      Copyright (C) 2009-2010 Amazon Technologies, Inc.
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -13,7 +13,7 @@
 #define _BROADSHEET_EEPROM_H
 
 #define EEPROM_BASE_PART_NUMBER 0x00
-#define EEPROM_SIZE_PART_NUMBER 10
+#define EEPROM_SIZE_PART_NUMBER 16
 
 #define EEPROM_BASE_VCOM        0x10
 #define EEPROM_SIZE_VCOM        5

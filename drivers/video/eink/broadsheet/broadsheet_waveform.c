@@ -2,7 +2,7 @@
  *  linux/drivers/video/eink/broadsheet/broadsheet_waveform.c --
  *  eInk frame buffer device HAL broadsheet waveform code
  *
- *      Copyright (C) 2005-2010 Amazon Technologies
+ *      Copyright (C) 2005-2010 Amazon Technologies, Inc.
  *
  *  This file is subject to the terms and conditions of the GNU General Public
  *  License. See the file COPYING in the main directory of this archive for
@@ -26,7 +26,7 @@ enum wf_types
 {
     wft_wx, wft_wy, wft_wp, wft_wz, wft_wq, wft_ta, wft_wu, wft_tb, wft_td, wft_wv, wft_wt, wft_te,
     wft_xa, wft_xb, wft_we, wft_wd, wft_xc, wft_ve, wft_xd, wft_xe, wft_xf, wft_wj, wft_wk, wft_wl,
-    unknown_wf_type, num_wf_types
+    wft_vj, unknown_wf_type, num_wf_types
 };
 typedef enum wf_types wf_types;
 
@@ -48,8 +48,8 @@ typedef enum panel_sizes panel_sizes;
 
 enum tuning_biases
 {
-    standard_bias, increased_ds_blooming_1, increased_ds_blooming_2, unknown_tuning_bias,
-    num_tuning_biases
+    standard_bias, increased_ds_blooming_1, increased_ds_blooming_2, improved_temperature_range,
+    unknown_tuning_bias, num_tuning_biases
 };
 typedef enum tuning_biases tuning_biases;
 
@@ -65,7 +65,7 @@ static char *wf_type_names[num_wf_types] =
 {
     "WX", "WY", "WP", "WZ", "WQ", "TA", "WU", "TB", "TD", "WV",
     "WT", "TE", "??", "??", "WE", "WD", "??", "VE", "??", "??",
-    "??", "WJ", "WK", "WL", "??"
+    "??", "WJ", "WK", "WL", "VJ", "??"
 };
 
 static char *platform_names[num_platforms] =
@@ -81,7 +81,7 @@ static char *panel_size_names[num_panel_sizes] =
 
 static char *tuning_bias_names[num_tuning_biases] =
 {
-    "S", "D", "D", "?"
+    "S", "D", "D", "T", "?"
 };
 
 #define IS_VIZP(v) ((matrix_Vizplex_110  == (v)) || (matrix_Vizplex_110A == (v)) || \
@@ -348,6 +348,7 @@ char *broadsheet_get_waveform_version_string(void)
         case wft_wj:
         case wft_wk:
         case wft_wl:
+        case wft_vj:
             strcat(waveform_version_string, wf_type_names[waveform.type]);
         break;
 
@@ -383,6 +384,7 @@ char *broadsheet_get_waveform_version_string(void)
         case standard_bias:
         case increased_ds_blooming_1:
         case increased_ds_blooming_2:
+        case improved_temperature_range:
             strcat(waveform_version_string, tuning_bias_names[waveform.tuning_bias]);
         break;
 

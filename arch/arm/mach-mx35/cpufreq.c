@@ -7,7 +7,7 @@
  *
  * Support for CPUFreq on the Luigi. It supports two operating points:
  * 256MHz and 512MHz. Along with the CPU Frequency scaling, the voltage
- * is also adjusted to be 1.25V (256MHz) or 1.4V (512MHz).
+ * is also adjusted to be 1.275V (256MHz) or 1.4V (512MHz).
  * 
  */
 
@@ -50,10 +50,10 @@ DEFINE_RAW_SPINLOCK(cpufreq_lock);
  * don't want to use the regulator_* functions as it issues multiple PMIC call
  * and causes unnecessary SPI traffic.
  *
- * SW2 and SW2_DVS min voltage of 1.25V and max voltage of 1.4V. 
+ * SW2 and SW2_DVS min voltage of 1.275V and max voltage of 1.4V. 
  * Bits 0-9 in Register 25
  */
-#define MX35_CPU_MIN_VOLTAGE	0xC6  /* 1.25V */
+#define MX35_CPU_MIN_VOLTAGE	0xE7  /* 1.275V */
 #define MX35_CPU_MAX_VOLTAGE	0x1CE /* 1.4V */
 
 /* Bits 0-9 mask for register 25 */

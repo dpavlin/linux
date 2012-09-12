@@ -161,6 +161,7 @@ static int mx35_suspend_enter(suspend_state_t state)
 	unsigned int reg;
 	unsigned int pmcr2 = __raw_readl(MXC_CCM_PMCR2);
 
+	local_irq_disable();
 	__raw_writel(MXC_INT_GPT, AVIC_INTDISNUM);
 	local_fiq_disable();
 
@@ -185,7 +186,7 @@ static int mx35_suspend_enter(suspend_state_t state)
 	__raw_writel(pmcr2, MXC_CCM_PMCR2);
 
 	reg = ccmr & ~(MXC_CCM_CCMR_UPE);
-	reg |= 0xF << MXC_CCM_CCMR_VOL_RDY_CNT_OFFSET;
+	reg |= (0xF << MXC_CCM_CCMR_VOL_RDY_CNT_OFFSET);
 	__raw_writel(reg, MXC_CCM_CCMR); /* Gate the peri_pll_clk */
 
 	switch (state) {
@@ -214,6 +215,7 @@ static int mx35_suspend_enter(suspend_state_t state)
 
 	local_fiq_enable();
 	__raw_writel(MXC_INT_GPT, AVIC_INTENNUM);
+	local_irq_enable();
 
 	return 0;
 }
@@ -273,36 +275,11 @@ static int check_wan_status(void)
  */
 static int mx35_suspend_prepare(suspend_state_t state)
 {
-#if defined(CONFIG_CPU_FREQ)
-	struct cpufreq_freqs freqs;
-	int org_freq = clk_get_rate(cpu_clk);
-
-	freqs.old = org_freq / 1000;
-	freqs.new = MAX_CPU_FREQUENCY / 1000;
-	freqs.cpu = 0;
-	freqs.flags = 0;
-
-	cpufreq_suspended = 1;
-	if (clk_get_rate(cpu_clk) != MAX_CPU_FREQUENCY) {
-		set_cpu_freq(MAX_CPU_FREQUENCY);
-		cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
-		cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
-	}
-#endif
-
 	/* Disable doze mode */
 	doze_disable();
-	
-	if (check_atlas_rev31() && check_wan_status() && !mc13892_broken_mode_switch) {
-		pmic_write_reg(REG_SW_1, SW2HI_VOLTAGE << SW2NORMAL_LSH, SW2_NORMAL_MASK << SW2NORMAL_LSH);
-		pmic_write_reg(REG_SW_1, SW2LOW_VOLTAGE << SW2STANDBY_LSH, SW2_STANDBY_MASK << SW2STANDBY_LSH);
-		
-		/* Set the SW2HI bit to 0 for lower voltage values */
-		pmic_write_reg(REG_SW_1, 0 << SW2HI_LSH, 1 << SW2HI_LSH);
-	}
 
-	/* Turn off accessory */
-	mx35_accessory_enable(0);
+	cpufreq_suspended = 1;
+	
 	return 0;
 }
 
@@ -311,43 +288,10 @@ static int mx35_suspend_prepare(suspend_state_t state)
  */
 static void mx35_suspend_finish(void)
 {
-#if defined(CONFIG_CPU_FREQ)
-	struct cpufreq_freqs freqs;
-#endif
-
-	/* Set the SW2HI bit only if it is 0 */
-	if (check_atlas_rev31() && !read_sw2hi_bit())
-		pmic_write_reg(REG_SW_1, 1 << SW2HI_LSH, 1 << SW2HI_LSH);
-
-#if defined(CONFIG_CPU_FREQ)
-	pmic_write_reg(REG_SW_1, MX35_CPU_MAX_VOLTAGE, SW2_VOLTAGE_MASK);
-	udelay(100);	/* 100 us settling time */
-
-	freqs.old = clk_get_rate(cpu_clk) / 1000;
-	freqs.new = MAX_CPU_FREQUENCY / 1000;
-	freqs.cpu = 0;
-	freqs.flags = 0;
-
-	if (clk_get_rate(cpu_clk) != MAX_CPU_FREQUENCY) {
-		set_cpu_freq(MAX_CPU_FREQUENCY);
-		cpufreq_notify_transition(&freqs, CPUFREQ_PRECHANGE);
-		cpufreq_notify_transition(&freqs, CPUFREQ_POSTCHANGE);
-	}
-#endif
-	if (get_pmic_revision() == 2)
-		pmic_write_reg(29, (0x8 << 8), (0xf << 8));
-	else
-		pmic_write_reg(29, (0x5 << 8), (0xf << 8));
-
 	/* Re-enable doze mode */
 	doze_enable();
 
-#if defined(CONFIG_CPU_FREQ)
-	/* Restart scaling only if no charger connected */
-	if (!charger_connected())
-		cpufreq_suspended = 0;
-#endif
-
+	cpufreq_suspended = 0;
 }
 
 static int mx35_pm_valid(suspend_state_t state)

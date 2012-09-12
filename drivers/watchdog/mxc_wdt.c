@@ -107,8 +107,13 @@ static ssize_t
 store_mxc_wdt_keepalive(struct device *dev, struct device_attribute *attr, const char *buf, size_t count);
 static DEVICE_ATTR(mxc_wdt_keepalive, 0666, NULL, store_mxc_wdt_keepalive);
 
+extern void watchdog_enable_clock(void);
+
 static void mxc_wdt_ping(u32 base)
 {
+	/* Make sure there is clock */
+	watchdog_enable_clock();
+
 	/* issue the service sequence instructions */
 	__raw_writew(WDT_MAGIC_1, base + MXC_WDT_WSR);
 	__raw_writew(WDT_MAGIC_2, base + MXC_WDT_WSR);

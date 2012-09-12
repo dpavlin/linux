@@ -3,20 +3,17 @@
  * Copyright (c) 2004-2007 Atheros Communications Inc.
  * All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation;
-
- * Software distributed under the License is distributed on an "AS
- * IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- * implied. See the License for the specific language governing
- * rights and limitations under the License.
- * </copyright>
- *
- * <summary>
- *     Wifi driver for AR6002
- * </summary>
  * 
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License version 2 as
+// published by the Free Software Foundation;
+//
+// Software distributed under the License is distributed on an "AS
+// IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
+// implied. See the License for the specific language governing
+// rights and limitations under the License.
+//
+//
  * 
  */
 
@@ -59,7 +56,7 @@ ar6000_htc_raw_read_cb(void *Context, HTC_PACKET *pPacket)
     busy->length = pPacket->ActualLength + HTC_HEADER_LEN;
     busy->currPtr = HTC_HEADER_LEN;
     ar->read_buffer_available[streamID] = TRUE;
-
+    //AR_DEBUG_PRINTF("raw read cb:  0x%X 0x%X \n", busy->currPtr,busy->length);
     up(&ar->raw_htc_read_sem[streamID]);
 
     /* Signal the waiting process */
@@ -262,7 +259,7 @@ int ar6000_htc_raw_open(AR_SOFTC_T *ar)
 
 int ar6000_htc_raw_close(AR_SOFTC_T *ar)
 {
-    A_PRINTF("ar6000_htc_raw_close called \n");  
+    A_PRINTF("ar6000_htc_raw_close called \n");
     
         /* reset the device */
     ar6000_reset_device(ar->arHifDevice, ar->arTargetType, TRUE);
@@ -339,9 +336,9 @@ ssize_t ar6000_htc_raw_read(AR_SOFTC_T *ar, HTC_RAW_STREAM_ID StreamID,
     }
 
     busy->currPtr += length;
-
-    up(&ar->raw_htc_read_sem[StreamID]);
-        
+    
+    //AR_DEBUG_PRINTF("raw read ioctl:  currPTR : 0x%X 0x%X \n", busy->currPtr,busy->length);
+    
     if (busy->currPtr == busy->length)
     {    
         busy->currPtr = 0;
@@ -351,6 +348,7 @@ ssize_t ar6000_htc_raw_read(AR_SOFTC_T *ar, HTC_RAW_STREAM_ID StreamID,
         HTCAddReceivePkt(ar->arHtcTarget, &busy->HTCPacket);
     }
     ar->read_buffer_available[StreamID] = FALSE;
+    up(&ar->raw_htc_read_sem[StreamID]);
 
     return length;
 }
@@ -424,8 +422,6 @@ ssize_t ar6000_htc_raw_write(AR_SOFTC_T *ar, HTC_RAW_STREAM_ID StreamID,
     }
 
     free->length = length;
-
-    up(&ar->raw_htc_write_sem[StreamID]);
         
     SET_HTC_PACKET_INFO_TX(&free->HTCPacket,
                            free,
@@ -436,6 +432,8 @@ ssize_t ar6000_htc_raw_write(AR_SOFTC_T *ar, HTC_RAW_STREAM_ID StreamID,
     
     HTCSendPkt(ar->arHtcTarget,&free->HTCPacket);
     
+    ar->write_buffer_available[StreamID] = FALSE;
+    up(&ar->raw_htc_write_sem[StreamID]);
 
     return length;
 }

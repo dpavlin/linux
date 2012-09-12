@@ -190,7 +190,7 @@ EXPORT_SYMBOL(disable_accessory_gpo4);
 static void enable_accessory_pmic(void)
 {
 	if (!gpio_acc_detected()) {
-		printk(KERN_INFO "Accessory detected!\n");
+		printk(KERN_INFO "cover: I def:acc:accessory_type=lighted_cover:\n");
 
 		if (VGEN1_NEEDED())
 			accessory_regulator_vgen1_voltage(1);

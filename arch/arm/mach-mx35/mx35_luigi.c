@@ -228,6 +228,10 @@ static struct i2c_board_info mxc_i2c_board_info[] __initdata = {
 	 .type = "max8660",
 	 .addr = 0x34,
 	 },
+	{
+	 .type = "Luigi_Battery",
+	 .addr = 0x55,
+	},
 };
 
 static struct spi_board_info mxc_spi_board_info[] __initdata = {
@@ -392,18 +396,11 @@ static inline void mxc_init_mmc(void)
 	(void)platform_device_register(&mxcsdhc3_device);
 }
 
-/* 
- * In case of a battery drain down, this saves the last good time.
- */
-u32 saved_last_seconds = 0;
-EXPORT_SYMBOL(saved_last_seconds);
-
 /*!
  * pmic board initialization code
  */
 static int __init mxc_init_pmic(void)
 {
-	unsigned int regA = 0, regB = 0;
 	/*
 	 * Charger settings
 	 * 
@@ -414,13 +411,6 @@ static int __init mxc_init_pmic(void)
 
 	/* PLIMDIS: bit 17 */
 	CHECK_ERROR(pmic_write_reg(REG_CHARGE, (0 << 17), (1 << 17)));
-
-	/* Get the last good saved seconds */
-	pmic_read_reg(REG_MEM_A, &regA, (0xff << 16));
-	pmic_read_reg(REG_MEM_B, &regB, 0x00ffffff);
-	saved_last_seconds = (regA << 8)| regB;
-
-	printk(KERN_INFO "Last saved time: 0x%x\n", saved_last_seconds);
 
 	/* Turn off the VUSBIN that is responsible for leakage */
 	CHECK_ERROR(pmic_write_reg(REG_USB1, (0 << VUSB_LSH), (1 << VUSB_LSH)));
@@ -628,7 +618,7 @@ void mx35_power_off(void)
 {
 	unsigned int reg = 0;
 
-	pmic_read_reg(REG_IDENTIFICATION, &reg, 0xffffffff);
+	pmic_read_reg(REG_IDENTIFICATION, &reg, 0xffffff);
 
 	/* Check if Atlas Rev 3.1 */
 	if (reg & 0x1)
@@ -691,6 +681,8 @@ static void mx35_pmic_power_off(void)
 		/* Clear WDIRESET */
 		pmic_write_reg(REG_POWER_CTL2, (0 << WDIRESET), (1 << WDIRESET));
 
+		pmic_write_reg(REG_MEM_A, (1 << 2), (1 << 2));
+
 		/* Configure WATCHDOG PIN as GPIO and pull it low */
 		watchdog_pin_gpio();
 	}
@@ -728,57 +720,9 @@ void mxc_kernel_uptime(void)
 }
 EXPORT_SYMBOL(mxc_kernel_uptime);
 
-/*!
- * Check if the reset was due to a watchdog timeout. If yes,
- * then do a clean restart
- */
 static void mx35_check_wdog_rst(void)
 {
-	unsigned int reg_memory_a;
-
-	pmic_read_reg(REG_MEM_A, &reg_memory_a, (0x1f << 0));
-	
-	if (reg_memory_a & 0x2) {
-		/* Clear out bit #1 in MEMA */
-		pmic_write_reg(REG_MEM_A, (0 << 1), (1 << 1));
-		printk(KERN_ERR "boot: I def:rbt:Device Reboot Encountered:\n");
-		goto out;
-	}
-
-	if (reg_memory_a & 0x4) {
-		/* Clear out bit #2 in MEMA */
-		pmic_write_reg(REG_MEM_A, (0 << 2), (1 << 2));
-		printk(KERN_ERR "boot: I def:hlt:Device Halt Encountered:\n");
-		goto out;
-	}
-
-	/* Check if this is a button reset or a watchdog reset */
-	if (reg_memory_a & 0x8) {
-		printk(KERN_ERR "boot: I def:rst:Hard reset or Watchdog Reset Encountered:\n");
-		goto out;
-	}
-
-	/* If nothing matches above, then it is a battery cut */
-	printk(KERN_ERR "boot: I def:bcut:15 second battery cut Encountered:\n");
-out:
-	/* Check if we booted out of critical battery */
-	if (reg_memory_a & 0x10) {
-		/* Clear out bit #4 */
-		pmic_write_reg(REG_MEM_A, (0 << 4), (1 << 4));
-		printk(KERN_ERR "boot: I def:crit:Booting out of critical battery:\n");
-	}
-
-	/* Clear out the Atlas flags bits 0-2 */
-	pmic_write_reg(REG_MEM_A, (0 << 0), (7 << 0));
-
-	/*
-	 * This is a place holder to track resets and reboots. This Atlas bit can 
- 	 * be cleared if there is a battery cut, reboot, halt. Reboots and halt are
-	 * tracked as above. this wont be cleared by button reset or watchdog reset.
-	 */
-	pmic_write_reg(REG_MEM_A, (1 << 3), (1 << 3));
-
-	printk(KERN_INFO "kernel: I perf:kernel:kernel_loaded=");
+	printk(KERN_INFO "kernel: W perf:kernel:kernel_loaded=");
 	mxc_kernel_uptime();
 
 	return;
@@ -811,6 +755,7 @@ static int __init mxc_check_oops(void)
 late_initcall(mxc_check_oops);
 
 extern void watchdog_reset_config(void);
+extern void doze_disable(void);
 
 /*!
  * This function clears out the RTC specific registers and masks out the
@@ -820,6 +765,16 @@ extern void watchdog_reset_config(void);
  */
 static void mx35_rtc_pmic_off(void)
 {
+	unsigned int reg = 0;
+
+	doze_disable();
+
+        reg = __raw_readl(MXC_CCM_CGR0);
+        reg |= (MXC_CCM_CGR0_ESDHC1_MASK | MXC_CCM_CGR0_ESDHC2_MASK |
+                MXC_CCM_CGR0_ESDHC3_MASK | MXC_CCM_CGR0_CSPI1_MASK |
+                MXC_CCM_CGR0_CSPI2_MASK);
+        __raw_writel(reg, MXC_CCM_CGR0);
+
 	/* Clear out the RTC time interrupt */
 	pmic_write_reg(REG_INT_STATUS1, 0, 0x2);
 
