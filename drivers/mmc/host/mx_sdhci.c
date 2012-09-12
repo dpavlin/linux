@@ -70,6 +70,9 @@
 static unsigned int debug_quirks;
 static int last_op_dir;
 
+/* sdhci shutting down */
+static int sdhci_shut_down = 0;
+
 /*
  * Different quirks to handle when the hardware deviates from a strict
  * interpretation of the SDHCI specification.
@@ -1582,6 +1585,12 @@ static void sdhci_timeout_timer(unsigned long data)
 
 	host = (struct sdhci_host *)data;
 
+	if (!host)
+		return;
+
+	if (sdhci_shut_down)
+		return;
+
 	spin_lock_irqsave(&host->lock, flags);
 
 	if (host->mrq) {
@@ -2566,7 +2575,26 @@ static int sdhci_remove(struct platform_device *pdev)
 /* Invoked on Shutdown */
 static void sdhci_shutdown(struct platform_device *pdev)
 {
-	sdhci_remove(pdev);
+	struct sdhci_chip *chip;
+	int i = 0;
+
+	chip = dev_get_drvdata(&pdev->dev);
+
+	if (!chip)
+		return;
+
+	/* Sdhci shutting down */
+	sdhci_shut_down = 1;
+
+	for (i = 0; i < chip->num_slots; i++) {
+		if (!chip->hosts[i])
+			continue;
+
+		free_irq(chip->hosts[i]->detect_irq, chip->hosts[i]);
+		free_irq(chip->hosts[i]->irq, chip->hosts[i]);
+	}
+
+	gpio_sdhc_inactive(pdev->id);
 }
 
 static struct platform_driver sdhci_driver = {

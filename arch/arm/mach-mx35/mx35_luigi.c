@@ -668,6 +668,7 @@ static void mxc_configure_pb_debounce(void)
 static void mx35_pmic_power_off(void)
 {
 	unsigned int reg = 0;
+	unsigned long flags;
 
 	mxc_configure_pb_debounce();
 
@@ -704,6 +705,13 @@ static void mx35_pmic_power_off(void)
 		 * This puts Atlas in USEROFF power cut mode
 		 */
 		pmic_power_off(); 
+	}
+
+	/* Spin */
+	local_irq_save(flags);
+
+	while (1) {
+		/* do nothing */
 	}
 }
 
