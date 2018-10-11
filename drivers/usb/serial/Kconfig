@@ -545,7 +545,16 @@ config USB_SERIAL_SIERRAWIRELESS
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called sierra.
+#Joe Lee-052711 begin
+config USB_SERIAL_QCTGOBI3K
+	tristate "USB QCT Gobi 3K Driver"
+	default y
+	help
+	  Say M here if you want to use QCT Gobi 3K devices.
 
+	  To compile this driver as a module, choose M here: the
+	  module will be called GobiSerial.
+#Joe Lee-052711 end	  	  
 config USB_SERIAL_SYMBOL
 	tristate "USB Symbol Barcode driver (serial mode)"
 	help

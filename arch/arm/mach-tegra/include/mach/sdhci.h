@@ -26,6 +26,7 @@ struct tegra_sdhci_platform_data {
 	int cd_gpio;
 	int wp_gpio;
 	int power_gpio;
+	int bus_width;
 	int cd_gpio_polarity;
 
 	void (*board_probe)(int id, struct mmc_host *);

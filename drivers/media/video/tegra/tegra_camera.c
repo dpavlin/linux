@@ -40,13 +40,14 @@ struct tegra_camera_block {
 	bool is_enabled;
 };
 
-
 static struct clk *isp_clk;
 static struct clk *vi_clk;
 static struct clk *vi_sensor_clk;
 static struct clk *csus_clk;
 static struct clk *csi_clk;
 static struct regulator *tegra_camera_regulator_csi;
+
+static int camera_opened = 0;
 
 static int tegra_camera_enable_isp(void)
 {
@@ -79,20 +80,33 @@ static int tegra_camera_enable_csi(void)
 {
 	int ret;
 
-	ret = regulator_enable(tegra_camera_regulator_csi);
-	if (ret)
-		return ret;
+	if (!camera_opened) {
+		camera_opened = 1;
+		ret = regulator_enable(tegra_camera_regulator_csi);
+		if (ret) {
+			pr_err("%s: regulator_enable failed\n", __func__);
+			return ret;
+		}
+	}
+
+	//ret = regulator_enable(tegra_camera_regulator_csi);
+	//if (ret)
+	//	return ret;
+
 	clk_enable(csi_clk);
 	return 0;
 }
 
 static int tegra_camera_disable_csi(void)
 {
+	// remove this workaround of camera/camcorder switch hang issue
+	/*
 	int ret;
 
 	ret = regulator_disable(tegra_camera_regulator_csi);
 	if (ret)
 		return ret;
+	*/
 	clk_disable(csi_clk);
 	return 0;
 }
@@ -361,6 +375,22 @@ static int __init tegra_camera_init(void)
 static void __exit tegra_camera_exit(void)
 {
 	platform_driver_unregister(&tegra_camera_driver);
+}
+
+int tegra_camera_enable_csi_power(void)
+{
+	tegra_camera_enable_csi();
+	tegra_camera_enable_isp();
+	tegra_camera_enable_vi();
+	return 0;
+}
+
+int tegra_camera_disable_csi_power(void)
+{
+	tegra_camera_disable_vi();
+	tegra_camera_disable_isp();
+	tegra_camera_disable_csi();
+	return 0;
 }
 
 module_init(tegra_camera_init);

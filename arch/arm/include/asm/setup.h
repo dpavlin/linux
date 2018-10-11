@@ -143,6 +143,15 @@ struct tag_memclk {
 	__u32 fmemclk;
 };
 
+//cloud-0510start
+//receive lcd type
+#define ATAG_LCD 0x54410300
+
+struct tag_lcd{
+	int value;
+};
+//cloud-0510end
+
 struct tag {
 	struct tag_header hdr;
 	union {
@@ -155,6 +164,10 @@ struct tag {
 		struct tag_revision	revision;
 		struct tag_videolfb	videolfb;
 		struct tag_cmdline	cmdline;
+//cloud-0510start
+//lcd type
+		struct tag_lcd lcd;
+//cloud-0510end
 
 		/*
 		 * Acorn specific

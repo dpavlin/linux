@@ -40,7 +40,11 @@ obj-$(CONFIG_VMWARE_BALLOON)	+= vmw_balloon.o
 obj-$(CONFIG_ARM_CHARLCD)	+= arm-charlcd.o
 obj-$(CONFIG_WL127X_RFKILL)	+= wl127x-rfkill.o
 obj-$(CONFIG_APANIC)		+= apanic.o
-obj-$(CONFIG_SENSORS_AK8975)	+= akm8975.o
+#Eric 0523
+obj-y	+= akm8975.o
+obj-y	+= al3000a.o
+obj-y	+= kxtf9.o
+#Eric
 obj-$(CONFIG_BCM4329_RFKILL)	+= bcm4329_rfkill.o
 obj-$(CONFIG_MPU_SENSORS_MPU3050)	+= mpu3050/
 obj-$(CONFIG_SENSORS_NCT1008)	+= nct1008.o

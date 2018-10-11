@@ -96,6 +96,7 @@ config USB_RTL8150
 config USB_USBNET
 	tristate "Multi-purpose USB Networking Framework"
 	select MII
+	default y
 	---help---
 	  This driver supports several kinds of network links over USB,
 	  with "minidrivers" built around a common network driver core
@@ -196,23 +197,24 @@ config USB_NET_CDC_EEM
 	  IEEE 802 "local assignment" bit is set in the address, a "usbX"
 	  name is used instead.
 
-config USB_NET_CDCNCM
-	tristate "CDC NCM support (smart devices such as HSDPA and LTE modems)"
+config USB_NET_CDC_NCM
+        tristate "CDC NCM support"
 	depends on USB_USBNET
-	select USB_NET_CDCETHER
 	default y
 	help
-	  This option supports devices conforming to the Communication Device
-	  Class (CDC) Network Control Model. The CDC specifications are
+          This driver provides support for CDC NCM (Network Control Model
+          Device USB Class Specification). The CDC NCM specification is
 	  available from <http://www.usb.org/>.
 
-	  This driver should work with at least the following devices:
+          Say "y" to link the driver statically, or "m" to build a
+          dynamically linked module.
 
-	    * Ericsson Mobile Broadband Module (M570, F5521gw)
-	    * ...
-
-	  This driver creates an interface named "ncmX", where X depends on
-	  what other networking devices you have in use.
+          This driver should work with at least the following devices:
+            * ST-Ericsson M700 LTE FDD/TDD Mobile Broadband Modem (ref. design)
+            * ST-Ericsson M5730 HSPA+ Mobile Broadband Modem (reference design)
+            * ST-Ericsson M570 HSPA+ Mobile Broadband Modem (reference design)
+            * ST-Ericsson M343 HSPA Mobile Broadband Modem (reference design)
+            * Ericsson F5521gw Mobile Broadband Module
 
 config USB_NET_DM9601
 	tristate "Davicom DM9601 based USB 1.1 10/100 ethernet devices"
@@ -423,5 +425,16 @@ config USB_SIERRA_NET
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called sierra_net.
+#Joe Lee-052711 begin	  
+config USB_GOBI3K_NET
+	tristate "USB-to-WWAN Driver for Gobi3K modems"
+	depends on USB_USBNET
+	default y
+	help
+	  Choose this option if you have a Sierra Wireless USB-to-WWAN device with Gobi support.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called GobiNet3k.
+#Joe Lee-052711 end
 
 endmenu

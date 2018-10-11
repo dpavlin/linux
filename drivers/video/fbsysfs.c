@@ -491,7 +491,12 @@ static ssize_t show_bl_curve(struct device *device,
  * fbdev to use configfs instead of sysfs */
 static struct device_attribute device_attrs[] = {
 	__ATTR(bits_per_pixel, S_IRUGO|S_IWUSR, show_bpp, store_bpp),
-	__ATTR(blank, S_IRUGO|S_IWUSR, show_blank, store_blank),
+	/*Carry-0525 begin*/
+  /*[HDMI] API for set HDMI state*/
+  //__ATTR(blank, S_IRUGO|S_IWUSR, show_blank, store_blank),
+  //__ATTR(blank, S_IRUGO|S_IWUGO, show_blank, store_blank),
+  __ATTR(blank, 0664, show_blank, store_blank),
+  /*Carry-0525 end*/
 	__ATTR(console, S_IRUGO|S_IWUSR, show_console, store_console),
 	__ATTR(cursor, S_IRUGO|S_IWUSR, show_cursor, store_cursor),
 	__ATTR(mode, S_IRUGO|S_IWUSR, show_mode, store_mode),

@@ -69,9 +69,24 @@
 #include "fuse.h"
 #include "wakeups-t2.h"
 
+//cloud-0425start
+//touch
+#include <linux/spi/spi.h>
+#include <linux/spi/ntrig_spi.h>
+//cloud-0425end
+
+/*Joe Lee-0422 begin*/
+/*WIFI sku does not mount PHY, we do not init ehci2 for WIFI sku*/
+int g_sku_id;
+/*Joe Lee-0422 end */
+extern void SysShutdown(void );
+
 static struct usb_mass_storage_platform_data tegra_usb_fsg_platform = {
-	.vendor = "NVIDIA",
-	.product = "Tegra 2",
+	//Comapal Earvin 20110603 begin
+	//Change Device Name
+	.vendor = "Lenovo",
+	.product = "ThinkPad Tablet",
+	//Comapal Earvin 20110603 end
 	.nluns = 1,
 };
 
@@ -234,10 +249,14 @@ static __initdata struct tegra_clk_init_table ventana_clk_init_table[] = {
 	{ "uartc",	"pll_m",	600000000,	false},
 	{ "blink",	"clk_32k",	32768,		false},
 	{ "pll_p_out4",	"pll_p",	24000000,	true },
-	{ "pwm",	"clk_32k",	32768,		false},
+	//{ "pwm",	"clk_32k",	32768,		false},
+	{ "pwm",	"clk_m",	12000000,		false},
 	{ "pll_a",	NULL,		56448000,	false},
 	{ "pll_a_out0",	NULL,		11289600,	false},
-	{ "i2s1",	"pll_a_out0",	11289600,	false},
+/* willy 0513 begin*/
+/* modify codec sample rate clk */
+	{ "i2s1",	"pll_a_out0",	2822400,	false},	
+/* willy 0513 end*/
 	{ "i2s2",	"pll_a_out0",	11289600,	false},
 	{ "audio",	"pll_a_out0",	11289600,	false},
 	{ "audio_2x",	"audio",	22579200,	false},
@@ -246,15 +265,34 @@ static __initdata struct tegra_clk_init_table ventana_clk_init_table[] = {
 	{ NULL,		NULL,		0,		0},
 };
 
-#define USB_MANUFACTURER_NAME		"NVIDIA"
-#define USB_PRODUCT_NAME		"Ventana"
-#define USB_PRODUCT_ID_MTP_ADB		0x7100
-#define USB_PRODUCT_ID_MTP		0x7102
-#define USB_PRODUCT_ID_RNDIS		0x7103
-#define USB_VENDOR_ID			0x0955
+//Comapal Earvin 20110603 begin
+//Change name
+#define USB_MANUFACTURER_NAME		"Lenovo"
+#define USB_PRODUCT_NAME		"ThinkPad Tablet"
+//Comapal Earvin 20110603 end
+//Comapal Earvin 20110603 begin
+//For USB slave selection mode
+//#define USB_PRODUCT_ID_MTP_ADB		0x7100
+#define USB_PRODUCT_ID_UMS		0x741B
+#define USB_PRODUCT_ID_MTP		0x741C
+#define USB_PRODUCT_ID_MTP_UMS		0x741D
+#define USB_PRODUCT_ID_RNDIS		0x741E
+#define USB_VENDOR_ID			0x17EF
+//Comapal Earvin 20110603 end
 
+//Comapal Earvin 20110603 begin
+//For USB slave selection mode
+static char *usb_functions_mtp[] = { "mtp" };
+static char *usb_functions_mtp_adb[] = { "mtp", "adb" };
+static char *usb_functions_ums[] = { "usb_mass_storage" };
+static char *usb_functions_ums_adb[] = { "usb_mass_storage", "adb" };
+//Comapal Earvin 20110603 end
 static char *usb_functions_mtp_ums[] = { "mtp", "usb_mass_storage" };
-static char *usb_functions_mtp_adb_ums[] = { "mtp", "adb", "usb_mass_storage" };
+//Comapal Earvin 20110603 begin
+//For USB slave selection mode
+//static char *usb_functions_mtp_adb_ums[] = { "mtp", "adb", "usb_mass_storage" };
+static char *usb_functions_mtp_ums_adb[] = { "mtp", "usb_mass_storage", "adb" };
+//Comapal Earvin 20110603 end
 #ifdef CONFIG_USB_ANDROID_RNDIS
 static char *usb_functions_rndis[] = { "rndis" };
 static char *usb_functions_rndis_adb[] = { "rndis", "adb" };
@@ -264,20 +302,59 @@ static char *usb_functions_all[] = {
 	"rndis",
 #endif
 	"mtp",
+//Comapal Earvin 20110603 begin
+//For USB slave selection mode
+	"usb_mass_storage",
 	"adb",
-	"usb_mass_storage"
+//Comapal Earvin 20110603 end
 };
 
 static struct android_usb_product usb_products[] = {
+//Comapal Earvin 20110603 begin
+//For USB slave selection mode
+	{
+		.product_id     = USB_PRODUCT_ID_UMS,
+		.num_functions  = ARRAY_SIZE(usb_functions_ums_adb),
+		.functions      = usb_functions_ums_adb,
+	},
+	{
+		.product_id     = USB_PRODUCT_ID_UMS,
+		.num_functions  = ARRAY_SIZE(usb_functions_ums),
+		.functions      = usb_functions_ums,
+	},
 	{
 		.product_id     = USB_PRODUCT_ID_MTP,
+		.num_functions  = ARRAY_SIZE(usb_functions_mtp_adb),
+		.functions      = usb_functions_mtp_adb,
+	},
+	{
+		.product_id     = USB_PRODUCT_ID_MTP,
+		.num_functions  = ARRAY_SIZE(usb_functions_mtp),
+		.functions      = usb_functions_mtp,
+	},
+//Comapal Earvin 20110603 end
+	{
+		//Comapal Earvin 20110603 begin
+		//For USB slave selection mode
+		//.product_id     = USB_PRODUCT_ID_MTP,
+		.product_id     = USB_PRODUCT_ID_MTP_UMS,
+		//Comapal Earvin 20110603 end
 		.num_functions  = ARRAY_SIZE(usb_functions_mtp_ums),
 		.functions      = usb_functions_mtp_ums,
 	},
 	{
-		.product_id     = USB_PRODUCT_ID_MTP_ADB,
-		.num_functions  = ARRAY_SIZE(usb_functions_mtp_adb_ums),
-		.functions      = usb_functions_mtp_adb_ums,
+		//.product_id     = USB_PRODUCT_ID_MTP_ADB,
+		/* compal indigo-Howard Chang 20100429 begin */
+		//fix MTP & adb gadget can't work at the same time
+		.product_id     = USB_PRODUCT_ID_MTP_UMS,
+		/* compal indigo-Howard Chang 20100429 end */
+		//Comapal Earvin 20110603 begin
+		//For USB slave selection mode
+		//.num_functions  = ARRAY_SIZE(usb_functions_mtp_adb_ums),
+		//.functions      = usb_functions_mtp_adb_ums,
+		.num_functions  = ARRAY_SIZE(usb_functions_mtp_ums_adb),
+		.functions      = usb_functions_mtp_ums_adb,
+		//Comapal Earvin 20110603 end
 	},
 #ifdef CONFIG_USB_ANDROID_RNDIS
 	{
@@ -296,7 +373,11 @@ static struct android_usb_product usb_products[] = {
 /* standard android USB platform data */
 static struct android_usb_platform_data andusb_plat = {
 	.vendor_id              = USB_VENDOR_ID,
-	.product_id             = USB_PRODUCT_ID_MTP_ADB,
+	//.product_id             = USB_PRODUCT_ID_MTP_ADB,
+/* compal indigo-Howard Chang 20100429 begin */
+	.product_id             = USB_PRODUCT_ID_MTP_UMS,
+//fix MTP & adb gadget can't work at the same time
+/* compal indigo-Howard Chang 20100429 end */
 	.manufacturer_name      = USB_MANUFACTURER_NAME,
 	.product_name           = USB_PRODUCT_NAME,
 	.serial_number          = NULL,
@@ -352,6 +433,12 @@ static struct i2c_board_info __initdata ventana_i2c_bus1_board_info[] = {
 	},
 };
 
+static struct i2c_board_info ventana_i2c2_board_info[] = {
+	{
+		I2C_BOARD_INFO("phj00_lcd", 0x50),
+	},
+};
+
 static struct tegra_ulpi_config ventana_ehci2_ulpi_phy_config = {
 	.reset_gpio = TEGRA_GPIO_PV1,
 	.clk = "clk_dev2",
@@ -383,7 +470,10 @@ static const struct tegra_pingroup_config i2c2_gen2 = {
 static struct tegra_i2c_platform_data ventana_i2c2_platform_data = {
 	.adapter_nr	= 1,
 	.bus_count	= 2,
-	.bus_clk_rate	= { 400000, 10000 },
+	/* carry-0614 begin */
+  /* set DDC frequency to 100KHz */
+	.bus_clk_rate = {100000, 100000},
+	/* carry-0614 end */
 	.bus_mux	= { &i2c2_ddc, &i2c2_gen2 },
 	.bus_mux_len	= { 1, 1 },
 	.slave_addr = 0x00FC,
@@ -409,7 +499,10 @@ static struct tegra_audio_platform_data tegra_audio_pdata[] = {
 		.i2s_master	= true,
 		.dma_on		= true,  /* use dma by default */
 		.i2s_master_clk = 44100,
-		.i2s_clk_rate	= 11289600,
+/* willy 0513 begin*/
+/* modify codec sample rate clk */
+		.i2s_clk_rate	= 2822400,
+/* willy 0513 end*/
 		.dap_clk	= "clk_dev1",
 		.audio_sync_clk = "audio_2x",
 		.mode		= I2S_BIT_FORMAT_I2S,
@@ -425,7 +518,10 @@ static struct tegra_audio_platform_data tegra_audio_pdata[] = {
 		.dma_on		= true,  /* use dma by default */
 		.i2s_master_clk = 8000,
 		.dsp_master_clk = 8000,
-		.i2s_clk_rate	= 2000000,
+/* willy 0513 begin*/
+/* modify codec sample rate clk */
+		.i2s_clk_rate	= 512000,
+/* willy 0513 end*/
 		.dap_clk	= "clk_dev1",
 		.audio_sync_clk = "audio_2x",
 		.mode		= I2S_BIT_FORMAT_DSP,
@@ -530,6 +626,7 @@ static void ventana_i2c_init(void)
 	tegra_i2c_device4.dev.platform_data = &ventana_dvc_platform_data;
 
 	i2c_register_board_info(0, ventana_i2c_bus1_board_info, 1);
+	i2c_register_board_info(2, ventana_i2c2_board_info, ARRAY_SIZE(ventana_i2c2_board_info));
 
 	platform_device_register(&tegra_i2c_device1);
 	platform_device_register(&tegra_i2c_device2);
@@ -539,25 +636,26 @@ static void ventana_i2c_init(void)
 
 
 #ifdef CONFIG_KEYBOARD_GPIO
-#define GPIO_KEY(_id, _gpio, _iswake)		\
-	{					\
-		.code = _id,			\
-		.gpio = TEGRA_GPIO_##_gpio,	\
-		.active_low = 1,		\
-		.desc = #_id,			\
-		.type = EV_KEY,			\
-		.wakeup = _iswake,		\
-		.debounce_interval = 10,	\
-	}
+#define GPIO_KEY(_id, _gpio, _isactivelow, _iswake)           \
+        {                                       \
+                .code = _id,                    \
+                .gpio = TEGRA_GPIO_##_gpio,     \
+                .active_low = _isactivelow,           \
+                .desc = #_id,                   \
+                .type = EV_KEY,                 \
+                .wakeup = _iswake,              \
+                .debounce_interval = 10,        \
+        }
 
 static struct gpio_keys_button ventana_keys[] = {
-	[0] = GPIO_KEY(KEY_FIND, PQ3, 0),
-	[1] = GPIO_KEY(KEY_HOME, PQ1, 0),
-	[2] = GPIO_KEY(KEY_BACK, PQ2, 0),
-	[3] = GPIO_KEY(KEY_VOLUMEUP, PQ5, 0),
-	[4] = GPIO_KEY(KEY_VOLUMEDOWN, PQ4, 0),
-	[5] = GPIO_KEY(KEY_POWER, PV2, 1),
-	[6] = GPIO_KEY(KEY_MENU, PC7, 0),
+	[0] = GPIO_KEY(KEY_WWW, PQ0, 1, 0),
+	[1] = GPIO_KEY(KEY_HOMEPAGE, PQ1, 1, 0),
+	[2] = GPIO_KEY(KEY_BACK, PQ2, 1, 0),
+	[3] = GPIO_KEY(KEY_AUTO_ROTATION, PQ3, 1, 0),
+	[4] = GPIO_KEY(KEY_VOLUMEDOWN, PQ4, 1, 0),
+	[5] = GPIO_KEY(KEY_VOLUMEUP, PQ5, 1, 0),
+	[6] = GPIO_KEY(KEY_POWER, PC7, 0, 1),
+	[7] = GPIO_KEY(KEY_POWER, PI3, 0, 0),
 };
 
 #define PMC_WAKE_STATUS 0x14
@@ -567,7 +665,11 @@ static int ventana_wakeup_key(void)
 	unsigned long status =
 		readl(IO_ADDRESS(TEGRA_PMC_BASE) + PMC_WAKE_STATUS);
 
-	return status & TEGRA_WAKE_GPIO_PV2 ? KEY_POWER : KEY_RESERVED;
+	//Charles 0722 start, clean wakeup status register
+	writel(0xffffffff, IO_ADDRESS(TEGRA_PMC_BASE) + PMC_WAKE_STATUS);
+	//Charles 0722 end
+
+	return status & (TEGRA_WAKE_GPIO_PC7 | TEGRA_WAKE_USB1_VBUS | TEGRA_WAKE_GPIO_PV3) ? KEY_POWER : KEY_RESERVED;
 }
 
 static struct gpio_keys_platform_data ventana_keys_platform_data = {
@@ -598,6 +700,19 @@ static struct platform_device tegra_camera = {
 	.id = -1,
 };
 
+//For Psensor
+static struct gpio_switch_platform_data psensor_platform_data = {
+        .gpio = TEGRA_GPIO_PC1,
+};
+
+static struct platform_device indigo_psensor = {
+        .name   = "psensor",
+        .id     = -1,
+        .dev    = {
+                .platform_data  = &psensor_platform_data,
+        },
+};
+
 static struct platform_device *ventana_devices[] __initdata = {
 	&tegra_usb_fsg_device,
 	&androidusb_device,
@@ -605,7 +720,12 @@ static struct platform_device *ventana_devices[] __initdata = {
 	&tegra_uartc_device,
 	&pmu_device,
 	&tegra_udc_device,
+/*Joe Lee-0422 begin*/
+/*WIFI sku does not mount PHY, we do not init ehci2 for WIFI sku*/
+#if 0 
 	&tegra_ehci2_device,
+#endif
+/*Joe Lee-0422 begin*/
 	&tegra_gart_device,
 	&tegra_aes_device,
 #ifdef CONFIG_KEYBOARD_GPIO
@@ -618,6 +738,9 @@ static struct platform_device *ventana_devices[] __initdata = {
 	&tegra_avp_device,
 	&tegra_camera,
 	&tegra_das_device,
+//indigo device
+	&tegra_spi_device1,
+	&indigo_psensor,
 };
 
 
@@ -702,7 +825,7 @@ static struct usb_phy_plat_data tegra_usb_phy_pdata[] = {
 	[0] = {
 			.instance = 0,
 			.vbus_irq = TPS6586X_INT_BASE + TPS6586X_INT_USB_DET,
-			.vbus_gpio = TEGRA_GPIO_PD0,
+			.vbus_gpio = -1,
 	},
 	[1] = {
 			.instance = 1,
@@ -710,7 +833,7 @@ static struct usb_phy_plat_data tegra_usb_phy_pdata[] = {
 	},
 	[2] = {
 			.instance = 2,
-			.vbus_gpio = TEGRA_GPIO_PD3,
+			.vbus_gpio = -1,
 	},
 };
 
@@ -728,7 +851,7 @@ static struct tegra_ehci_platform_data tegra_ehci_pdata[] = {
 	[2] = {
 			.phy_config = &utmi_phy_config[1],
 			.operating_mode = TEGRA_USB_HOST,
-			.power_down_on_bus_suspend = 1,
+			.power_down_on_bus_suspend = 0,
 	},
 };
 
@@ -809,7 +932,7 @@ static void ventana_power_off(void)
 
 static void __init ventana_power_off_init(void)
 {
-	pm_power_off = ventana_power_off;
+	pm_power_off = SysShutdown;
 }
 
 #define SERIAL_NUMBER_LENGTH 20
@@ -842,12 +965,70 @@ static void ventana_usb_init(void)
 #endif
 }
 
+/*Joe Lee-0422 begin*/
+/*WIFI sku does not mount PHY, we do not init ehci2 for WIFI sku*/
+static int get_pin_value(unsigned int gpio, char *name)
+{
+	int pin_value;
+
+	tegra_gpio_enable(gpio);
+	gpio_request(gpio, name);
+	gpio_direction_input(gpio);
+	pin_value = gpio_get_value(gpio);
+	gpio_free(gpio);
+	tegra_gpio_disable(gpio);
+	return pin_value;
+}
+/*Joe Lee-0422 end*/
+
+//cloud-0425begin
+//touch driver
+#ifdef CONFIG_NTRIG_SPI
+#define NTRIG_SPI_OUTPUT_ENABLE		TEGRA_GPIO_PQ7 
+#define NTRIG_SPI_INT			TEGRA_GPIO_PV6
+#define NTRIG_TOUCH_ENABLE			TEGRA_GPIO_PA5
+static struct ntrig_spi_platform_data tegra_ntrig_spi_pdata __initdata = {
+		.oe_gpio = NTRIG_SPI_OUTPUT_ENABLE,
+		.oe_inverted = 0,
+		.pwr_gpio = NTRIG_TOUCH_ENABLE,
+};
+
+static struct spi_board_info tegra_ntrig_spi_devices[] __initdata = {
+	{
+		.modalias = "ntrig_spi",
+		.bus_num = 0,
+		.chip_select = 0,
+		.mode = SPI_MODE_0,
+		.max_speed_hz = 10000000,
+		.platform_data = &tegra_ntrig_spi_pdata,
+		.irq = 0, /* will be calculated later */
+		.controller_data = &tegra_spi_device1
+	},
+};
+
+static void __init register_ntrig_spi_devices(void)
+{
+	printk(KERN_WARNING "in %s!!!\n", __FUNCTION__);
+	tegra_gpio_enable(NTRIG_SPI_OUTPUT_ENABLE);
+	tegra_gpio_enable(NTRIG_TOUCH_ENABLE);
+	tegra_gpio_enable(NTRIG_SPI_INT);
+	/* map irq from our allocated gpio line */
+	tegra_ntrig_spi_devices[0].irq = gpio_to_irq(NTRIG_SPI_INT);
+	if (spi_register_board_info(tegra_ntrig_spi_devices, ARRAY_SIZE(tegra_ntrig_spi_devices)) != 0) {
+		pr_err("%s: spi_register_board_info returned error\n", __func__);
+	}
+}
+#endif
+//cloud-0425end
+
 static void __init tegra_ventana_init(void)
 {
 #if defined(CONFIG_TOUCHSCREEN_PANJIT_I2C) || \
 	defined(CONFIG_TOUCHSCREEN_ATMEL_MT_T9)
 	struct board_info BoardInfo;
 #endif
+//dealy from 3g init
+mdelay(3000);
 
 	tegra_common_init();
 	tegra_clk_init_from_table(ventana_clk_init_table);
@@ -867,10 +1048,25 @@ static void __init tegra_ventana_init(void)
 		= &ventana_ehci2_ulpi_platform_data;
 	platform_add_devices(ventana_devices, ARRAY_SIZE(ventana_devices));
 
+/*Joe Lee-0422 begin*/
+/*WIFI sku does not mount PHY, we do not init ehci2 for WIFI sku*/
+	g_sku_id=get_pin_value(TEGRA_GPIO_PR0,"PIN0");
+	printk("**********g_sku_id=%d************\n\r", (int)g_sku_id);
+
+	if(g_sku_id){
+		/*3G sku, do ehci2 init*/
+		platform_device_register(&tegra_ehci2_device);
+	}else{
+		printk("WIFI sku does not mount PHY, we do not init ehci2 for WIFI sku\n\r");
+	}
+/*Joe Lee-0422 end*/
 	ventana_sdhci_init();
 	ventana_charge_init();
 	ventana_regulator_init();
 
+//cloud-0425start
+//touch
+#if 0
 #if defined(CONFIG_TOUCHSCREEN_PANJIT_I2C) || \
 	defined(CONFIG_TOUCHSCREEN_ATMEL_MT_T9)
 
@@ -885,6 +1081,9 @@ static void __init tegra_ventana_init(void)
 		ventana_touch_init_panjit();
 	}
 #endif
+#endif
+	register_ntrig_spi_devices();
+//cloud-0425end
 
 #ifdef CONFIG_KEYBOARD_GPIO
 	ventana_keys_init();
@@ -901,6 +1100,10 @@ static void __init tegra_ventana_init(void)
 	ventana_bt_rfkill();
 	ventana_power_off_init();
 	ventana_emc_init();
+
+// enable gpio for p-sensor
+    tegra_gpio_enable(TEGRA_GPIO_PC1);
+
 #ifdef CONFIG_BT_BLUESLEEP
 	tegra_setup_bluesleep();
 #endif

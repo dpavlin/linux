@@ -26,6 +26,8 @@
 #include <linux/workqueue.h>
 #include <linux/gpio.h>
 
+// #define FACTORY_BUILD_VERSION
+
 struct gpio_button_data {
 	struct gpio_keys_button *button;
 	struct input_dev *input;
@@ -43,7 +45,11 @@ struct gpio_keys_drvdata {
 	void (*disable)(struct device *dev);
 	struct gpio_button_data data[0];
 };
-
+/* compal indigo-eric 20110315 begin */
+/* change testprogram HOME key to UP */
+struct gpio_keys_platform_data *test_pdata;
+struct platform_device *test_pdev;
+/* compal indigo-eric 20110315 end */ 
 /*
  * SYSFS interface for enabling/disabling keys and switches:
  *
@@ -358,7 +364,46 @@ static irqreturn_t gpio_keys_isr(int irq, void *dev_id)
 
 	return IRQ_HANDLED;
 }
+/* compal indigo-eric 20110315 begin */
+/* change testprogram HOME key to UP */
+static ssize_t data_show(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf)
+{	
+	device_init_wakeup(&test_pdev->dev, 0);	
+    test_pdata->buttons[1].code=KEY_UP;	
+    device_init_wakeup(&test_pdev->dev, 1);
+  	                      
+	return sprintf(buf, "OK\n");	
+}
 
+static ssize_t data_store(struct kobject *kobj, struct kobj_attribute *attr,
+			 const char *buf, size_t count)
+{
+ 
+    device_init_wakeup(&test_pdev->dev, 0);	
+    test_pdata->buttons[1].code=KEY_HOMEPAGE;	
+    device_init_wakeup(&test_pdev->dev, 1);
+	return count;
+}
+
+static struct kobj_attribute Test_attribute =
+#ifdef FACTORY_BUILD_VERSION
+	__ATTR(Test, 0777, data_show, data_store);
+#else
+        __ATTR(Test, 0660, data_show, data_store);
+#endif
+
+static struct attribute *attrs[] = {
+	&Test_attribute.attr,	
+	NULL,	/* need to NULL terminate the list of attributes */
+};
+
+static struct attribute_group attr_group = {
+	.attrs = attrs,
+};
+
+static struct kobject *example_kobj;
+/* compal indigo-eric 20110315 end */
 static int __devinit gpio_keys_setup_key(struct platform_device *pdev,
 					 struct gpio_button_data *bdata,
 					 struct gpio_keys_button *button)
@@ -521,6 +566,21 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 	input_sync(input);
 
 	device_init_wakeup(&pdev->dev, wakeup);
+/* compal indigo-eric 20110315 begin */
+/* change testprogram HOME key to UP */
+  test_pdata = pdata;
+  test_pdev = pdev;
+  input_set_capability(input, EV_KEY, KEY_UP);
+  int retval; 
+	example_kobj = kobject_create_and_add("Keys", NULL);
+	if (!example_kobj)
+		return -ENOMEM;
+
+	/* Create the files associated with this kobject */
+	retval = sysfs_create_group(example_kobj, &attr_group);
+	if (retval)
+		kobject_put(example_kobj);
+/* compal indigo-eric 20110315 end */
 
 	return 0;
 
@@ -648,6 +708,10 @@ static int __init gpio_keys_init(void)
 
 static void __exit gpio_keys_exit(void)
 {
+/* compal indigo-eric 20110315 begin */
+/* change testprogram HOME key to UP */
+  	kobject_put(example_kobj);
+/* compal indigo-eric 20110315 end */
 	platform_driver_unregister(&gpio_keys_device_driver);
 }
 

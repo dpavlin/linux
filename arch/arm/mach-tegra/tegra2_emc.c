@@ -201,6 +201,7 @@ int tegra_emc_set_rate(unsigned long rate)
 
 void tegra_init_emc(const struct tegra_emc_chip *chips, int chips_size)
 {
+#if 0
 	int i;
 	int vid;
 	int rev_id1;
@@ -248,4 +249,11 @@ void tegra_init_emc(const struct tegra_emc_chip *chips, int chips_size)
 		pr_info("%s: Memory rev_id2 = 0x%04x", __func__, rev_id2);
 		pr_info("%s: Memory pid     = 0x%04x", __func__, pid);
 	}
+#endif
+	int chip_matched = 0;
+
+	pr_info("%s: %s memory found\n", __func__,
+		chips[chip_matched].description);
+	tegra_emc_table = chips[chip_matched].table;
+	tegra_emc_table_size = chips[chip_matched].table_size;
 }

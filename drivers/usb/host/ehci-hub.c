@@ -197,11 +197,15 @@ static int ehci_bus_suspend (struct usb_hcd *hcd)
 		port = HCS_N_PORTS(ehci->hcs_params);
 		while (port--) {
 			if (ehci->reset_done[port] != 0) {
+			//(weron) NV bug, goes into this flow will makes device hang up
+			printk("***weron bypass remote wakeup\n");
+#if 0			
 				spin_unlock_irq(&ehci->lock);
 				ehci_dbg(ehci, "suspend failed because "
 						"port %d is resuming\n",
 						port + 1);
 				return -EBUSY;
+#endif				
 			}
 		}
 	}

@@ -89,6 +89,7 @@ static struct regulator_consumer_supply tps658621_ldo5_supply[] = {
 static struct regulator_consumer_supply tps658621_ldo6_supply[] = {
 	REGULATOR_SUPPLY("vdd_ldo6", NULL),
 	REGULATOR_SUPPLY("vcsi", "tegra_camera"),
+	REGULATOR_SUPPLY("vmic", "soc-audio"),
 };
 static struct regulator_consumer_supply tps658621_ldo7_supply[] = {
 	REGULATOR_SUPPLY("vdd_ldo7", NULL),
@@ -141,7 +142,7 @@ static struct regulator_init_data ldo0_data = REGULATOR_INIT(ldo0, 1250, 3300, O
 static struct regulator_init_data ldo1_data = REGULATOR_INIT(ldo1, 725, 1500, ON, NULL);
 static struct regulator_init_data ldo2_data = REGULATOR_INIT(ldo2, 725, 1500, OFF, NULL);
 static struct regulator_init_data ldo3_data = REGULATOR_INIT(ldo3, 1250, 3300, OFF, NULL);
-static struct regulator_init_data ldo4_data = REGULATOR_INIT(ldo4, 1700, 2475, OFF, NULL);
+static struct regulator_init_data ldo4_data = REGULATOR_INIT(ldo4, 1700, 2475, ON, NULL);
 static struct regulator_init_data ldo5_data = REGULATOR_INIT(ldo5, 1250, 3300, ON, NULL);
 static struct regulator_init_data ldo6_data = REGULATOR_INIT(ldo6, 1250, 1800, OFF, NULL);
 static struct regulator_init_data ldo7_data = REGULATOR_INIT(ldo7, 1250, 3300, OFF, NULL);
@@ -214,10 +215,19 @@ static struct tegra_suspend_platform_data ventana_suspend_data = {
 	.separate_req	= true,
 	.corereq_high	= false,
 	.sysclkreq_high	= true,
-	.wake_enb	= TEGRA_WAKE_GPIO_PV2 | TEGRA_WAKE_GPIO_PY6,
-	.wake_high	= 0,
+	/* Charl5es 0508 start
+	 * wakeup source
+	 * 	 
+	 * PC7 EXIT_LP0
+	 * PV2 AP_ONKEY
+	 * PV3 AP_ACOK
+	 * PI3 POWEROFF_AP
+	 */
+	.wake_enb = TEGRA_WAKE_GPIO_PV3 | TEGRA_WAKE_GPIO_PC7 | TEGRA_WAKE_USB1_VBUS | TEGRA_WAKE_GPIO_PV2 | TEGRA_WAKE_GPIO_PY6,
+	.wake_high	= TEGRA_WAKE_GPIO_PC7,
 	.wake_low	= TEGRA_WAKE_GPIO_PV2 | TEGRA_WAKE_GPIO_PY6,
-	.wake_any	= 0,
+	.wake_any	= TEGRA_WAKE_GPIO_PV3 | TEGRA_WAKE_USB1_VBUS,
+	/* Charles 0508 end */
 };
 
 int __init ventana_regulator_init(void)

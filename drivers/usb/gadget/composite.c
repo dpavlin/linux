@@ -26,6 +26,10 @@
 #include <linux/device.h>
 
 #include <linux/usb/composite.h>
+/* compal indigo-Howard Chang 20100613 begin */
+//set wake lock when device is connected to PC usb
+#include <linux/wakelock.h>
+/* compal indigo-Howard Chang 20100613 end */
 
 
 /*
@@ -40,11 +44,15 @@
 
 static struct usb_composite_driver *composite;
 
+/* compal indigo-Howard Chang 20100613 begin */
+//set wake lock when device is connected to PC usb
+static struct wake_lock usb_wake_lock;
+/* compal indigo-Howard Chang 20100613 end */
+
 /* Some systems will need runtime overrides for the  product identifers
  * published in the device descriptor, either numbers or strings or both.
  * String parameters are in UTF-8 (superset of ASCII's 7 bit characters).
  */
-
 static ushort idVendor;
 module_param(idVendor, ushort, 0);
 MODULE_PARM_DESC(idVendor, "USB Vendor ID");
@@ -1175,6 +1183,11 @@ composite_unbind(struct usb_gadget *gadget)
 	kfree(cdev);
 	set_gadget_data(gadget, NULL);
 	device_remove_file(&gadget->dev, &dev_attr_suspended);
+/* compal indigo-Howard Chang 20100613 begin */
+	//set wake lock when device is connected to PC usb
+	wake_lock_destroy(&usb_wake_lock);
+/* compal indigo-Howard Chang 20100613 end */
+	
 	composite = NULL;
 }
 
@@ -1214,6 +1227,14 @@ composite_switch_work(struct work_struct *data)
 		connected = cdev->connected;
 		spin_unlock_irqrestore(&cdev->lock, flags);
 		switch_set_state(&cdev->sw_connected, connected);
+/* compal indigo-Howard Chang 20100613 begin */
+	//set wake lock when device is connected to PC usb
+		printk("[USB]wake lock %d\n",connected);
+		if(connected == 1)	
+			wake_lock(&usb_wake_lock);
+		else
+			wake_unlock(&usb_wake_lock);
+/* compal indigo-Howard Chang 20100613 end */
 	} else {
 		spin_unlock_irqrestore(&cdev->lock, flags);
 	}
@@ -1306,6 +1327,11 @@ static int composite_bind(struct usb_gadget *gadget)
 		goto fail;
 
 	INFO(cdev, "%s ready\n", composite->name);
+/* compal indigo-Howard Chang 20100613 begin */
+	//set wake lock when device is connected to PC usb
+	wake_lock_init(&usb_wake_lock, WAKE_LOCK_SUSPEND, "usb_wakelock");
+/* compal indigo-Howard Chang 20100613 end */	
+	
 	return 0;
 
 fail:

@@ -41,6 +41,7 @@
 #include "edid.h"
 #include "nvhdcp.h"
 
+
 /* datasheet claims this will always be 216MHz */
 #define HDMI_AUDIOCLK_FREQ		216000000
 
@@ -188,7 +189,7 @@ struct tdms_config {
 };
 
 #ifdef CONFIG_ARCH_TEGRA_2x_SOC
-const struct tdms_config tdms_config[] = {
+struct tdms_config tdms_config[] = {
 	{ /* 480p modes */
 	.pclk = 27000000,
 	.pll0 = SOR_PLL_BG_V17_S(3) | SOR_PLL_ICHPMP(1) | SOR_PLL_RESISTORSEL |
@@ -557,7 +558,10 @@ static bool tegra_dc_hdmi_detect(struct tegra_dc *dc)
 		dev_err(&dc->ndev->dev, "error reading edid\n");
 		goto fail;
 	}
-
+  if(dc->disableHDMI){
+    printk("hdmi.c , dc->disableHDMI\n");
+    goto fail;
+  }
 	/* monitors like to lie about these but they are still useful for
 	 * detecting aspect ratios
 	 */
@@ -576,20 +580,68 @@ static bool tegra_dc_hdmi_detect(struct tegra_dc *dc)
 fail:
 	switch_set_state(&hdmi->hpd_switch, 0);
 	tegra_nvhdcp_set_plug(hdmi->nvhdcp, 0);
+	tegra_dc_disable(dc);
+	tegra_fb_update_monspecs(dc->fb, NULL, NULL);
 	return false;
 }
+/* carry-0622 begin */
+/* [HDMI] fix No video in pad when disable HDMI */
+bool tegra_dc_hdmi_forceDisable(struct tegra_dc *dc,bool disable)
+{
+	struct tegra_dc_hdmi_data *hdmi = tegra_dc_get_outdata(dc);
+	struct fb_monspecs specs;
+	int err;
+	printk("hdmi.c , hpd_switch.state = %d !\n",hdmi->hpd_switch.state);	
+	//if(hdmi->hpd_switch.state == 1 && !disable){
+	//	printk("hdmi.c , already enable HDMI , doesn't detect HDMI again !\n");		
+	//	goto skip;
+	//}
+  	if (disable)
+    		goto fail1;
+	if (!tegra_dc_hdmi_hpd(dc))
+		goto fail1;
+	err = tegra_edid_get_monspecs(hdmi->edid, &specs);
+	if (err < 0) {
+		dev_err(&dc->ndev->dev, "error reading edid\n");
+		goto fail1;
+	}
+
+	/* monitors like to lie about these but they are still useful for
+	 * detecting aspect ratios
+	 */
+	dc->out->h_size = specs.max_x * 1000;
+	dc->out->v_size = specs.max_y * 1000;
 
 
+	hdmi->dvi = !(specs.misc & FB_MISC_HDMI);
+
+	tegra_fb_update_monspecs(dc->fb, &specs, tegra_dc_hdmi_mode_filter);
+	hdmi->hpd_switch.state = 0;
+	switch_set_state(&hdmi->hpd_switch, 1);
+	dev_info(&dc->ndev->dev, "display detected\n");
+skip:
+	return true;
+
+fail1:
+	switch_set_state(&hdmi->hpd_switch, 0);
+	tegra_nvhdcp_set_plug(hdmi->nvhdcp, 0);
+	tegra_dc_disable(dc);
+	tegra_fb_update_monspecs(dc->fb, NULL, NULL);
+	hdmi->hpd_switch.state = 0; 	
+	return false;
+}
+//SYMBOL_EXPORT(tegra_dc_hdmi_forceDisable);
+/* carry-0622 end */                         
 static void tegra_dc_hdmi_detect_worker(struct work_struct *work)
 {
 	struct tegra_dc_hdmi_data *hdmi =
 		container_of(to_delayed_work(work), struct tegra_dc_hdmi_data, work);
 	struct tegra_dc *dc = hdmi->dc;
-
-	if (!tegra_dc_hdmi_detect(dc)) {
-		tegra_dc_disable(dc);
-		tegra_fb_update_monspecs(dc->fb, NULL, NULL);
-	}
+  tegra_dc_hdmi_detect(dc);
+	//if (!tegra_dc_hdmi_detect(dc)) {
+	//	tegra_dc_disable(dc);
+	//	tegra_fb_update_monspecs(dc->fb, NULL, NULL);
+	//}
 }
 
 static irqreturn_t tegra_dc_hdmi_irq(int irq, void *ptr)
@@ -625,7 +677,6 @@ static void tegra_dc_hdmi_suspend(struct tegra_dc *dc)
 	hdmi->suspended = true;
 	spin_unlock_irqrestore(&hdmi->suspend_lock, flags);
 }
-
 static void tegra_dc_hdmi_resume(struct tegra_dc *dc)
 {
 	struct tegra_dc_hdmi_data *hdmi = tegra_dc_get_outdata(dc);
@@ -645,7 +696,6 @@ static void tegra_dc_hdmi_resume(struct tegra_dc *dc)
 	spin_unlock_irqrestore(&hdmi->suspend_lock, flags);
 	tegra_nvhdcp_resume(hdmi->nvhdcp);
 }
-
 static int tegra_dc_hdmi_init(struct tegra_dc *dc)
 {
 	struct tegra_dc_hdmi_data *hdmi;
@@ -1044,20 +1094,88 @@ static void tegra_dc_hdmi_setup_audio_infoframe(struct tegra_dc *dc, bool dvi)
 	tegra_hdmi_writel(hdmi, INFOFRAME_CTRL_ENABLE,
 			  HDMI_NV_PDISP_HDMI_AUDIO_INFOFRAME_CTRL);
 }
-
+extern int Get_Dock_Status();
 static void tegra_dc_hdmi_setup_tdms(struct tegra_dc_hdmi_data *hdmi,
-		const struct tdms_config *tc)
+		struct tdms_config *tc)
 {
 	tegra_hdmi_writel(hdmi, tc->pll0, HDMI_NV_PDISP_SOR_PLL0);
 	tegra_hdmi_writel(hdmi, tc->pll1, HDMI_NV_PDISP_SOR_PLL1);
 
 	tegra_hdmi_writel(hdmi, tc->pe_current, HDMI_NV_PDISP_PE_CURRENT);
-
+  /* carry-0617 begin */
+  /* [HDMI] auto set driving level when attach/dettach cradle */
+  if(Get_Dock_Status()){
+      printk("hdmi.c , Cradle attached ! Set low HDMI driving..\n");
+      tc->drive_current =
+      DRIVE_CURRENT_LANE0(0x03) |
+		  DRIVE_CURRENT_LANE1(0x03) |
+		  DRIVE_CURRENT_LANE2(0x03) |
+		  DRIVE_CURRENT_LANE3(0x0f) ;
+    }  
+    else{
+      printk("hdmi.c , Cradle does not detached ! Set high HDMI driving..\n");
+      tc->drive_current =
+      DRIVE_CURRENT_LANE0(0x10) |
+		  DRIVE_CURRENT_LANE1(0x11) |
+		  DRIVE_CURRENT_LANE2(0x0f) |
+		  DRIVE_CURRENT_LANE3(0x0f) ;
+    }
+  /* carry-0617 end */
 	tegra_hdmi_writel(hdmi,
 			  tc->drive_current | DRIVE_CURRENT_FUSE_OVERRIDE,
 			  HDMI_NV_PDISP_SOR_LANE_DRIVE_CURRENT);
 }
+/* carry-0712 begin */
+/* [HDMI] auto set driving level for different resolution*/
+static void tegra_dc_hdmi_setup_tdms_resolution(struct tegra_dc_hdmi_data *hdmi,
+		struct tdms_config *tc,int resolution)
+{
+	int d0,d1,d2,clk;
+	tegra_hdmi_writel(hdmi, tc->pll0, HDMI_NV_PDISP_SOR_PLL0);
+	tegra_hdmi_writel(hdmi, tc->pll1, HDMI_NV_PDISP_SOR_PLL1);
 
+	tegra_hdmi_writel(hdmi, tc->pe_current, HDMI_NV_PDISP_PE_CURRENT);
+	if(Get_Dock_Status()){
+		printk("hdmi.c , Cradle attached ! Set low HDMI driving..\n");
+		if(resolution==480){
+			printk("hdmi.c , Set driving for 480P ..\n");
+			d0=0x03;d1=0x03;d2=0x03;clk=0x03;	      		
+		}
+		else if(resolution==720){
+			printk("hdmi.c , Set driving for 720P ..\n");
+			d0=0x03;d1=0x03;d2=0x03;clk=0x03;		      		
+		}
+		else{
+			printk("hdmi.c , Set driving for 1080P ..\n");
+			d0=0x03;d1=0x03;d2=0x03;clk=0x03;
+		}	     
+	}  
+	else{
+		printk("hdmi.c , Cradle does not detached ! Set high HDMI driving..\n");
+      		if(resolution==480){
+			printk("hdmi.c , Set driving for 480P ..\n");
+			d0=0x0b;d1=0x0b;d2=0x0b;clk=0x0b;	      		
+		}
+		else if(resolution==720){
+			printk("hdmi.c , Set driving for 720P ..\n");
+			d0=0x0c;d1=0x0c;d2=0x0c;clk=0x0c;		      		
+		}
+		else{
+			printk("hdmi.c , Set driving for 1080P ..\n");
+			d0=0x10;d1=0x11;d2=0x0f;clk=0x0f;
+		}
+    	}
+	printk("hdmi.c , Set HDMI driving : D0=%d, D1=%d, D2=%d, clk=%d\n",d0,d1,d2,clk);
+	tc->drive_current =
+      		DRIVE_CURRENT_LANE0(d0) |
+		DRIVE_CURRENT_LANE1(d1) |
+		DRIVE_CURRENT_LANE2(d2) |
+		DRIVE_CURRENT_LANE3(clk) ;
+	tegra_hdmi_writel(hdmi,
+			  tc->drive_current | DRIVE_CURRENT_FUSE_OVERRIDE,
+			  HDMI_NV_PDISP_SOR_LANE_DRIVE_CURRENT);
+}
+/* carry-0712 end */
 static void tegra_dc_hdmi_enable(struct tegra_dc *dc)
 {
 	struct tegra_dc_hdmi_data *hdmi = tegra_dc_get_outdata(dc);
@@ -1160,7 +1278,11 @@ static void tegra_dc_hdmi_enable(struct tegra_dc *dc)
 	/* TMDS CONFIG */
 	for (i = 0; i < ARRAY_SIZE(tdms_config); i++) {
 		if (dc->mode.pclk <= tdms_config[i].pclk) {
-			tegra_dc_hdmi_setup_tdms(hdmi, &tdms_config[i]);
+			/* carry-0712 begin */
+			/* [HDMI] auto set driving level for different resolution*/				
+			//tegra_dc_hdmi_setup_tdms(hdmi, &tdms_config[i]);
+			tegra_dc_hdmi_setup_tdms_resolution(hdmi, &tdms_config[i],dc->mode.v_active);
+			/* carry-0712 end */
 			break;
 		}
 	}

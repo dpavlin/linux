@@ -51,6 +51,11 @@ struct tegra_dc *tegra_dcs[TEGRA_MAX_DC];
 DEFINE_MUTEX(tegra_dc_lock);
 DEFINE_MUTEX(shared_lock);
 
+//cloud-0613start
+//first time skip reset clock
+bool FirstTime = true;
+//cloud-0613end
+
 static inline int tegra_dc_fmt_bpp(int fmt)
 {
 	switch (fmt) {
@@ -1388,6 +1393,11 @@ static bool _tegra_dc_controller_enable(struct tegra_dc *dc)
 		dc->out->enable();
 
 	tegra_dc_setup_clk(dc, dc->clk);
+//cloud-0613start
+//remove garbage line for panel
+//	if(!FirstTime)
+//		tegra_periph_reset_assert(dc->clk);
+//cloud-0613end
 	clk_enable(dc->clk);
 	clk_enable(dc->emc_clk);
 	tegra_periph_reset_deassert(dc->clk);
@@ -1410,6 +1420,10 @@ static bool _tegra_dc_controller_enable(struct tegra_dc *dc)
 	/* force a full blending update */
 	dc->blend.z[0] = -1;
 
+//cloud-0613start
+//skip reset clock at first time
+	FirstTime = false;
+//cloud-0613end
 	return true;
 }
 

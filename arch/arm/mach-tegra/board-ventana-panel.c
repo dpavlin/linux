@@ -37,18 +37,53 @@
 #include "gpio-names.h"
 #include "board.h"
 
+#include <asm/setup.h>
+
 #define ventana_pnl_pwr_enb	TEGRA_GPIO_PC6
 #define ventana_bl_enb		TEGRA_GPIO_PD4
 #define ventana_lvds_shutdown	TEGRA_GPIO_PB2
 #define ventana_hdmi_hpd	TEGRA_GPIO_PN7
-#define ventana_hdmi_enb	TEGRA_GPIO_PV5
+//#define ventana_hdmi_enb	TEGRA_GPIO_PV5
+
+/* Charles 0511 start 
+*  Set backlight disable when power on cause by charging*/
+extern tegra_charging;
+/* Charles 0511 end*/
 
 static struct regulator *ventana_hdmi_reg = NULL;
 static struct regulator *ventana_hdmi_pll = NULL;
 
+//cloud-0510start
+//receive lcd type from bootloader
+int lcd_type;
+static int __init parse_tag_lcd(const struct tag *tag)
+{
+	lcd_type = tag->u.lcd.value;
+	return 0;
+}
+__tagtable(ATAG_LCD, parse_tag_lcd);
+//cloud-0510end
+
+//cloud-0601start
+bool lcd_resume = true;
+//cloud-0601end
 
 static int ventana_backlight_init(struct device *dev) {
 	int ret;
+
+	/* Charles 0511 start 
+	*  Set backlight disable when power on cause by charging*/
+
+/* nike-20110616 start */
+/* mark this section for charge logo */
+#if 0
+	if(tegra_charging){
+		return 0;
+	}
+#endif
+/* nike-20110616 end */
+
+	/* Charles 0511 end  */
 
 	ret = gpio_request(ventana_bl_enb, "backlight_enb");
 	if (ret < 0)
@@ -71,7 +106,18 @@ static void ventana_backlight_exit(struct device *dev) {
 
 static int ventana_backlight_notify(struct device *unused, int brightness)
 {
-	gpio_set_value(ventana_bl_enb, !!brightness);
+//cloud-0601start
+//resume: backlight enable delay 180ms to decrease garbage
+	//gpio_set_value(ventana_bl_enb, !!brightness);
+	if(lcd_resume && brightness != 0){
+		msleep(180);
+		gpio_set_value(ventana_bl_enb, 1);
+		lcd_resume = false;
+	}
+
+	if(brightness == 0)
+		gpio_set_value(ventana_bl_enb, 0);
+//cloud-0601end
 	return brightness;
 }
 
@@ -81,7 +127,7 @@ static struct platform_pwm_backlight_data ventana_backlight_data = {
 	.pwm_id		= 2,
 	.max_brightness	= 255,
 	.dft_brightness	= 224,
-	.pwm_period_ns	= 5000000,
+	.pwm_period_ns	= 1600000,//5000000,
 	.init		= ventana_backlight_init,
 	.exit		= ventana_backlight_exit,
 	.notify		= ventana_backlight_notify,
@@ -99,6 +145,10 @@ static struct platform_device ventana_backlight_device = {
 
 static int ventana_panel_enable(void)
 {
+//cloud-0601start
+	lcd_resume = true;
+//cloud-0601end
+
 	struct regulator *reg = regulator_get(NULL, "vdd_ldo4");
 
 	regulator_enable(reg);
@@ -111,6 +161,10 @@ static int ventana_panel_enable(void)
 
 static int ventana_panel_disable(void)
 {
+//cloud-0601start
+	lcd_resume = false;
+//cloud-0601end
+
 	gpio_set_value(ventana_lvds_shutdown, 0);
 	gpio_set_value(ventana_pnl_pwr_enb, 0);
 	return 0;
@@ -195,31 +249,82 @@ static struct resource ventana_disp2_resources[] = {
 
 static struct tegra_dc_mode ventana_panel_modes[] = {
 	{
-		.pclk = 72072000,
+		.pclk = 71500000,//72072000,
 		.h_ref_to_sync = 11,
 		.v_ref_to_sync = 1,
-		.h_sync_width = 58,
-		.v_sync_width = 4,
-		.h_back_porch = 58,
-		.v_back_porch = 4,
-		.h_active = 1366,
-		.v_active = 768,
-		.h_front_porch = 58,
-		.v_front_porch = 4,
+		.h_sync_width = 32,
+		.v_sync_width = 7,
+		.h_back_porch = 72,
+		.v_back_porch = 22,
+		.h_active = 1280,
+		.v_active = 800,
+		.h_front_porch = 48,
+		.v_front_porch = 3,
 	},
 };
 
+//cloud-0510start
+//lcd edid
+static struct tegra_dc_mode LG_panel_modes[] = {
+	{
+		.pclk = 71500000,//69300000,
+		.h_ref_to_sync = 11,
+		.v_ref_to_sync = 1,
+		.h_sync_width = 32,
+		.v_sync_width = 7,
+		.h_back_porch = 72,
+		.v_back_porch = 22,
+		.h_active = 1280,
+		.v_active = 800,
+		.h_front_porch = 48,
+		.v_front_porch = 3,
+	},
+};
+
+static struct tegra_dc_mode SEC_panel_modes[] = {
+	{
+		.pclk = 57000000,//68940000,
+		.h_ref_to_sync = 11,
+		.v_ref_to_sync = 1,
+		.h_sync_width = 58,//48,
+		.v_sync_width = 4,//3,
+		.h_back_porch = 58,//96,
+		.v_back_porch = 4,//12,
+		.h_active = 1280,
+		.v_active = 800,
+		.h_front_porch = 58,//16,
+		.v_front_porch = 4,//1,
+	},
+};
+
+static struct tegra_dc_mode HYDIS_panel_modes[] = {
+	{
+		.pclk = 57000000,//71100000,
+		.h_ref_to_sync = 11,
+		.v_ref_to_sync = 1,
+		.h_sync_width = 32,
+		.v_sync_width = 6,
+		.h_back_porch = 80,
+		.v_back_porch = 14,
+		.h_active = 1280,
+		.v_active = 800,
+		.h_front_porch = 48,
+		.v_front_porch = 3,
+	},
+};
+//cloud-0510end
+
 static struct tegra_fb_data ventana_fb_data = {
 	.win		= 0,
-	.xres		= 1366,
-	.yres		= 768,
+	.xres		= 1280,
+	.yres		= 800,
 	.bits_per_pixel	= 32,
 };
 
 static struct tegra_fb_data ventana_hdmi_fb_data = {
 	.win		= 0,
-	.xres		= 1366,
-	.yres		= 768,
+	.xres		= 1280,
+	.yres		= 800,
 	.bits_per_pixel	= 32,
 };
 
@@ -237,6 +342,54 @@ static struct tegra_dc_out ventana_disp1_out = {
 	.enable		= ventana_panel_enable,
 	.disable	= ventana_panel_disable,
 };
+
+//cloud-0510start
+static struct tegra_dc_out LG_disp1_out = {
+	.type		= TEGRA_DC_OUT_RGB,
+
+	.align		= TEGRA_DC_ALIGN_MSB,
+	.order		= TEGRA_DC_ORDER_RED_BLUE,
+	.depth		= 18,
+	.dither		= TEGRA_DC_ORDERED_DITHER,
+
+	.modes	 	= LG_panel_modes,
+	.n_modes 	= ARRAY_SIZE(LG_panel_modes),
+
+	.enable		= ventana_panel_enable,
+	.disable	= ventana_panel_disable,
+};
+
+static struct tegra_dc_out SEC_disp1_out = {
+	.type		= TEGRA_DC_OUT_RGB,
+
+	.align		= TEGRA_DC_ALIGN_MSB,
+	.order		= TEGRA_DC_ORDER_RED_BLUE,
+	.depth		= 18,
+	.dither		= TEGRA_DC_ORDERED_DITHER,
+
+	.modes	 	= SEC_panel_modes,
+	.n_modes 	= ARRAY_SIZE(SEC_panel_modes),
+
+	.enable		= ventana_panel_enable,
+	.disable	= ventana_panel_disable,
+};
+
+static struct tegra_dc_out HYDIS_disp1_out = {
+	.type		= TEGRA_DC_OUT_RGB,
+
+	.align		= TEGRA_DC_ALIGN_MSB,
+	.order		= TEGRA_DC_ORDER_RED_BLUE,
+	.depth		= 18,
+	.dither		= TEGRA_DC_ORDERED_DITHER,
+
+	.modes	 	= HYDIS_panel_modes,
+	.n_modes 	= ARRAY_SIZE(HYDIS_panel_modes),
+
+	.enable		= ventana_panel_enable,
+	.disable	= ventana_panel_disable,
+};
+//cloud-0510end
+
 
 static struct tegra_dc_out ventana_disp2_out = {
 	.type		= TEGRA_DC_OUT_HDMI,
@@ -260,6 +413,26 @@ static struct tegra_dc_platform_data ventana_disp1_pdata = {
 	.fb		= &ventana_fb_data,
 };
 
+//cloud-0510start
+static struct tegra_dc_platform_data LG_disp1_pdata = {
+	.flags		= TEGRA_DC_FLAG_ENABLED,
+	.default_out	= &LG_disp1_out,
+	.fb		= &ventana_fb_data,
+};
+
+static struct tegra_dc_platform_data SEC_disp1_pdata = {
+	.flags		= TEGRA_DC_FLAG_ENABLED,
+	.default_out	= &SEC_disp1_out,
+	.fb		= &ventana_fb_data,
+};
+
+static struct tegra_dc_platform_data HYDIS_disp1_pdata = {
+	.flags		= TEGRA_DC_FLAG_ENABLED,
+	.default_out	= &HYDIS_disp1_out,
+	.fb		= &ventana_fb_data,
+};
+//cloud-0510end
+
 static struct tegra_dc_platform_data ventana_disp2_pdata = {
 	.flags		= 0,
 	.default_out	= &ventana_disp2_out,
@@ -276,9 +449,50 @@ static struct nvhost_device ventana_disp1_device = {
 	},
 };
 
+//cloud-0510start
+static struct nvhost_device LG_disp1_device = {
+	.name		= "tegradc",
+	.id		= 0,
+	.resource	= ventana_disp1_resources,
+	.num_resources	= ARRAY_SIZE(ventana_disp1_resources),
+	.dev = {
+		.platform_data = &LG_disp1_pdata,
+	},
+};
+
+static struct nvhost_device SEC_disp1_device = {
+	.name		= "tegradc",
+	.id		= 0,
+	.resource	= ventana_disp1_resources,
+	.num_resources	= ARRAY_SIZE(ventana_disp1_resources),
+	.dev = {
+		.platform_data = &SEC_disp1_pdata,
+	},
+};
+
+static struct nvhost_device HYDIS_disp1_device = {
+	.name		= "tegradc",
+	.id		= 0,
+	.resource	= ventana_disp1_resources,
+	.num_resources	= ARRAY_SIZE(ventana_disp1_resources),
+	.dev = {
+		.platform_data = &HYDIS_disp1_pdata,
+	},
+};
+//cloud-0510end
+
 static int ventana_disp1_check_fb(struct device *dev, struct fb_info *info)
 {
-	return info->device == &ventana_disp1_device.dev;
+//cloud-0510start
+	if(lcd_type == 1)
+		return info->device == &LG_disp1_device.dev;
+	else if(lcd_type == 2)
+		return info->device == &SEC_disp1_device.dev;
+	else if(lcd_type == 3)
+		return info->device == &HYDIS_disp1_device.dev;
+	else
+		return info->device == &ventana_disp1_device.dev;
+//cloud-0510end
 }
 
 static struct nvhost_device ventana_disp2_device = {
@@ -358,9 +572,9 @@ int __init ventana_panel_init(void)
 	gpio_direction_output(ventana_lvds_shutdown, 1);
 	tegra_gpio_enable(ventana_lvds_shutdown);
 
-	tegra_gpio_enable(ventana_hdmi_enb);
+	/*tegra_gpio_enable(ventana_hdmi_enb);
 	gpio_request(ventana_hdmi_enb, "hdmi_5v_en");
-	gpio_direction_output(ventana_hdmi_enb, 1);
+	gpio_direction_output(ventana_hdmi_enb, 1);*/
 
 	tegra_gpio_enable(ventana_hdmi_hpd);
 	gpio_request(ventana_hdmi_hpd, "hdmi_hpd");
@@ -378,10 +592,32 @@ int __init ventana_panel_init(void)
 
 	err = platform_add_devices(ventana_gfx_devices,
 				   ARRAY_SIZE(ventana_gfx_devices));
-
-
-	res = nvhost_get_resource_byname(&ventana_disp1_device,
-		IORESOURCE_MEM, "fbmem");
+//cloud-0510start
+	if(lcd_type == 1)
+	{
+		printk("detect LCD panel: LG\n");
+		res = nvhost_get_resource_byname(&LG_disp1_device,
+			IORESOURCE_MEM, "fbmem");
+	}
+	else if(lcd_type == 2)
+	{
+		printk("detect LCD panel: SEC\n");
+		res = nvhost_get_resource_byname(&SEC_disp1_device,
+			IORESOURCE_MEM, "fbmem");
+	}
+	else if(lcd_type == 3)
+	{
+		printk("detect LCD panel: HYDIS\n");
+		res = nvhost_get_resource_byname(&HYDIS_disp1_device,
+			IORESOURCE_MEM, "fbmem");
+	}
+	else
+	{
+		printk("detect LCD panel: FAIL!\n");
+		res = nvhost_get_resource_byname(&ventana_disp1_device,
+			IORESOURCE_MEM, "fbmem");
+	}
+//cloud-0510end
 	res->start = tegra_fb_start;
 	res->end = tegra_fb_start + tegra_fb_size - 1;
 
@@ -390,8 +626,19 @@ int __init ventana_panel_init(void)
 	res->start = tegra_fb2_start;
 	res->end = tegra_fb2_start + tegra_fb2_size - 1;
 
+//cloud-0510start
 	if (!err)
-		err = nvhost_device_register(&ventana_disp1_device);
+	{
+		if(lcd_type == 1)
+			err = nvhost_device_register(&LG_disp1_device);
+		else if(lcd_type == 2)
+			err = nvhost_device_register(&SEC_disp1_device);
+		else if(lcd_type == 3)
+			err = nvhost_device_register(&HYDIS_disp1_device);
+		else
+			err = nvhost_device_register(&ventana_disp1_device);
+	}
+//cloud-0510end
 
 	if (!err)
 		err = nvhost_device_register(&ventana_disp2_device);

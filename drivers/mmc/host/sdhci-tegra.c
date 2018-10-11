@@ -176,11 +176,13 @@ static int __devinit tegra_sdhci_probe(struct platform_device *pdev)
 			SDHCI_QUIRK_BROKEN_WRITE_PROTECT |
 			SDHCI_QUIRK_BROKEN_CTRL_HISPD |
 			SDHCI_QUIRK_NO_HISPD_BIT |
-			SDHCI_QUIRK_8_BIT_DATA |
 			SDHCI_QUIRK_NO_VERSION_REG |
 			SDHCI_QUIRK_BROKEN_ADMA_ZEROLEN_DESC |
 			SDHCI_QUIRK_RUNTIME_DISABLE |
 			SDHCI_QUIRK_BROKEN_CARD_DETECTION;
+
+	if (plat->bus_width == 8)
+		sdhci->quirks |= SDHCI_QUIRK_8_BIT_DATA;
 
 	if (plat->force_hs != 0)
 		sdhci->quirks |= SDHCI_QUIRK_FORCE_HIGH_SPEED_MODE;

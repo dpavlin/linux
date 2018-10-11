@@ -37,8 +37,11 @@ static void tegra_audio_route(struct tegra_audio_data* audio_data,
 		codec_con &= ~(TEGRA_HEADPHONE | TEGRA_LINEOUT |
 			TEGRA_SPK | TEGRA_EAR_SPK | TEGRA_HEADSET);
 
+/* willy 0513 begin*/
+/* for docking senario */
 		if (play_device_new & TEGRA_AUDIO_DEVICE_OUT_HEADPHONE)
-			codec_con |= TEGRA_HEADPHONE;
+			codec_con |= (TEGRA_HEADPHONE | TEGRA_LINEOUT);
+/* willy 0513 end*/
 
 		if (play_device_new & TEGRA_AUDIO_DEVICE_OUT_LINE)
 			codec_con |= TEGRA_LINEOUT;
@@ -47,8 +50,10 @@ static void tegra_audio_route(struct tegra_audio_data* audio_data,
 			codec_con |= TEGRA_SPK;
 
 		if (play_device_new & TEGRA_AUDIO_DEVICE_OUT_EAR_SPEAKER)
-			codec_con |= TEGRA_EAR_SPK;
-
+/* willy 0630 begin*/
+/* workaround modify google talk output devices to Speaker when not use headset*/		
+			codec_con |= TEGRA_SPK;
+/* willy 0630 end*/
 		if (play_device_new & TEGRA_AUDIO_DEVICE_OUT_HEADSET)
 			codec_con |= TEGRA_HEADSET;
 

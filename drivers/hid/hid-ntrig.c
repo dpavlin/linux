@@ -868,6 +868,7 @@ static void ntrig_remove(struct hid_device *hdev)
 static const struct hid_device_id ntrig_devices[] = {
 	{ HID_USB_DEVICE(USB_VENDOR_ID_NTRIG, USB_DEVICE_ID_NTRIG_TOUCH_SCREEN),
 		.driver_data = NTRIG_DUPLICATE_USAGES },
+	/*
 	{ HID_USB_DEVICE(USB_VENDOR_ID_NTRIG, USB_DEVICE_ID_NTRIG_TOUCH_SCREEN_1),
 		.driver_data = NTRIG_DUPLICATE_USAGES },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_NTRIG, USB_DEVICE_ID_NTRIG_TOUCH_SCREEN_2),
@@ -904,6 +905,7 @@ static const struct hid_device_id ntrig_devices[] = {
 		.driver_data = NTRIG_DUPLICATE_USAGES },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_NTRIG, USB_DEVICE_ID_NTRIG_TOUCH_SCREEN_18),
 		.driver_data = NTRIG_DUPLICATE_USAGES },
+	*/
 	{ }
 };
 MODULE_DEVICE_TABLE(hid, ntrig_devices);

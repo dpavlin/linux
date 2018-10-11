@@ -2023,7 +2023,11 @@ static irqreturn_t fsl_udc_irq(int irq, void *_udc)
 	u32 irq_src;
 	irqreturn_t status = IRQ_NONE;
 	unsigned long flags;
-
+#if defined(CONFIG_ARCH_TEGRA)
+/* compal indigo-Howard Chang 20110517 begin*/
+	u32 u32_vbus_sensor;
+/* compal indigo-Howard Chang 20110517 end */
+#endif
 	spin_lock_irqsave(&udc->lock, flags);
 
 	/* Disable ISR for OTG host mode */
@@ -2087,6 +2091,35 @@ static irqreturn_t fsl_udc_irq(int irq, void *_udc)
 	if (irq_src & (USB_STS_ERR | USB_STS_SYS_ERR)) {
 		VDBG("Error IRQ %x", irq_src);
 	}
+
+#if defined(CONFIG_ARCH_TEGRA)
+/* compal indigo-Howard Chang 20110517 begin*/
+//add new flow to detect usb client plug out
+	u32_vbus_sensor = __raw_readl(&usb_sys_regs->vbus_sensors);
+	/* compal indigo-Howard Chang 20100603 begin*/
+	if(u32_vbus_sensor & (1<< 17))
+	{
+		u32_vbus_sensor |= ((1 << 16)|(1 << 17));
+		__raw_writel(u32_vbus_sensor, &usb_sys_regs->vbus_sensors);
+		u32_vbus_sensor = __raw_readl(&usb_sys_regs->vbus_sensors);
+
+		if(u32_vbus_sensor & (1 << 18))
+		{
+			if(udc->u32_vbus_status  == 0)
+				udc->u32_vbus_status = 1;
+		}
+		else
+		{
+			if(udc->u32_vbus_status  == 1)
+			{
+				udc->u32_vbus_status = 0;
+				reset_irq(udc);
+			}
+		}                                           
+		/* compal indigo-Howard Chang 20100603 End*/
+	}
+/* compal indigo-Howard Chang 20110517 end */
+#endif
 
 	spin_unlock_irqrestore(&udc->lock, flags);
 	return status;
@@ -2601,6 +2634,9 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 	u32 dccparams;
 #if defined(CONFIG_ARCH_TEGRA)
 	struct resource *res_sys = NULL;
+/* compal indigo-Howard Chang 20110517 begin*/
+	u32 u32_vbus_sensor;
+/* compal indigo-Howard Chang 20110517 end */
 #endif
 
 	if (strcmp(pdev->name, driver_name)) {
@@ -2616,6 +2652,7 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 
 	spin_lock_init(&udc_controller->lock);
 	udc_controller->stopped = 1;
+	udc_controller->vbus_active = 1;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -2648,6 +2685,7 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 		usb_sys_regs = (struct usb_sys_interface *)
 			((u32)dr_regs + USB_DR_SYS_OFFSET);
 	}
+
 #endif
 
 #if !defined(CONFIG_ARCH_MXC) && !defined(CONFIG_ARCH_TEGRA)
@@ -2659,6 +2697,21 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 	ret = fsl_udc_clk_init(pdev);
 	if (ret < 0)
 		goto err_iounmap_noclk;
+
+/* compal indigo-Howard Chang 20110517 begin*/
+//add new flow to detect usb client plug out
+	u32_vbus_sensor = __raw_readl(&usb_sys_regs->vbus_sensors);
+	
+/* compal indigo-Howard Chang 20100603 begin*/
+	u32_vbus_sensor |= ((1 << 16) |(1 << 17));
+	__raw_writel(u32_vbus_sensor, &usb_sys_regs->vbus_sensors);
+	u32_vbus_sensor = __raw_readl(&usb_sys_regs->vbus_sensors);
+	if(u32_vbus_sensor & (1 << 18))
+		udc_controller->u32_vbus_status = 1;
+	else
+		udc_controller->u32_vbus_status = 0;
+/* compal indigo-Howard Chang 20100603 end*/
+/* compal indigo-Howard Chang 20110517 end */
 
 	/* Read Device Controller Capability Parameters register */
 	dccparams = fsl_readl(&dr_regs->dccparams);
@@ -2763,7 +2816,10 @@ static int __init fsl_udc_probe(struct platform_device *pdev)
 		fsl_udc_clk_suspend(false);
 #endif
 #endif
-
+	/* compal indigo-Howard Chang 20110504 begin */
+	//gadget driver whould not care vbus condition
+	udc_controller->vbus_active = 1;
+	/* compal indigo-Howard Chang 20110504 end */
 	return 0;
 
 err_unregister:
@@ -2890,9 +2946,12 @@ static int fsl_udc_resume(struct platform_device *pdev)
     udc_controller->ep0_dir = 0;
 #endif
     /* Power down the phy if cable is not connected */
+    	/* compal indigo-Howard Chang 20110526 begin */
+    /*
     if (!(fsl_readl(&usb_sys_regs->vbus_wakeup) & USB_SYS_VBUS_STATUS))
-        fsl_udc_clk_suspend(false);
-
+        fsl_udc_clk_suspend();
+    */
+    	/* compal indigo-Howard Chang 20110526 end */
     return 0;
 }
 

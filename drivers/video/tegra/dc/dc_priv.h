@@ -93,6 +93,7 @@ struct tegra_dc {
 	struct work_struct		reset_work;
 
 	struct switch_dev		modeset_switch;
+	bool disableHDMI;
 };
 
 static inline void tegra_dc_io_start(struct tegra_dc *dc)

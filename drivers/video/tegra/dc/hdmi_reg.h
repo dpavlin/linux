@@ -326,7 +326,10 @@
 #define  DRIVE_CURRENT_6_000_mA			0x0c
 #define  DRIVE_CURRENT_6_375_mA			0x0d
 #define  DRIVE_CURRENT_6_750_mA			0x0e
-#define  DRIVE_CURRENT_7_125_mA			0x0f
+/* carry-0601 begin */
+/* decrease EMI noise */
+#define  DRIVE_CURRENT_7_125_mA			0x00
+/* carry-0601 end */
 #define  DRIVE_CURRENT_7_500_mA			0x10
 #define  DRIVE_CURRENT_7_875_mA			0x11
 #define  DRIVE_CURRENT_8_250_mA			0x12

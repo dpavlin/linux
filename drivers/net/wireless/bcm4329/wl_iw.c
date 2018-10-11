@@ -1647,6 +1647,9 @@ wl_iw_control_wl_off(
 		g_first_counter_scans = 0;
 #endif
 #endif
+		/* Jason Dong 2011/7/4 begin: Pull down wlan reset pin before sdioh_stop() to prevent a racing condition */
+		dhd_customer_gpio_wlan_ctrl(WLAN_RESET_OFF);
+		/* Jason Dong 2011/7/4 end */
 
 #if defined(BCMLXSDMMC)
 		sdioh_stop(NULL);
@@ -1654,7 +1657,9 @@ wl_iw_control_wl_off(
 
 		net_os_set_dtim_skip(dev, 0);
 
-		dhd_customer_gpio_wlan_ctrl(WLAN_RESET_OFF);
+		/* Jason Dong 2011/7/4 begin: Pull down wlan reset pin before sdioh_stop() to prevent a racing condition */
+		//dhd_customer_gpio_wlan_ctrl(WLAN_RESET_OFF);
+		/* Jason Dong 2011/7/4 end */
 
 		wl_iw_send_priv_event(dev, "STOP");
 	}

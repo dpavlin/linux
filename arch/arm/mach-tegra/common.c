@@ -84,6 +84,12 @@ unsigned long tegra_lp0_vec_size;
 unsigned long tegra_grhost_aperture;
 static   bool is_tegra_debug_uart_hsport;
 
+/* Charles 0511 start 
+* Set backlight disable when power on cause by charging*/
+unsigned long tegra_charging;
+/* Charles 0511 end*/
+extern void SysRestart(void );
+
 static struct board_info tegra_board_info = {
 	.board_id = -1,
 	.sku = -1,
@@ -153,7 +159,7 @@ void __init tegra_init_cache(void)
 static void __init tegra_init_power(void)
 {
 	tegra_powergate_power_off(TEGRA_POWERGATE_MPE);
-	tegra_powergate_power_off(TEGRA_POWERGATE_3D);
+	//tegra_powergate_power_off(TEGRA_POWERGATE_3D);
 	tegra_powergate_power_off(TEGRA_POWERGATE_PCIE);
 }
 
@@ -243,8 +249,9 @@ static int tegra_pm_flush_console(struct notifier_block *this,
 }
 
 static void tegra_pm_restart(char mode, const char *cmd)
-{
-	arm_machine_restart(mode, cmd);
+{	
+	SysRestart();
+	//arm_machine_restart(mode, cmd);
 }
 
 static struct notifier_block tegra_reboot_notifier = {
@@ -291,6 +298,20 @@ static int __init tegra_lp0_vec_arg(char *options)
 	return 0;
 }
 early_param("lp0_vec", tegra_lp0_vec_arg);
+
+/* Charles 0511 start 
+* Set backlight disable when power on cause by charging*/
+static int __init tegra_charging_arg(char *options)
+{
+	char *p = options;
+
+	tegra_charging = memparse(p, &p);
+	pr_info("Found charging: %08lx\n", tegra_charging);
+
+	return 0;
+}
+early_param("charging", tegra_charging_arg);
+/* Charles 0511 end */
 
 static int __init tegra_board_info_parse(char *info)
 {

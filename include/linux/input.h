@@ -378,6 +378,8 @@ struct input_absinfo {
 #define KEY_WIMAX		246
 #define KEY_RFKILL		247	/* Key that controls all radios */
 
+#define KEY_AUTO_ROTATION	248	/* Enable or disable Auto-rotation */
+
 /* Code 255 is reserved for special needs of AT keyboard driver */
 
 #define BTN_MISC		0x100
@@ -598,6 +600,10 @@ struct input_absinfo {
 
 #define KEY_CAMERA_FOCUS	0x210
 #define KEY_WPS_BUTTON		0x211	/* WiFi Protected Setup key */
+// leonis added
+#define KEY_MIC_MUTE            0x212   /* Mute microphone */
+#define KEY_OPEN_NOTIFICATIONS  0x213   /* Open notifications */
+#define KEY_SYMBOL              0x214   /* Open IME selector */
 
 #define BTN_TRIGGER_HAPPY		0x2c0
 #define BTN_TRIGGER_HAPPY1		0x2c0

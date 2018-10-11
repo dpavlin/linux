@@ -253,13 +253,28 @@ static int tegra_fb_setcolreg(unsigned regno, unsigned red, unsigned green,
 
 	return 0;
 }
-
+//extern bool tegra_dc_hdmi_forceDisable(struct tegra_dc *dc,bool disable);
 static int tegra_fb_blank(int blank, struct fb_info *info)
 {
 	struct tegra_fb_info *tegra_fb = info->par;
 
 	switch (blank) {
-	case FB_BLANK_UNBLANK:
+	/* carry-0622 begin */
+  	/* [HDMI] fix No video in pad when disable HDMI */
+  	case 1:		
+		printk("fb.c ,enable HDMI\n");
+    tegra_fb->win->dc->disableHDMI=false;			
+		tegra_fb->win->dc->out_ops->detect(tegra_fb->win->dc);			
+		//tegra_dc_hdmi_forceDisable(tegra_fb->win->dc,false);
+		return 0;
+	case 2:		
+		printk("fb.c ,disable HDMI\n");
+		tegra_fb->win->dc->disableHDMI=true;			
+		tegra_fb->win->dc->out_ops->detect(tegra_fb->win->dc);
+		//tegra_dc_hdmi_forceDisable(tegra_fb->win->dc,true);
+		return 0;
+	/* carry-0622 end */
+  	case FB_BLANK_UNBLANK:
 		dev_dbg(&tegra_fb->ndev->dev, "unblank\n");
 		tegra_dc_enable(tegra_fb->win->dc);
 		return 0;
@@ -463,7 +478,8 @@ static int tegra_fb_set_windowattr(struct tegra_fb_info *tegra_fb,
 		nvhost_syncpt_wait_timeout(&tegra_fb->ndev->host->syncpt,
 					   flip_win->attr.pre_syncpt_id,
 					   flip_win->attr.pre_syncpt_val,
-					   msecs_to_jiffies(500));
+					   msecs_to_jiffies(500),
+					   NULL);
 	}
 
 

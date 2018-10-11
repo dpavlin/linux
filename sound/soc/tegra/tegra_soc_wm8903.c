@@ -19,12 +19,34 @@
 #include <linux/gpio.h>
 #include <sound/soc-dapm.h>
 #include <linux/regulator/consumer.h>
+/* willy 0512 begin*/
 #include <linux/sysfs.h>
+#include "tegra_wired_jack.h"
+/* willy 0512 end*/
 #include "../codecs/wm8903.h"
 
 static struct platform_device *tegra_snd_device;
 
+static struct regulator *reg_vmic = NULL;
 extern int en_dmic;
+
+/* compal indigo-Howard Chang 20100531 begin */
+static struct kobject *audio_kobj;
+s32	CodeRegisterReadAddress;
+struct snd_soc_codec *PublicCodec;
+bool Mute_Enable = false;
+
+#define debug_attr(_name) \
+        static struct kobj_attribute _name##_attr = { \
+        .attr = { \
+        .name = __stringify(_name), \
+        .mode = 0660, \
+        }, \
+        .show = _name##_show, \
+        .store = _name##_store, \
+        }
+
+/* compal indigo-Howard Chang 20100531 end */
 
 extern struct snd_soc_dai tegra_i2s_dai[];
 extern struct snd_soc_dai tegra_spdif_dai;
@@ -126,6 +148,221 @@ static void configure_dmic(struct snd_soc_codec *codec)
 
 }
 
+/* compal indigo-Howard Chang 20100531 begin */
+int CharHextoInt(const char *hex,int length)
+{
+	int result = 0,i;
+	
+	printk("length : %d\n",length);
+	
+	for(i = 0; i < length;i++)
+	{
+		printk("!%d\n",hex[i]);
+		switch(hex[i])
+		{
+			case 0:
+				break;
+			case '0':
+			case '1':
+			case '2':
+			case '3':
+			case '4':
+			case '5':
+			case '6':
+			case '7':
+			case '8':
+			case '9':
+				result <<= 4;
+				result += hex[i] - 48;
+				break;
+			case 'a':
+			case 'A':
+				result <<= 4;
+				result += 10;
+				break;
+			case 'b':
+			case 'B':
+				result <<= 4;
+				result += 11;
+				break;
+			case 'c':
+			case 'C':
+				result <<= 4;
+				result += 12;
+				break;
+			case 'd':
+			case 'D':
+				result <<= 4;
+				result += 13;
+				break;
+			case 'e':
+			case 'E':
+				result <<= 4;
+				result += 14;
+				break;
+			case 'f':
+			case 'F':
+				result <<= 4;
+				result += 15;
+				break;
+			default:
+				return -1;
+				break;
+		}
+	}
+	return result;
+}
+
+int IntToCharHex(char *buf,unsigned int value,int size)
+{
+	int i,j;
+	char cbuff;
+	
+	//int to char array
+	for(i =0;i  < size;i++)
+	{
+		buf[i] = value % 16;
+		value /= 16;
+		if(value == 0)
+			break;
+	}
+	if(value != 0 || size < 1)
+             return -1;
+	 // convert to ascii
+	for(j = 0;j <= i;j++)
+	{
+		if(buf[j] < 10)
+			buf[j] += 48;
+		else
+			buf[j] += 55;
+	}
+ 
+	//reverse array 
+	for(j = (i + 1) / 2;j > 0;j--)
+	{
+		cbuff = buf[i +1-j];
+		buf[i+1-j] = buf[j - 1];
+		buf[j-1]=cbuff;
+	}
+	return i+1;
+}
+
+/*
+static ssize_t CodecRegisterRead_store(struct kobject *kobj, struct kobj_attribute *attr, const char * buf, size_t n)
+{
+	int result = CharHextoInt(buf,n-1);
+	if(n < 0)
+	{
+		printk("CodecRegisterRead_store get wrong argument\n");
+		return n;
+	}
+	CodeRegisterReadAddress = result;
+	printk("CodeRegisterReadAddress 0x%x\n",CodeRegisterReadAddress);
+	return n;
+}
+
+static ssize_t CodecRegisterRead_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
+{
+	int CtrlReg1;
+	if(PublicCodec == NULL)
+	{
+		printk("CodecRegisterRead_show : PublicCodec is NULL\n");
+		return 0;
+	}
+	CtrlReg1 = snd_soc_read(PublicCodec, CodeRegisterReadAddress);
+	
+	if(CtrlReg1 < 0)
+	{
+		printk("CodecRegisterRead_show : error snd_soc_read return %d\n",CtrlReg1);
+		return 0;
+	}
+	
+	printk("CodecRegisterRead_show : register 0x%x value : 0x%x\n",CodeRegisterReadAddress,CtrlReg1);
+	
+        return sprintf(buf,"%x\n",CtrlReg1);
+}
+static ssize_t CodecRegisterWrite_store(struct kobject *kobj, struct kobj_attribute *attr, const char * buf, size_t n)
+{
+	int result1,result2;
+	if(n < 7)
+	{
+		printk("CodecRegisterWrite_store get wrong argument\n");
+		return n;
+	}
+	
+	result1 = CharHextoInt(buf,2);
+	result2 = CharHextoInt(buf+2,4);
+
+	if(PublicCodec == NULL)
+	{
+		printk("CodecRegisterWrite_store : PublicCodec is NULL\n");
+		return n;
+	}
+	result1 = snd_soc_write(PublicCodec, result1,result2);
+	printk("CodecRegisterWrite_store : snd_soc_write return 0x%x\n",result1);
+	
+	return n;
+}
+
+static ssize_t CodecRegisterWrite_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
+{
+        return 0;
+}*/
+
+int a_to_i(const char *a)
+{
+    int s = 0;
+    while(*a >= '0' && *a <= '9')
+        s = (s << 3) + (s << 1) + *a++ - '0';
+    return s;
+}
+
+static ssize_t Mic_Mute_store(struct kobject *kobj, struct kobj_attribute *attr, const char * buf, size_t n)
+{
+	int buffer;
+	buffer = a_to_i(buf);
+
+	if (buffer == 1)
+		Mute_Enable = true;
+	else
+		Mute_Enable = false;
+
+	return n;
+}
+
+static ssize_t Mic_Mute_show(struct kobject *kobj, struct kobj_attribute *attr, char * buf)
+{
+        return 0;
+}
+
+//debug_attr(CodecRegisterRead);
+//debug_attr(CodecRegisterWrite);
+debug_attr(Mic_Mute);
+
+static struct attribute *attr_item[] = 
+{
+       //&CodecRegisterRead_attr.attr,
+       //&CodecRegisterWrite_attr.attr,
+	&Mic_Mute_attr.attr,
+	NULL,
+};
+static struct attribute_group attr_group =
+{
+        .attrs = attr_item,
+};
+/* compal indigo-Howard Chang 20100531 end */
+
+/* willy 0513 begin*/
+/* These values are copied from WiredAccessoryObserver */
+enum headset_state {
+	BIT_NO_HEADSET = 0,
+	BIT_HEADSET = (1 << 0),
+	BIT_HEADSET_NO_MIC = (1 << 1),
+	BIT_DOCKING_MIC = (1 << 2),
+	BIT_DOCKING_MIC_HP = (1 << 3),
+};
+/* willy 0513 end*/
+
 static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 					struct snd_pcm_hw_params *params)
 {
@@ -135,9 +372,20 @@ static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_codec *codec = codec_dai->codec;
 	struct tegra_audio_data* audio_data = rtd->socdev->codec_data;
 	enum dac_dap_data_format data_fmt;
-	int dai_flag = 0, sys_clk;
+/* willy 0512 begin*/
+	int dai_flag = 0, sys_clk , jack_state = 0;
+/* willy 0512 end*/
 	int err;
 
+/* compal indigo-Howard Chang 20110601 begin */
+	int CtrlReg = 0;
+	int VolumeCtrlReg = 0;
+	//int SidetoneCtrlReg = 0;
+/* compal indigo-Howard Chang 20110601 end */
+
+/* compal indigo-Howard Chang 20100531 begin */
+	PublicCodec = codec;
+/* compal indigo-Howard Chang 20100531 end */
 	if (tegra_das_is_port_master(tegra_audio_codec_type_hifi))
 		dai_flag |= SND_SOC_DAIFMT_CBM_CFM;
 	else
@@ -177,9 +425,10 @@ static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 	}
 
 	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK) {
-		int CtrlReg = 0;
-		int VolumeCtrlReg = 0;
-		int SidetoneCtrlReg = 0;
+/* willy 0512 begin*/
+/* disable SideToneAtenuation */
+		//int SideToneAtenuation = 0;
+/* willy 0512 end*/
 
 		snd_soc_write(codec, WM8903_ANALOGUE_LEFT_INPUT_0, 0X7);
 		snd_soc_write(codec, WM8903_ANALOGUE_RIGHT_INPUT_0, 0X7);
@@ -187,26 +436,83 @@ static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 		CtrlReg = (0x1<<B00_MICBIAS_ENA) | (0x1<<B01_MICDET_ENA);
 		snd_soc_write(codec, WM8903_MIC_BIAS_CONTROL_0, CtrlReg);
 		/* Enable DRC */
-		CtrlReg = snd_soc_read(codec, WM8903_DRC_0);
+/* compal indigo-Howard Chang 20110601 begin */
+/* Disable DRC for background noise issue */
+/*		CtrlReg = snd_soc_read(codec, WM8903_DRC_0);
 		CtrlReg |= (1<<B15_DRC_ENA);
-		snd_soc_write(codec, WM8903_DRC_0, CtrlReg);
-		/* Single Ended Mic */
-		CtrlReg = (0x0<<B06_IN_CM_ENA) |
-			(0x0<<B00_MODE) | (0x0<<B04_IP_SEL_N)
-					| (0x1<<B02_IP_SEL_P);
-		VolumeCtrlReg = (0x1C << B00_IN_VOL);
+		snd_soc_write(codec, WM8903_DRC_0, CtrlReg);*/
+/* compal indigo-Howard Chang 20110601 End */
+/* willy 0512 begin*/
+/* mic detect */
+		jack_state = wired_jack_state();
+/* compal indigo-Howard Chang 20110518 begin */
+/* fix internal mic function */
+		if(jack_state == BIT_HEADSET)
+		{
+			printk("\nhw Record device : headset\n");
+			CtrlReg = (0x0<<B06_IN_CM_ENA) |(0x1<<B04_IP_SEL_N) | (0x0<<B02_IP_SEL_P) | (0x0<<B00_MODE);
+			VolumeCtrlReg = (0x1C << B00_IN_VOL);
+/* kenny 0711 begin*/
+/* mic gain tunning */                 
+            snd_soc_write(codec, WM8903_ADC_DIGITAL_VOLUME_LEFT, 0x1c0);
+            snd_soc_write(codec, WM8903_ADC_DIGITAL_VOLUME_RIGHT, 0x1c0);                      
+/* kenny 0711 end*/			
+			
+		}else if( (jack_state == BIT_HEADSET_NO_MIC) ||  (jack_state == BIT_NO_HEADSET) )
+		{
+			printk("\nhw Record device : int mic\n");
+			/* kenny 20110722 begin*/
+			//For meet spec setting
+			CtrlReg = 0x52;
+			/* kenny 20110722 end*/
+			VolumeCtrlReg = (0x07 << B00_IN_VOL);
+/* kenny 0711 begin*/
+/* mic gain tunning */                 
+            snd_soc_write(codec, WM8903_ADC_DIGITAL_VOLUME_LEFT, 0x1e6);
+            snd_soc_write(codec, WM8903_ADC_DIGITAL_VOLUME_RIGHT, 0x1e6);                      
+/* kenny 0711 end*/				
+		}else if( (jack_state == BIT_DOCKING_MIC) ||(jack_state == BIT_DOCKING_MIC_HP) )
+		{
+			printk("\nhw Record device : docking mic\n");
+			CtrlReg = (0x0<<B06_IN_CM_ENA) |(0x2<<B04_IP_SEL_N) | (0x2<<B02_IP_SEL_P) | (0x0<<B00_MODE);
+			VolumeCtrlReg = (0x1C << B00_IN_VOL);
+						/* kenny 0711 begin*/
+/* mic gain tunning */                 
+            snd_soc_write(codec, WM8903_ADC_DIGITAL_VOLUME_LEFT, 0x1c0);
+            snd_soc_write(codec, WM8903_ADC_DIGITAL_VOLUME_RIGHT, 0x1c0);                      
+/* kenny 0711 end*/	
+		}
+/* compal indigo-Howard Chang 20110518 end */
+/* willy 0512 end*/
+
 		/* Mic Setting */
 		snd_soc_write(codec, WM8903_ANALOGUE_LEFT_INPUT_1, CtrlReg);
 		snd_soc_write(codec, WM8903_ANALOGUE_RIGHT_INPUT_1, CtrlReg);
 		/* voulme for single ended mic */
+//cloud-20110706start
+//Enable mute
+		if(Mute_Enable)
+			VolumeCtrlReg |= WM8903_LINMUTE;
+//cloud-20110706end
 		snd_soc_write(codec, WM8903_ANALOGUE_LEFT_INPUT_0,
 				VolumeCtrlReg);
 		snd_soc_write(codec, WM8903_ANALOGUE_RIGHT_INPUT_0,
 				VolumeCtrlReg);
-		/* replicate mic setting on both channels */
+		/* Left ADC data on both channels */
 		CtrlReg = snd_soc_read(codec, WM8903_AUDIO_INTERFACE_0);
-		CtrlReg  = SET_REG_VAL(CtrlReg, 0x1, B06_AIF_ADCR, 0x0);
-		CtrlReg  = SET_REG_VAL(CtrlReg, 0x1, B06_AIF_ADCL, 0x0);
+/* compal indigo-Howard Chang 20110518 begin */
+		/* fix internal mic function */
+		if( (jack_state == BIT_HEADSET_NO_MIC) ||  (jack_state == BIT_NO_HEADSET) )
+		{
+			CtrlReg  = SET_REG_VAL(CtrlReg, 0x1, B06_AIF_ADCR, 0x1);
+			CtrlReg  = SET_REG_VAL(CtrlReg, 0x1, B06_AIF_ADCL, 0x1);
+		}
+		else
+		{
+			CtrlReg  = SET_REG_VAL(CtrlReg, 0x1, B06_AIF_ADCR, 0x0);
+			CtrlReg  = SET_REG_VAL(CtrlReg, 0x1, B06_AIF_ADCL, 0x0);
+		}
+/* compal indigo-Howard Chang 20110518 end */
 		snd_soc_write(codec, WM8903_AUDIO_INTERFACE_0, CtrlReg);
 		/* Enable analog inputs */
 		CtrlReg = (0x1<<B01_INL_ENA) | (0x1<<B00_INR_ENA);
@@ -215,11 +521,12 @@ static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 		CtrlReg = snd_soc_read(codec, WM8903_ADC_DIGITAL_0);
 		CtrlReg |= (0x1<<B04_ADC_HPF_ENA);
 		snd_soc_write(codec, WM8903_ADC_DIGITAL_0, CtrlReg);
-		SidetoneCtrlReg = 0;
-		snd_soc_write(codec, R20_SIDETONE_CTRL, SidetoneCtrlReg);
+		/* Disable sidetone */
+		CtrlReg = 0;
+		snd_soc_write(codec, R20_SIDETONE_CTRL, CtrlReg);
 		/* Enable ADC */
 		CtrlReg = snd_soc_read(codec, WM8903_POWER_MANAGEMENT_6);
-		CtrlReg |= (0x1<<B00_ADCR_ENA)|(0x1<<B01_ADCL_ENA);
+		CtrlReg |= (0x1<<B01_ADCL_ENA);
 		snd_soc_write(codec, WM8903_POWER_MANAGEMENT_6, CtrlReg);
 		CtrlReg = snd_soc_read(codec, R29_DRC_1);
 		CtrlReg |= 0x3; /*mic volume 18 db */
@@ -228,7 +535,25 @@ static int tegra_hifi_hw_params(struct snd_pcm_substream *substream,
 		configure_dmic(codec);
 
 	}
+	
+/* compal indigo-Howard Chang 20110601 begin */
+//tuning speaker volume
+	CtrlReg = 0xBB; 
+	snd_soc_write(codec, WM8903_ANALOGUE_OUT3_LEFT, CtrlReg);
+	CtrlReg = 0x1B0;
+	snd_soc_write(codec, WM8903_DAC_DIGITAL_VOLUME_LEFT, CtrlReg);
+	snd_soc_write(codec, WM8903_DAC_DIGITAL_VOLUME_RIGHT, CtrlReg);
+/* compal indigo-Howard Chang 20110601 end */
 
+/* compal indigo-Kenny Lo 20110722 begin */	
+	CtrlReg = 0xB8;
+	snd_soc_write(codec, WM8903_ANALOGUE_OUT1_LEFT, CtrlReg);
+	snd_soc_write(codec, WM8903_ANALOGUE_OUT1_RIGHT, CtrlReg);
+	CtrlReg = 0xB4;
+	snd_soc_write(codec, WM8903_ANALOGUE_OUT2_LEFT, CtrlReg);
+	snd_soc_write(codec, WM8903_ANALOGUE_OUT2_RIGHT, CtrlReg);		
+/* compal indigo-Kenny Lo 20110722 end */
+	
 	return 0;
 }
 
@@ -294,12 +619,26 @@ int tegra_codec_startup(struct snd_pcm_substream *substream)
 {
 	tegra_das_power_mode(true);
 
+	if ((SNDRV_PCM_STREAM_CAPTURE == substream->stream) && en_dmic) {
+		/* enable d-mic */
+		if (reg_vmic) {
+			regulator_enable(reg_vmic);
+		}
+	}
+
 	return 0;
 }
 
 void tegra_codec_shutdown(struct snd_pcm_substream *substream)
 {
 	tegra_das_power_mode(false);
+
+	if ((SNDRV_PCM_STREAM_CAPTURE == substream->stream) && en_dmic) {
+		/* disable d-mic */
+		if (reg_vmic) {
+			regulator_disable(reg_vmic);
+		}
+	}
 }
 
 int tegra_soc_suspend_pre(struct platform_device *pdev, pm_message_t state)
@@ -351,7 +690,12 @@ static struct snd_soc_ops tegra_spdif_ops = {
 void tegra_ext_control(struct snd_soc_codec *codec, int new_con)
 {
 	struct tegra_audio_data* audio_data = codec->socdev->codec_data;
-
+/* willy 0516 begin*/
+/* disable SideToneAtenuation */	
+	static int jack_state = 0;
+	jack_state = wired_jack_state();
+/* willy 0516 end*/
+	
 	/* Disconnect old codec routes and connect new routes*/
 	if (new_con & TEGRA_HEADPHONE)
 		snd_soc_dapm_enable_pin(codec, "Headphone");
@@ -368,20 +712,38 @@ void tegra_ext_control(struct snd_soc_codec *codec, int new_con)
 	else
 		snd_soc_dapm_disable_pin(codec, "Int Spk");
 
+/* willy 0516 begin*/
+/* for int/ext mic enable */
 	if (new_con & TEGRA_INT_MIC)
+	{
+		if( (jack_state == BIT_DOCKING_MIC) || 	(jack_state == BIT_DOCKING_MIC_HP) )
+		snd_soc_dapm_enable_pin(codec, "Ext Mic");
+		else
 		snd_soc_dapm_enable_pin(codec, "Int Mic");
-	else
+	}
+		else
+	{
+	if( (jack_state == BIT_DOCKING_MIC) || 	(jack_state == BIT_DOCKING_MIC_HP) )
+		snd_soc_dapm_disable_pin(codec, "Ext Mic");
+		else
 		snd_soc_dapm_disable_pin(codec, "Int Mic");
+	}
 
 	if (new_con & TEGRA_EXT_MIC)
 		snd_soc_dapm_enable_pin(codec, "Ext Mic");
 	else
 		snd_soc_dapm_disable_pin(codec, "Ext Mic");
+/* willy 0516 end*/
 
+/* willy 0512 begin*/
+/* disable linein setting */
+#if 0
 	if (new_con & TEGRA_LINEIN)
 		snd_soc_dapm_enable_pin(codec, "Linein");
 	else
 		snd_soc_dapm_disable_pin(codec, "Linein");
+#endif
+/* willy 0512 begin*/
 
 	if (new_con & TEGRA_HEADSET)
 		snd_soc_dapm_enable_pin(codec, "Headset");
@@ -431,6 +793,18 @@ static int tegra_dapm_event_int_mic(struct snd_soc_dapm_widget* w,
 	return 0;
 }
 
+/* willy 0513 begin*/
+/* for docking mic detect */
+#if 1
+static int tegra_dapm_event_ext_mic(struct snd_soc_dapm_widget* w,
+				    struct snd_kcontrol* k, int event)
+{
+	if (tegra_wired_jack_conf.en_mic_ext != -1)
+		gpio_set_value_cansleep(tegra_wired_jack_conf.en_mic_ext,
+			SND_SOC_DAPM_EVENT_ON(event) ? 0 : 1);
+	return 0;
+}
+#else
 static int tegra_dapm_event_ext_mic(struct snd_soc_dapm_widget* w,
 				    struct snd_kcontrol* k, int event)
 {
@@ -444,9 +818,21 @@ static int tegra_dapm_event_ext_mic(struct snd_soc_dapm_widget* w,
 
 	return 0;
 }
+#endif
+/* willy 0513 end*/
 
 /*tegra machine dapm widgets */
-static const struct snd_soc_dapm_widget tegra_dapm_widgets[] = {
+static const struct snd_soc_dapm_widget tegra_dapm_widgets[] = { 
+/* willy 0512 begin*/
+/* change alsa widget */
+#if 1
+	SND_SOC_DAPM_HP("Headphone", NULL),
+	SND_SOC_DAPM_HP("Headset", NULL),
+	SND_SOC_DAPM_SPK("Lineout", NULL),
+	SND_SOC_DAPM_MIC("Ext Mic", tegra_dapm_event_ext_mic),
+	SND_SOC_DAPM_SPK("Int Spk", tegra_dapm_event_int_spk),
+	SND_SOC_DAPM_MIC("Int Mic", NULL),	
+#else	
 	SND_SOC_DAPM_HP("Headphone", NULL),
 	SND_SOC_DAPM_HP("Headset", NULL),
 	SND_SOC_DAPM_SPK("Lineout", NULL),
@@ -454,11 +840,42 @@ static const struct snd_soc_dapm_widget tegra_dapm_widgets[] = {
 	SND_SOC_DAPM_MIC("Ext Mic", tegra_dapm_event_ext_mic),
 	SND_SOC_DAPM_MIC("Int Mic", tegra_dapm_event_int_mic),
 	SND_SOC_DAPM_LINE("Linein", NULL),
+#endif	
+/* willy 0512 end*/
 };
 
 /* Tegra machine audio map (connections to the codec pins) */
 static const struct snd_soc_dapm_route audio_map[] = {
+/* willy 0512 begin*/
+/* change audio in/out map */
+#if 1
+	/* headphone connected to LHPOUT1, RHPOUT1 */
+	{"Headphone", NULL, "HPOUTR"},
+	{"Headphone", NULL, "HPOUTL"},
 
+	/* headset Jack  - in = micin, out = HPOUT*/
+	{"Headset", NULL, "HPOUTR"},
+	{"Headset", NULL, "HPOUTL"},
+	{"IN2L", NULL, "Headset"},
+
+	/* lineout connected to LINEOUTR and LINEOUTL */
+	{"Lineout", NULL, "LINEOUTR"},
+	{"Lineout", NULL, "LINEOUTL"},
+
+	/* build-in speaker connected to LON/P RON/P */
+	{"Int Spk", NULL, "RON"},
+	{"Int Spk", NULL, "ROP"},
+	{"Int Spk", NULL, "LON"},
+	{"Int Spk", NULL, "LOP"},
+
+	/* internal mic is differential */
+	{"IN1R", NULL, "Int Mic"},
+	{"IN2R", NULL, "Int Mic"},
+
+	/* external mic is stero */
+	{"IN3L", NULL, "Ext Mic"},
+	{"IN3R", NULL, "Ext Mic"},
+#else	
 	/* headphone connected to LHPOUT1, RHPOUT1 */
 	{"Headphone", NULL, "HPOUTR"},
 	{"Headphone", NULL, "HPOUTL"},
@@ -482,13 +899,15 @@ static const struct snd_soc_dapm_route audio_map[] = {
 	/* internal mic is mono */
 	{"IN1R", NULL, "Int Mic"},
 
-	/* external mic is stero */
+	/* external mic is stereo */
 	{"IN1L", NULL, "Ext Mic"},
 	{"IN1R", NULL, "Ext Mic"},
 
 	/* Line In */
 	{"IN3L", NULL, "Linein"},
 	{"IN3R", NULL, "Linein"},
+#endif	
+/* willy 0512 end*/
 };
 
 
@@ -608,13 +1027,34 @@ static int __init tegra_init(void)
 		goto fail;
 	}
 
+/* compal indigo-Howard Chang 20100531 begin */
+	PublicCodec = NULL;
+	//get codec register
+
+	audio_kobj = kobject_create_and_add("AudioCodec", NULL);
+	if (audio_kobj == NULL)
+		printk("tegra_soc_wm8903 kobject_create_and_add failed\n");
+	
+	if(sysfs_create_group(audio_kobj, &attr_group))
+		printk("tegra_soc_wm8903 sysfs_create_group failed\n");
+
+/* compal indigo-Howard Chang 20100531 end */
+
+
+
 	ret = device_create_file(&tegra_snd_device->dev,
 							&dev_attr_enable_digital_mic);
 	if (ret < 0) {
 		dev_err(&tegra_snd_device->dev,
 				"%s: could not create sysfs entry %s: %d\n",
 				__func__, dev_attr_enable_digital_mic.attr.name, ret);
-		return ret;
+		goto fail;
+	}
+
+	reg_vmic = regulator_get(&tegra_snd_device->dev, "vmic");
+	if (IS_ERR_OR_NULL(reg_vmic)) {
+		pr_err("Couldn't get vmic regulator\n");
+		reg_vmic = NULL;
 	}
 
 	return 0;
@@ -631,6 +1071,10 @@ fail:
 static void __exit tegra_exit(void)
 {
 	tegra_jack_exit();
+	if (reg_vmic) {
+		regulator_put(reg_vmic);
+		reg_vmic = NULL;
+	}
 	platform_device_unregister(tegra_snd_device);
 }
 

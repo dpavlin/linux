@@ -508,6 +508,12 @@ struct fsl_udc {
 	u32 ep0_dir;		/* Endpoint zero direction: can be
 				   USB_DIR_IN or USB_DIR_OUT */
 	u8 device_address;	/* Device USB address */
+/* compal indigo-Howard Chang 20110517 begin*/
+	//add new flow to detect usb client plug out
+#if defined(CONFIG_ARCH_TEGRA)
+	u32 u32_vbus_status;
+#endif
+/* compal indigo-Howard Chang 20110517 end */
 };
 
 /*-------------------------------------------------------------------------*/

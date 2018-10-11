@@ -59,7 +59,7 @@ static u16 wm8903_reg_defaults[] = {
 	0x0000,     /* R18  - Power Management 6 */
 	0x0000,     /* R19 */
 	0x0400,     /* R20  - Clock Rates 0 */
-	0x0D07,     /* R21  - Clock Rates 1 */
+	0x0C07,     /* R21  - Clock Rates 1 */
 	0x0000,     /* R22  - Clock Rates 2 */
 	0x0000,     /* R23 */
 	0x0050,     /* R24  - Audio Interface 0 */

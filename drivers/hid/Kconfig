@@ -266,9 +266,22 @@ config HID_MONTEREY
 
 config HID_NTRIG
 	tristate "NTrig"
-	depends on USB_HID
 	---help---
-	Support for N-Trig touch screen.
+	Generic support for N-Trig touch screen.
+
+config NTRIG_SPI
+	tristate "NTrig_SPI" if EMBEDDED
+	depends on HID_NTRIG
+	default !EMBEDDED
+	---help---
+	Support for N-Trig touch screen over spi bus.
+
+config NTRIG_USBHID
+	tristate "NTrig_USBHID" if EMBEDDED
+	depends on USB_HID && HID_NTRIG
+	default !EMBEDDED
+	---help---
+	Support for N-Trig touch screen over USB bus.
 
 config HID_ORTEK
 	tristate "Ortek"

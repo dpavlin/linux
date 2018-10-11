@@ -29,12 +29,22 @@
 #include "board-ventana.h"
 
 static struct tegra_wired_jack_conf ventana_wr_jack_conf = {
+/* willy 0512 begin*/
+/* modify docking mic det gpio */ 
+#if 1
+	.hp_det_n = TEGRA_GPIO_PW2,
+	.en_mic_ext = TEGRA_GPIO_PW3,   
+	.en_spkr = WM8903_GP3,
+	.spkr_amp_reg = "avdd_amp"
+#else
 	.hp_det_n = TEGRA_GPIO_PW2,
 	.en_mic_ext = TEGRA_GPIO_PX1,
 	.en_mic_int = TEGRA_GPIO_PX0,
 	.en_spkr = WM8903_GP3,
 	.cdc_irq = TEGRA_GPIO_PX3,
 	.spkr_amp_reg = "avdd_amp"
+#endif
+/* willy 0512 end*/
 };
 
 static struct platform_device ventana_hs_jack_device = {
