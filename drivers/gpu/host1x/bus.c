@@ -23,7 +23,6 @@
 #include <linux/of_device.h>
 
 #include "bus.h"
-#include "dev.h"
 
 static DEFINE_MUTEX(clients_lock);
 static LIST_HEAD(clients);
@@ -543,6 +542,9 @@ DEFINE_SHOW_ATTRIBUTE(host1x_devices);
 int host1x_register(struct host1x *host1x)
 {
 	struct host1x_driver *driver;
+
+	INIT_LIST_HEAD(&host1x->devices);
+	mutex_init(&host1x->devices_lock);
 
 	mutex_lock(&devices_lock);
 	list_add_tail(&host1x->list, &devices);

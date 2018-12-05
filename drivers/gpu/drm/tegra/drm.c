@@ -8,19 +8,14 @@
  */
 
 #include <linux/bitops.h>
-#include <linux/host1x.h>
 #include <linux/idr.h>
-#include <linux/iommu.h>
+#include <linux/iopoll.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 
-#if IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)
-#include <asm/dma-iommu.h>
-#endif
-
 #include "drm.h"
-#include "gem.h"
+#include "uapi.h"
 
 #define DRIVER_NAME "tegra"
 #define DRIVER_DESC "NVIDIA Tegra graphics"
@@ -30,11 +25,6 @@
 #define DRIVER_PATCHLEVEL 0
 
 #define CARVEOUT_SZ SZ_64M
-
-struct tegra_drm_file {
-	struct idr contexts;
-	struct mutex lock;
-};
 
 static int tegra_atomic_check(struct drm_device *drm,
 			      struct drm_atomic_state *state)
@@ -102,6 +92,15 @@ static int tegra_drm_load(struct drm_device *drm, unsigned long flags)
 			goto domain;
 	}
 
+	INIT_LIST_HEAD(&tegra->clients);
+	INIT_LIST_HEAD(&tegra->channels);
+	INIT_LIST_HEAD(&tegra->mm_eviction_list);
+
+	mutex_init(&tegra->mm_lock);
+	idr_init(&tegra->drm_contexts);
+	spin_lock_init(&tegra->context_lock);
+	init_completion(&tegra->gart_free_up);
+
 	drm->dev_private = tegra;
 	tegra->drm = drm;
 
@@ -135,29 +134,53 @@ static int tegra_drm_load(struct drm_device *drm, unsigned long flags)
 		u64 dma_mask = dma_get_mask(&device->dev);
 		dma_addr_t start, end;
 		unsigned long order;
+		bool need_carveout;
 
 		start = tegra->domain->geometry.aperture_start & dma_mask;
 		end = tegra->domain->geometry.aperture_end & dma_mask;
 
+		if (of_machine_is_compatible("nvidia,tegra20"))
+			tegra->has_gart = true;
+
+		/*
+		 * Carveout isn't needed on pre-Tegra124, especially on Tegra20
+		 * as it uses GART that has very limited amount of IOVA space.
+		 */
+		if (of_machine_is_compatible("nvidia,tegra20") ||
+		    of_machine_is_compatible("nvidia,tegra30") ||
+		    of_machine_is_compatible("nvidia,tegra114"))
+			need_carveout = false;
+		else
+			need_carveout = true;
+
 		gem_start = start;
-		gem_end = end - CARVEOUT_SZ;
-		carveout_start = gem_end + 1;
-		carveout_end = end;
+		gem_end = end;
 
-		order = __ffs(tegra->domain->pgsize_bitmap);
-		init_iova_domain(&tegra->carveout.domain, 1UL << order,
-				 carveout_start >> order);
+		if (need_carveout) {
+			gem_end -= CARVEOUT_SZ;
+			carveout_start = gem_end + 1;
+			carveout_end = end;
 
-		tegra->carveout.shift = iova_shift(&tegra->carveout.domain);
-		tegra->carveout.limit = carveout_end >> tegra->carveout.shift;
+			order = __ffs(tegra->domain->pgsize_bitmap);
+			init_iova_domain(&tegra->carveout.domain, 1UL << order,
+					 carveout_start >> order);
+
+			tegra->carveout.shift =
+					iova_shift(&tegra->carveout.domain);
+			tegra->carveout.limit =
+					carveout_end >> tegra->carveout.shift;
+
+			tegra->carveout.inited = 1;
+		}
 
 		drm_mm_init(&tegra->mm, gem_start, gem_end - gem_start + 1);
-		mutex_init(&tegra->mm_lock);
 
 		DRM_DEBUG("IOMMU apertures:\n");
 		DRM_DEBUG("  GEM: %#llx-%#llx\n", gem_start, gem_end);
-		DRM_DEBUG("  Carveout: %#llx-%#llx\n", carveout_start,
-			  carveout_end);
+
+		if (need_carveout)
+			DRM_DEBUG("  Carveout: %#llx-%#llx\n", carveout_start,
+				  carveout_end);
 	}
 
 	if (tegra->hub) {
@@ -202,7 +225,8 @@ config:
 	if (tegra->domain) {
 		mutex_destroy(&tegra->mm_lock);
 		drm_mm_takedown(&tegra->mm);
-		put_iova_domain(&tegra->carveout.domain);
+		if (tegra->carveout.inited)
+			put_iova_domain(&tegra->carveout.domain);
 		iova_cache_put();
 	}
 domain:
@@ -231,30 +255,119 @@ static void tegra_drm_unload(struct drm_device *drm)
 	if (tegra->domain) {
 		mutex_destroy(&tegra->mm_lock);
 		drm_mm_takedown(&tegra->mm);
-		put_iova_domain(&tegra->carveout.domain);
+		if (tegra->carveout.inited)
+			put_iova_domain(&tegra->carveout.domain);
 		iova_cache_put();
 		iommu_domain_free(tegra->domain);
 	}
+
+	idr_destroy(&tegra->drm_contexts);
 
 	kfree(tegra);
 }
 
 static int tegra_drm_open(struct drm_device *drm, struct drm_file *filp)
 {
+	struct host1x *host = dev_get_drvdata(drm->dev->parent);
+	struct tegra_drm *tegra = drm->dev_private;
+	struct tegra_drm_channel *drm_channel;
+	struct host1x_channel *channel;
 	struct tegra_drm_file *fpriv;
+	struct drm_sched_rq *rq;
+	int err;
 
 	fpriv = kzalloc(sizeof(*fpriv), GFP_KERNEL);
 	if (!fpriv)
 		return -ENOMEM;
 
-	idr_init(&fpriv->contexts);
-	mutex_init(&fpriv->lock);
 	filp->driver_priv = fpriv;
 
+	/* each host1x channel has its own per-context job-queue */
+	fpriv->sched_entities = kcalloc(host->soc->nb_channels,
+					sizeof(*fpriv->sched_entities),
+					GFP_KERNEL);
+	if (!fpriv->sched_entities) {
+		err = -ENOMEM;
+		goto err_free_fpriv;
+	}
+
+	list_for_each_entry(drm_channel, &tegra->channels, list) {
+		rq = &drm_channel->sched.sched_rq[DRM_SCHED_PRIORITY_NORMAL];
+		channel = drm_channel->channel;
+
+		err = drm_sched_entity_init(&fpriv->sched_entities[channel->id],
+					    &rq, 1, NULL);
+		if (err)
+			goto err_destroy_sched_entities;
+	}
+
+	idr_preload(GFP_KERNEL);
+	spin_lock(&tegra->context_lock);
+
+	err = idr_alloc(&tegra->drm_contexts, fpriv, 1, 0, GFP_NOWAIT);
+
+	spin_unlock(&tegra->context_lock);
+	idr_preload_end();
+
+	if (err < 0)
+		goto err_destroy_sched_entities;
+
+	fpriv->drm_context = err;
+
+	idr_init(&fpriv->uapi_v1_contexts);
+
 	return 0;
+
+err_destroy_sched_entities:
+	list_for_each_entry_continue_reverse(drm_channel, &tegra->channels,
+					     list) {
+		channel = drm_channel->channel;
+		drm_sched_entity_destroy(&fpriv->sched_entities[channel->id]);
+	}
+
+err_free_fpriv:
+	kfree(fpriv);
+
+	return err;
 }
 
 static const struct drm_ioctl_desc tegra_drm_ioctls[] = {
+#ifdef CONFIG_DRM_TEGRA_STAGING
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_CREATE, tegra_uapi_gem_create, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_MMAP, tegra_uapi_gem_mmap, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPT_READ, tegra_uapi_syncpt_read, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPT_INCR, tegra_uapi_syncpt_incr, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_SYNCPT_WAIT, tegra_uapi_syncpt_wait, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_OPEN_CHANNEL, tegra_uapi_open_channel, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_CLOSE_CHANNEL, tegra_uapi_close_channel, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_GET_SYNCPT, tegra_uapi_get_syncpt, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_SUBMIT, tegra_uapi_v1_submit, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_GET_SYNCPT_BASE, tegra_uapi_get_syncpt_base, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_SET_TILING, tegra_uapi_gem_set_tiling, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_GET_TILING, tegra_uapi_gem_get_tiling, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_SET_FLAGS, tegra_uapi_gem_set_flags, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW), \
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_GET_FLAGS, tegra_uapi_gem_get_flags, \
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(TEGRA_GEM_CPU_PREP, tegra_uapi_gem_cpu_prep,
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(TEGRA_SUBMIT_V2, tegra_uapi_v2_submit,
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(TEGRA_VERSION, tegra_uapi_version,
+			  DRM_UNLOCKED | DRM_RENDER_ALLOW),
+#endif
 };
 
 static const struct file_operations tegra_drm_fops = {
@@ -269,12 +382,43 @@ static const struct file_operations tegra_drm_fops = {
 	.llseek = noop_llseek,
 };
 
+static int tegra_uapi_v1_contexts_cleanup(int id, void *p, void *data)
+{
+	struct tegra_drm_context_v1 *context = p;
+	tegra_uapi_v1_free_context(context);
+	return 0;
+}
+
 static void tegra_drm_postclose(struct drm_device *drm, struct drm_file *file)
 {
 	struct tegra_drm_file *fpriv = file->driver_priv;
+	struct tegra_drm *tegra = drm->dev_private;
+	struct tegra_drm_channel *drm_channel;
+	struct host1x_channel *channel;
+	int val, err;
 
-	idr_destroy(&fpriv->contexts);
-	mutex_destroy(&fpriv->lock);
+	spin_lock(&tegra->context_lock);
+	idr_remove(&tegra->drm_contexts, fpriv->drm_context);
+	spin_unlock(&tegra->context_lock);
+
+	list_for_each_entry(drm_channel, &tegra->channels, list) {
+		channel = drm_channel->channel;
+		drm_sched_entity_destroy(&fpriv->sched_entities[channel->id]);
+	}
+
+	/* technically job's completion is asynchronous */
+	err = readx_poll_timeout(atomic_read, &fpriv->num_active_jobs,
+				 val, val == 0, 1000, 100000);
+	WARN_ON_ONCE(err);
+
+	spin_lock(&tegra->context_lock);
+	idr_for_each(&fpriv->uapi_v1_contexts, tegra_uapi_v1_contexts_cleanup,
+		     NULL);
+	spin_unlock(&tegra->context_lock);
+
+	idr_destroy(&fpriv->uapi_v1_contexts);
+
+	kfree(fpriv->sched_entities);
 	kfree(fpriv);
 }
 
@@ -331,7 +475,7 @@ static int tegra_debugfs_init(struct drm_minor *minor)
 
 static struct drm_driver tegra_drm_driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_PRIME |
-			   DRIVER_ATOMIC | DRIVER_RENDER,
+			   DRIVER_ATOMIC | DRIVER_RENDER | DRIVER_SYNCOBJ,
 	.load = tegra_drm_load,
 	.unload = tegra_drm_unload,
 	.open = tegra_drm_open,
@@ -364,66 +508,15 @@ static struct drm_driver tegra_drm_driver = {
 	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
-struct iommu_group *host1x_client_iommu_attach(struct host1x_client *client,
-					       bool shared)
-{
-	struct drm_device *drm = dev_get_drvdata(client->parent);
-	struct tegra_drm *tegra = drm->dev_private;
-	struct iommu_group *group = NULL;
-	int err;
-
-	if (tegra->domain) {
-		group = iommu_group_get(client->dev);
-		if (!group) {
-			dev_err(client->dev, "failed to get IOMMU group\n");
-			return ERR_PTR(-ENODEV);
-		}
-
-		if (!shared || (shared && (group != tegra->group))) {
-#if IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)
-			if (client->dev->archdata.mapping) {
-				struct dma_iommu_mapping *mapping =
-					to_dma_iommu_mapping(client->dev);
-				arm_iommu_detach_device(client->dev);
-				arm_iommu_release_mapping(mapping);
-			}
-#endif
-			err = iommu_attach_group(tegra->domain, group);
-			if (err < 0) {
-				iommu_group_put(group);
-				return ERR_PTR(err);
-			}
-
-			if (shared && !tegra->group)
-				tegra->group = group;
-		}
-	}
-
-	return group;
-}
-
-void host1x_client_iommu_detach(struct host1x_client *client,
-				struct iommu_group *group)
-{
-	struct drm_device *drm = dev_get_drvdata(client->parent);
-	struct tegra_drm *tegra = drm->dev_private;
-
-	if (group) {
-		if (group == tegra->group) {
-			iommu_detach_group(tegra->domain, group);
-			tegra->group = NULL;
-		}
-
-		iommu_group_put(group);
-	}
-}
-
 void *tegra_drm_alloc(struct tegra_drm *tegra, size_t size, dma_addr_t *dma)
 {
 	struct iova *alloc;
 	void *virt;
 	gfp_t gfp;
 	int err;
+
+	if (!tegra->carveout.inited)
+		return NULL;
 
 	if (tegra->domain)
 		size = iova_align(&tegra->carveout.domain, size);

@@ -34,14 +34,27 @@ struct vic {
 	bool booted;
 
 	void __iomem *regs;
-	struct host1x_client client;
+	struct iommu_group *group;
+	struct tegra_drm_client client;
+	struct tegra_drm_channel *channel;
 	struct device *dev;
 	struct clk *clk;
 	struct reset_control *rst;
+	struct mutex lock;
 
 	/* Platform configuration */
 	const struct vic_config *config;
 };
+
+static inline struct vic *to_vic(struct tegra_drm_client *client)
+{
+	return container_of(client, struct vic, client);
+}
+
+static void vic_writel(struct vic *vic, u32 value, unsigned int offset)
+{
+	writel(value, vic->regs + offset);
+}
 
 static int vic_runtime_resume(struct device *dev)
 {
@@ -81,6 +94,214 @@ static int vic_runtime_suspend(struct device *dev)
 	clk_disable_unprepare(vic->clk);
 
 	vic->booted = false;
+
+	return 0;
+}
+
+static int vic_init(struct host1x_client *client)
+{
+	struct tegra_drm_client *drm_client = to_tegra_drm_client(client);
+	struct drm_device *drm = dev_get_drvdata(client->parent);
+	struct tegra_drm *tegra_drm = drm->dev_private;
+	struct vic *vic = to_vic(drm_client);
+	int err;
+
+	vic->group = tegra_drm_client_iommu_attach(drm_client, false);
+	if (IS_ERR(vic->group)) {
+		err = PTR_ERR(vic->group);
+		dev_err(vic->dev, "failed to attach to domain: %d\n", err);
+		return err;
+	}
+
+	err = tegra_drm_register_client(tegra_drm, drm_client);
+	if (err) {
+		dev_err(vic->dev, "failed to register client: %d\n", err);
+		goto detach_iommu;
+	}
+
+	vic->channel = tegra_drm_open_channel(tegra_drm, drm_client,
+					      TEGRA_DRM_PIPE_VIC,
+					      32, 1, 0, 600, "vic channel");
+	if (IS_ERR(vic->channel)) {
+		err = PTR_ERR(vic->channel);
+		dev_err(vic->dev, "failed to open channel: %d\n", err);
+		goto unreg_client;
+	}
+
+	return 0;
+
+unreg_client:
+	tegra_drm_unregister_client(drm_client);
+
+detach_iommu:
+	tegra_drm_client_iommu_detach(drm_client, vic->group);
+
+	return err;
+}
+
+static int vic_exit(struct host1x_client *client)
+{
+	struct tegra_drm_client *drm_client = to_tegra_drm_client(client);
+	struct vic *vic = to_vic(drm_client);
+
+	tegra_drm_close_channel(vic->channel);
+	tegra_drm_unregister_client(drm_client);
+	tegra_drm_client_iommu_detach(drm_client, vic->group);
+
+	return 0;
+}
+
+static const struct host1x_client_ops vic_host1x_client_ops = {
+	.init = vic_init,
+	.exit = vic_exit,
+};
+
+static int
+vic_refine_class(struct tegra_drm_client *client, u64 pipes,
+		 unsigned int *classid)
+{
+	enum drm_tegra_cmdstream_class drm_class = *classid;
+
+	if (pipes != TEGRA_DRM_PIPE_VIC)
+		return -EINVAL;
+
+	switch (drm_class) {
+	case DRM_TEGRA_CMDSTREAM_CLASS_VIC:
+		*classid = HOST1X_CLASS_VIC;
+		break;
+
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int vic_load_firmware(struct vic *vic)
+{
+	int err;
+
+	if (vic->falcon.data)
+		return 0;
+
+	vic->falcon.data = vic->client.drm;
+
+	err = falcon_read_firmware(&vic->falcon, vic->config->firmware);
+	if (err < 0)
+		goto cleanup;
+
+	err = falcon_load_firmware(&vic->falcon);
+	if (err < 0)
+		goto cleanup;
+
+	return 0;
+
+cleanup:
+	vic->falcon.data = NULL;
+	return err;
+}
+
+static int vic_boot(struct vic *vic)
+{
+	u32 fce_ucode_size, fce_bin_data_offset;
+	void *hdr;
+	int err = 0;
+
+	if (vic->booted)
+		return 0;
+
+	if (vic->config->supports_sid) {
+		struct iommu_fwspec *spec = dev_iommu_fwspec_get(vic->dev);
+		u32 value;
+
+		value = TRANSCFG_ATT(1, TRANSCFG_SID_FALCON) |
+			TRANSCFG_ATT(0, TRANSCFG_SID_HW);
+		vic_writel(vic, value, VIC_TFBIF_TRANSCFG);
+
+		if (spec && spec->num_ids > 0) {
+			value = spec->ids[0] & 0xffff;
+
+			vic_writel(vic, value, VIC_THI_STREAMID0);
+			vic_writel(vic, value, VIC_THI_STREAMID1);
+		}
+	}
+
+	/* setup clockgating registers */
+	vic_writel(vic, CG_IDLE_CG_DLY_CNT(4) |
+			CG_IDLE_CG_EN |
+			CG_WAKEUP_DLY_CNT(4),
+		   NV_PVIC_MISC_PRI_VIC_CG);
+
+	err = falcon_boot(&vic->falcon);
+	if (err < 0)
+		return err;
+
+	hdr = vic->falcon.firmware.vaddr;
+	fce_bin_data_offset = *(u32 *)(hdr + VIC_UCODE_FCE_DATA_OFFSET);
+	hdr = vic->falcon.firmware.vaddr +
+		*(u32 *)(hdr + VIC_UCODE_FCE_HEADER_OFFSET);
+	fce_ucode_size = *(u32 *)(hdr + FCE_UCODE_SIZE_OFFSET);
+
+	falcon_execute_method(&vic->falcon, VIC_SET_APPLICATION_ID, 1);
+	falcon_execute_method(&vic->falcon, VIC_SET_FCE_UCODE_SIZE,
+			      fce_ucode_size);
+	falcon_execute_method(&vic->falcon, VIC_SET_FCE_UCODE_OFFSET,
+			      (vic->falcon.firmware.paddr + fce_bin_data_offset)
+				>> 8);
+
+	err = falcon_wait_idle(&vic->falcon);
+	if (err < 0) {
+		dev_err(vic->dev,
+			"failed to set application ID and FCE base\n");
+		return err;
+	}
+
+	vic->booted = true;
+
+	return 0;
+}
+
+static int vic_prepare_job(struct tegra_drm_client *drm_client,
+			   struct tegra_drm_job *job)
+{
+	struct vic *vic = to_vic(drm_client);
+	int err;
+
+	err = pm_runtime_get_sync(vic->dev);
+	if (err)
+		return err;
+
+	if (!vic->booted) {
+		mutex_lock(&vic->lock);
+
+		err = vic_load_firmware(vic);
+		if (err < 0)
+			goto unlock;
+
+		err = vic_boot(vic);
+		if (err)
+			goto unlock;
+
+		mutex_unlock(&vic->lock);
+	}
+
+	return 0;
+
+unlock:
+	mutex_unlock(&vic->lock);
+	pm_runtime_put(vic->dev);
+	return err;
+}
+
+static int vic_unprepare_job(struct tegra_drm_client *drm_client,
+			     struct tegra_drm_job *job)
+{
+	struct vic *vic = to_vic(drm_client);
+	int err;
+
+	err = pm_runtime_put(vic->dev);
+	if (err)
+		return err;
 
 	return 0;
 }
@@ -187,6 +408,8 @@ static int vic_probe(struct platform_device *pdev)
 	vic->falcon.regs = vic->regs;
 	vic->falcon.ops = &vic_falcon_ops;
 
+	mutex_init(&vic->lock);
+
 	err = falcon_init(&vic->falcon);
 	if (err < 0)
 		return err;
@@ -194,10 +417,17 @@ static int vic_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, vic);
 
 	INIT_LIST_HEAD(&vic->client.list);
-	vic->client.dev = dev;
+	vic->client.base.dev = dev;
+	vic->client.base.ops = &vic_host1x_client_ops;
+	vic->client.base.class = HOST1X_CLASS_VIC;
 	vic->dev = dev;
 
-	err = host1x_client_register(&vic->client);
+	vic->client.prepare_job = vic_prepare_job;
+	vic->client.unprepare_job = vic_unprepare_job;
+	vic->client.refine_class = vic_refine_class;
+	vic->client.pipe = TEGRA_DRM_PIPE_VIC;
+
+	err = host1x_client_register(&vic->client.base);
 	if (err < 0) {
 		dev_err(dev, "failed to register host1x client: %d\n", err);
 		goto exit_falcon;
@@ -213,7 +443,7 @@ static int vic_probe(struct platform_device *pdev)
 	return 0;
 
 unregister_client:
-	host1x_client_unregister(&vic->client);
+	host1x_client_unregister(&vic->client.base);
 exit_falcon:
 	falcon_exit(&vic->falcon);
 
@@ -225,7 +455,7 @@ static int vic_remove(struct platform_device *pdev)
 	struct vic *vic = platform_get_drvdata(pdev);
 	int err;
 
-	err = host1x_client_unregister(&vic->client);
+	err = host1x_client_unregister(&vic->client.base);
 	if (err < 0) {
 		dev_err(&pdev->dev, "failed to unregister host1x client: %d\n",
 			err);
