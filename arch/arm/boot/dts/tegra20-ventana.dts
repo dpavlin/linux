@@ -16,6 +16,7 @@
 
 	chosen {
 		stdout-path = "serial0:115200n8";
+		bootargs = "mem=1024M@0M usbcore.old_scheme_first=1";
 	};
 
 	memory@0 {
@@ -28,6 +29,22 @@
 				status = "okay";
 
 				nvidia,panel = <&panel>;
+
+				display-timings {
+					timing@0 {
+						/* XXX tegra_dc_mode ventana_panel_modes -- works for u-boot */
+						clock-frequency = <72072000>;
+						hactive = <1280>;
+						vactive = <800>;
+						hback-porch = <72>;
+						hfront-porch = <48>;
+						hsync-len = <32>;
+						vback-porch = <22>;
+						vfront-porch = <3>;
+						vsync-len = <7>;
+						hsync-active = <1>;
+					};
+				};
 			};
 		};
 
@@ -88,6 +105,8 @@
 			dap2 {
 				nvidia,pins = "dap2";
 				nvidia,function = "dap2";
+				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+				nvidia,tristate = <TEGRA_PIN_ENABLE>;
 			};
 			dap3 {
 				nvidia,pins = "dap3";
@@ -139,8 +158,14 @@
 			};
 			kbca {
 				nvidia,pins = "kbca", "kbcb", "kbcc", "kbcd",
-					"kbce", "kbcf";
+					"kbcf";
 				nvidia,function = "kbc";
+			};
+			kbce {
+				nvidia,pins = "kbce";
+				nvidia,function = "kbc";
+				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+				nvidia,tristate = <TEGRA_PIN_ENABLE>;
 			};
 			lcsn {
 				nvidia,pins = "lcsn", "ldc", "lm0", "lpw1",
@@ -182,8 +207,16 @@
 				nvidia,function = "spdif";
 			};
 			spid {
-				nvidia,pins = "spid", "spie", "spif";
+				nvidia,pins = "spid", "spif";
 				nvidia,function = "spi1";
+				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+				nvidia,tristate = <TEGRA_PIN_DISABLE>;
+			};
+			spie {
+				nvidia,pins = "spie";
+				nvidia,function = "spi1";
+				nvidia,pull = <TEGRA_PIN_PULL_UP>;
+				nvidia,tristate = <TEGRA_PIN_DISABLE>;
 			};
 			spig {
 				nvidia,pins = "spig", "spih";
@@ -354,7 +387,7 @@
 		};
 	};
 
-	i2c@7000c400 {
+	i2c@7000c400 { /* i2c2 */
 		status = "okay";
 		clock-frequency = <100000>;
 	};
@@ -384,12 +417,12 @@
 		};
 	};
 
-	i2c@7000c500 {
+	i2c@7000c500 { /* i2c3 */
 		status = "okay";
-		clock-frequency = <400000>;
+		clock-frequency = <100000>; /* 400000 */
 	};
 
-	i2c@7000d000 {
+	i2c@7000d000 { /* DVC according to Tegra2 TRM */
 		status = "okay";
 		clock-frequency = <400000>;
 
@@ -561,8 +594,7 @@
 
 	sdhci@c8000000 {
 		status = "okay";
-		power-gpios = <&gpio TEGRA_GPIO(K, 6) GPIO_ACTIVE_HIGH>;
-		bus-width = <4>;
+		bus-width = <8>;
 		keep-power-in-suspend;
 	};
 
@@ -570,12 +602,13 @@
 		status = "okay";
 		cd-gpios = <&gpio TEGRA_GPIO(I, 5) GPIO_ACTIVE_LOW>;
 		wp-gpios = <&gpio TEGRA_GPIO(H, 1) GPIO_ACTIVE_HIGH>;
-		power-gpios = <&gpio TEGRA_GPIO(I, 6) GPIO_ACTIVE_HIGH>;
+		power-gpios = <&gpio TEGRA_GPIO(T, 3) GPIO_ACTIVE_HIGH>;
 		bus-width = <4>;
 	};
 
 	sdhci@c8000600 {
 		status = "okay";
+		power-gpios = <&gpio TEGRA_GPIO(I, 6) GPIO_ACTIVE_HIGH>;
 		bus-width = <8>;
 		non-removable;
 	};
@@ -616,13 +649,14 @@
 	};
 
 	panel: panel {
-		compatible = "chunghwa,claa101wa01a", "simple-panel";
+		compatible = "simple-panel";
 
 		power-supply = <&vdd_pnl_reg>;
 		enable-gpios = <&gpio TEGRA_GPIO(B, 2) GPIO_ACTIVE_HIGH>;
 
 		backlight = <&backlight>;
 		ddc-i2c-bus = <&lvds_ddc>;
+
 	};
 
 	regulators {
@@ -698,10 +732,12 @@
 		nvidia,audio-codec = <&wm8903>;
 
 		nvidia,spkr-en-gpios = <&wm8903 2 GPIO_ACTIVE_HIGH>;
-		nvidia,hp-det-gpios = <&gpio TEGRA_GPIO(W, 2) GPIO_ACTIVE_HIGH>;
+		nvidia,hp-det-gpios = <&gpio TEGRA_GPIO(W, 2) GPIO_ACTIVE_HIGH>; /* ok */
+/*
 		nvidia,int-mic-en-gpios = <&gpio TEGRA_GPIO(X, 0)
 			GPIO_ACTIVE_HIGH>;
-		nvidia,ext-mic-en-gpios = <&gpio TEGRA_GPIO(X, 1)
+*/
+		nvidia,ext-mic-en-gpios = <&gpio TEGRA_GPIO(W, 3) /* fixed */
 			GPIO_ACTIVE_HIGH>;
 
 		clocks = <&tegra_car TEGRA20_CLK_PLL_A>,
