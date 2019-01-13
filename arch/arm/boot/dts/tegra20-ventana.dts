@@ -30,21 +30,6 @@
 
 				nvidia,panel = <&panel>;
 
-				display-timings {
-					timing@0 {
-						/* XXX tegra_dc_mode ventana_panel_modes -- works for u-boot */
-						clock-frequency = <72072000>;
-						hactive = <1280>;
-						vactive = <800>;
-						hback-porch = <72>;
-						hfront-porch = <48>;
-						hsync-len = <32>;
-						vback-porch = <22>;
-						vfront-porch = <3>;
-						vsync-len = <7>;
-						hsync-active = <1>;
-					};
-				};
 			};
 		};
 
@@ -102,7 +87,7 @@
 				nvidia,pins = "dap1";
 				nvidia,function = "dap1";
 			};
-			dap2 {
+			dap2 { /* touch */
 				nvidia,pins = "dap2";
 				nvidia,function = "dap2";
 				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
@@ -161,7 +146,7 @@
 					"kbcf";
 				nvidia,function = "kbc";
 			};
-			kbce {
+			kbce { /* touch */
 				nvidia,pins = "kbce";
 				nvidia,function = "kbc";
 				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
@@ -206,13 +191,13 @@
 				nvidia,pins = "slxd";
 				nvidia,function = "spdif";
 			};
-			spid {
+			spid { /* touch */
 				nvidia,pins = "spid", "spif";
 				nvidia,function = "spi1";
 				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
 				nvidia,tristate = <TEGRA_PIN_DISABLE>;
 			};
-			spie {
+			spie { /* touch */
 				nvidia,pins = "spie";
 				nvidia,function = "spi1";
 				nvidia,pull = <TEGRA_PIN_PULL_UP>;
@@ -640,16 +625,69 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
+		www {
+			label = "www";
+			gpios = <&gpio TEGRA_GPIO(Q, 0) GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_WWW>;
+		};
+
+		homepage {
+			label = "homepage";
+			gpios = <&gpio TEGRA_GPIO(Q, 1) GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_HOMEPAGE>;
+		};
+
+		back {
+			label = "back";
+			gpios = <&gpio TEGRA_GPIO(Q, 2) GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_BACK>;
+		};
+
+		rotation {
+			label = "rotation";
+			gpios = <&gpio TEGRA_GPIO(Q, 3) GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_ROTATE_DISPLAY>;
+		};
+
+		volumedown {
+			label = "volumedown";
+			gpios = <&gpio TEGRA_GPIO(Q, 4) GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_VOLUMEDOWN>;
+		};
+
+		volumeup {
+			label = "volumeup";
+			gpios = <&gpio TEGRA_GPIO(Q, 5) GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_VOLUMEUP>;
+		};
+
 		power {
 			label = "Power";
-			gpios = <&gpio TEGRA_GPIO(V, 2) GPIO_ACTIVE_LOW>;
+			gpios = <&gpio TEGRA_GPIO(C, 7) GPIO_ACTIVE_LOW>; /* original */
 			linux,code = <KEY_POWER>;
 			wakeup-source;
 		};
+
+		power2 {
+			label = "Power2";
+			gpios = <&gpio TEGRA_GPIO(I, 3) GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER2>;
+			wakeup-source;
+		};
+
+   /* Charl5es 0508 start
+    * wakeup source
+    *   
+    * PC7 EXIT_LP0
+    * PV2 AP_ONKEY
+    * PV3 AP_ACOK
+    * PI3 POWEROFF_AP
+    */
+
 	};
 
 	panel: panel {
-		compatible = "simple-panel";
+		compatible = "lg,lp101wx1", "simple-panel";
 
 		power-supply = <&vdd_pnl_reg>;
 		enable-gpios = <&gpio TEGRA_GPIO(B, 2) GPIO_ACTIVE_HIGH>;
@@ -657,6 +695,21 @@
 		backlight = <&backlight>;
 		ddc-i2c-bus = <&lvds_ddc>;
 
+				x-display-timings {
+					timing@0 {
+						/* XXX tegra_dc_mode ventana_panel_modes -- works for u-boot */
+						clock-frequency = <72072000>;
+						hactive = <1280>;
+						vactive = <800>;
+						hback-porch = <72>;
+						hfront-porch = <48>;
+						hsync-len = <32>;
+						vback-porch = <22>;
+						vfront-porch = <3>;
+						vsync-len = <7>;
+						hsync-active = <1>;
+					};
+				};
 	};
 
 	regulators {

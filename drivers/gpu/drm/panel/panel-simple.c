@@ -1689,6 +1689,28 @@ static const struct panel_desc lg_lp097qx1_spa1 = {
 		.height = 147,
 	},
 };
+static const struct drm_display_mode lg_lp101wx1_mode = {
+		.clock = 71500,
+		.hdisplay    = 1280,
+		.hsync_start = 1280 + 48,
+		.hsync_end   = 1280 + 48 + 32,
+		.htotal      = 1280 + 48 + 32 + 80, /* front porch + width + back porch */
+		.vdisplay    = 800,
+		.vsync_start = 800 + 2,
+		.vsync_end   = 800 + 2 + 6,
+		.vtotal      = 800 + 2 + 6 + 15,
+		.vrefresh = 70, // 69.3
+};
+
+static const struct panel_desc lg_lp101wx1 = {
+	.modes = &lg_lp101wx1_mode,
+	.num_modes = 1,
+	.bpc = 6,
+	.size = {
+		.width = 229,
+		.height = 149,
+	},
+};
 
 static const struct drm_display_mode lg_lp120up1_mode = {
 	.clock = 162300,
@@ -2697,6 +2719,9 @@ static const struct of_device_id platform_of_match[] = {
 	}, {
 		.compatible = "lg,lp097qx1-spa1",
 		.data = &lg_lp097qx1_spa1,
+	}, {
+		.compatible = "lg,lp101wx1",
+		.data = &lg_lp101wx1,
 	}, {
 		.compatible = "lg,lp120up1",
 		.data = &lg_lp120up1,
