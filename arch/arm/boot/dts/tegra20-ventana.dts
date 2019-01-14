@@ -625,54 +625,72 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
+		/*
+			keys on device are: rotate, www, back, back, homepage
+			two back keys are connected to same pin
+
+			relevant source from 2.6 kernel is:
+
+#define GPIO_KEY(_id, _gpio, _isactivelow, _iswake)           \
+static struct gpio_keys_button ventana_keys[] = {
+   [0] = GPIO_KEY(KEY_WWW, PQ0, 1, 0),
+   [1] = GPIO_KEY(KEY_HOMEPAGE, PQ1, 1, 0),
+   [2] = GPIO_KEY(KEY_BACK, PQ2, 1, 0),
+   [3] = GPIO_KEY(KEY_AUTO_ROTATION, PQ3, 1, 0),
+   [4] = GPIO_KEY(KEY_VOLUMEDOWN, PQ4, 1, 0),
+   [5] = GPIO_KEY(KEY_VOLUMEUP, PQ5, 1, 0),
+   [6] = GPIO_KEY(KEY_POWER, PC7, 0, 1),
+   [7] = GPIO_KEY(KEY_POWER, PI3, 0, 0),
+};
+
+		*/
 		www {
 			label = "www";
-			gpios = <&gpio TEGRA_GPIO(Q, 0) GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio TEGRA_GPIO(Q, 0) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_WWW>;
 		};
 
 		homepage {
 			label = "homepage";
-			gpios = <&gpio TEGRA_GPIO(Q, 1) GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio TEGRA_GPIO(Q, 1) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_HOMEPAGE>;
 		};
 
 		back {
 			label = "back";
-			gpios = <&gpio TEGRA_GPIO(Q, 2) GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio TEGRA_GPIO(Q, 2) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_BACK>;
 		};
 
 		rotation {
 			label = "rotation";
-			gpios = <&gpio TEGRA_GPIO(Q, 3) GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio TEGRA_GPIO(Q, 3) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_ROTATE_DISPLAY>;
 		};
 
 		volumedown {
 			label = "volumedown";
-			gpios = <&gpio TEGRA_GPIO(Q, 4) GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio TEGRA_GPIO(Q, 4) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEDOWN>;
 		};
 
 		volumeup {
 			label = "volumeup";
-			gpios = <&gpio TEGRA_GPIO(Q, 5) GPIO_ACTIVE_HIGH>;
+			gpios = <&gpio TEGRA_GPIO(Q, 5) GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_VOLUMEUP>;
 		};
 
 		power {
 			label = "Power";
-			gpios = <&gpio TEGRA_GPIO(C, 7) GPIO_ACTIVE_LOW>; /* original */
+			gpios = <&gpio TEGRA_GPIO(C, 7) GPIO_ACTIVE_HIGH>;
 			linux,code = <KEY_POWER>;
 			wakeup-source;
 		};
 
 		power2 {
 			label = "Power2";
-			gpios = <&gpio TEGRA_GPIO(I, 3) GPIO_ACTIVE_LOW>;
+			gpios = <&gpio TEGRA_GPIO(I, 3) GPIO_ACTIVE_HIGH>; /* this is power button on device */
 			linux,code = <KEY_POWER2>;
-			wakeup-source;
 		};
 
    /* Charl5es 0508 start
