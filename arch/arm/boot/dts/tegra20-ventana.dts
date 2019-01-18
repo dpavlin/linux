@@ -345,7 +345,7 @@
 		status = "okay";
 	};
 
-	i2c@7000c000 {
+	i2c@7000c000 { /* i2c0 -- kernel name, TRM is i2c1 */
 		status = "okay";
 		clock-frequency = <400000>;
 
@@ -372,7 +372,7 @@
 		};
 	};
 
-	i2c@7000c400 { /* i2c2 */
+	i2c@7000c400 { /* i2c1 */
 		status = "okay";
 		clock-frequency = <100000>;
 	};
@@ -382,7 +382,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		i2c-parent = <&{/i2c@7000c400}>;
+		i2c-parent = <&{/i2c@7000c400}>; /* 7000c400 = i2c1, 7000c500 = i2c2 */
 
 		pinctrl-names = "ddc", "pta", "idle";
 		pinctrl-0 = <&state_i2cmux_ddc>;
@@ -402,7 +402,7 @@
 		};
 	};
 
-	i2c@7000c500 { /* i2c3 */
+	i2c@7000c500 { /* i2c2 */
 		status = "okay";
 		clock-frequency = <100000>; /* 400000 */
 	};
