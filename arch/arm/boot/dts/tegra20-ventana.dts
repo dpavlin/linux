@@ -5,7 +5,7 @@
 #include "tegra20.dtsi"
 
 / {
-	model = "NVIDIA Tegra20 Ventana evaluation board";
+	model = "Thinkpad Tablet paz00";
 	compatible = "nvidia,ventana", "nvidia,tegra20";
 
 	aliases {
@@ -222,7 +222,7 @@
 			conf_ata {
 				nvidia,pins = "ata", "atb", "atc", "atd",
 					"cdev1", "cdev2", "dap1", "dap2",
-					"dap4", "ddc", "dtf", "gma", "gmc",
+					"dap4", "dtf", "gma", "gmc",
 					"gme", "gpu", "gpu7", "i2cp", "irrx",
 					"irtx", "pta", "rm", "sdc", "sdd",
 					"slxc", "slxd", "slxk", "spdi", "spdo",
@@ -536,7 +536,22 @@
 		temperature-sensor@4c {
 			compatible = "onnn,nct1008";
 			reg = <0x4c>;
+			interrupt-parent = <&gpio>;
+			interrupts = <TEGRA_GPIO(N, 6) IRQ_TYPE_LEVEL_LOW>; // FIXME Documentation/devicetree/bindings/hwmon/lm90.txt
 		};
+
+		compass@c { // CONFIG_AK8975
+			compatible = "asahi-kasei,ak8975";
+			reg = <0x0c>;
+			interrupt-parent = <&gpio>;
+			interrupts = <TEGRA_GPIO(N, 5) IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		accel@f { // CONFIG_KXCJK1013 -- does mention kxtf9 but doesn't work
+			compatible = "kxtf9";
+			reg = <0x0f>;
+		};
+
 	};
 
 	pmc@7000e400 {
