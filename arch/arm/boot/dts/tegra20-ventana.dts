@@ -363,18 +363,11 @@
 			gpio-cfg = <0xffffffff 0xffffffff 0 0xffffffff 0xffffffff>;
 		};
 
-		/* ALS and proximity sensor */
-		isl29018@44 {
-			compatible = "isil,isl29018";
-			reg = <0x44>;
-			interrupt-parent = <&gpio>;
-			interrupts = <TEGRA_GPIO(Z, 2) IRQ_TYPE_LEVEL_HIGH>;
-		};
 	};
 
 	i2c@7000c400 { /* i2c1 */
 		status = "okay";
-		clock-frequency = <100000>;
+		clock-frequency = <100000>; /* (invalid) panel edid: i2cdump -y 5 0x50 */
 	};
 
 	i2cmux {
@@ -404,7 +397,7 @@
 
 	i2c@7000c500 { /* i2c2 */
 		status = "okay";
-		clock-frequency = <100000>; /* 400000 */
+		clock-frequency = <400000>; /* 400000 */
 	};
 
 	i2c@7000d000 { /* DVC according to Tegra2 TRM */
