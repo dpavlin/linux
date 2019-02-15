@@ -710,6 +710,11 @@ static struct gpio_keys_button ventana_keys[] = {
     * PI3 POWEROFF_AP
     */
 
+		psensor { /* IQS128 on separate board with 3 wires */
+			label = "proximity";
+			gpios = <&gpio TEGRA_GPIO(C, 1) GPIO_ACTIVE_HIGH>;
+			linux,code = <KEY_DASHBOARD>; /* include/uapi/linux/input-event-codes.h */
+		};
 	};
 
 	panel: panel {
